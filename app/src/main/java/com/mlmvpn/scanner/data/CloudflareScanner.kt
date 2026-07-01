@@ -1,0 +1,278 @@
+package com.mlmvpn.scanner.data
+
+import android.util.Log
+import kotlinx.coroutines.*
+import okhttp3.*
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.util.concurrent.TimeUnit
+import kotlin.math.max
+
+data class ScanResult(
+    val ip: String,
+    val ping: Int, // average latency in ms, or -1 if timeout
+    val lossRate: Float, // 0.0 to 1.0
+    var downloadSpeed: Float = 0f // speed in MB/s
+)
+
+class CloudflareScanner {
+
+    companion object {
+        private const val TAG = "CloudflareScanner"
+        private const val TCP_PORT = 443
+        private const val TCP_TIMEOUT = 1000 // 1 second timeout for ping
+        private const val PING_TIMES = 4
+        private const val DOWNLOAD_TIMEOUT = 10000 // 10 seconds for speed test
+        private const val DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=52428800"
+
+        // Default Cloudflare IPv4 Ranges
+        val DEFAULT_RANGES = listOf(
+            "103.21.244.0/22",
+            "103.22.200.0/22",
+            "103.31.4.0/22",
+            "104.16.0.0/13",
+            "104.24.0.0/14",
+            "108.162.192.0/18",
+            "131.0.72.0/22",
+            "141.101.64.0/18",
+            "162.158.0.0/15",
+            "172.67.0.0/16",
+            "173.245.48.0/20",
+            "188.114.96.0/20",
+            "190.93.240.0/20",
+            "197.234.240.0/22",
+            "198.41.128.0/17"
+        )
+    }
+
+    /**
+     * Parse CIDR and pick one random IP per /24 subnet block.
+     * Example: 103.21.244.0/22 contains 4 /24 blocks. It will return 4 random IPs.
+     */
+    fun generateIPs(cidrList: List<String>): List<String> {
+        val resultList = mutableListOf<String>()
+        for (cidr in cidrList) {
+            val parts = cidr.split("/")
+            if (parts.size != 2) continue
+            val ipStr = parts[0]
+            val prefixLen = parts[1].toIntOrNull() ?: continue
+            
+            val ipLong = ipToLong(ipStr) ?: continue
+            val mask = (0xFFFFFFFFL shl (32 - prefixLen)) and 0xFFFFFFFFL
+            val networkIp = ipLong and mask
+            val broadcastIp = networkIp or (mask.inv() and 0xFFFFFFFFL)
+            
+            // Iterate over each /24 block within this subnet
+            var currentBlock = networkIp
+            while (currentBlock <= broadcastIp) {
+                // Generate a random IP in the current /24 block (1 to 254)
+                val randomSuffix = (1..254).random().toLong()
+                val selectedIp = currentBlock or randomSuffix
+                resultList.add(longToIp(selectedIp))
+                
+                // Move to next /24 block
+                currentBlock += 256
+            }
+        }
+        return resultList
+    }
+
+    enum class ScanPhase {
+        IDLE, PINGING, SPEED_TESTING, DONE
+    }
+
+    /**
+     * Start the full scanning process.
+     */
+    suspend fun startScan(
+        context: android.content.Context,
+        ips: List<String>,
+        baseConfig: String,
+        limit: Int = 50,
+        successTarget: Int = 10,
+        maxConcurrency: Int = 200,
+        onPhaseChange: (ScanPhase) -> Unit,
+        onProgress: (Int, Int) -> Unit, // (Completed, Total)
+        onIpFound: (ScanResult) -> Unit // Real-time emit of found IP
+    ): List<ScanResult> = coroutineScope {
+        var completedCount = 0
+        val totalIps = ips.size
+
+        Log.d(TAG, "Starting TCP ping on ${ips.size} IPs...")
+        onPhaseChange(ScanPhase.PINGING)
+
+        val semaphore = kotlinx.coroutines.sync.Semaphore(maxConcurrency)
+
+        // Phase 1: TCP Ping
+        val pingResults = ips.map { ip ->
+            async(Dispatchers.IO) {
+                semaphore.acquire()
+                try {
+                    val result = tcping(ip)
+                    completedCount++
+                    onProgress(completedCount, totalIps)
+                    if (result != null) {
+                        onIpFound(result)
+                    }
+                    result
+                } finally {
+                    semaphore.release()
+                }
+            }
+        }.awaitAll().filterNotNull()
+
+        Log.d(TAG, "TCP ping completed. Valid IPs: ${pingResults.size}")
+
+        // Sort by delay
+        val sortedByPing = pingResults.sortedWith(compareBy<ScanResult> { it.lossRate }.thenBy { it.ping })
+        
+        // Take top limit for real delay testing
+        val topIps = sortedByPing.take(limit)
+        Log.d(TAG, "Starting real delay test on top ${topIps.size} IPs...")
+        
+        withContext(Dispatchers.Main) {
+            onPhaseChange(ScanPhase.SPEED_TESTING)
+            onProgress(0, topIps.size)
+        }
+
+        // Phase 2: Real Delay Test
+        var speedCompletedCount = 0
+        var successCount = 0
+        val finalValidIps = java.util.concurrent.CopyOnWriteArrayList<ScanResult>()
+        
+        val measureSemaphore = kotlinx.coroutines.sync.Semaphore(15)
+
+        val deferreds = topIps.mapIndexed { index, ipScan ->
+            async(Dispatchers.IO) {
+                measureSemaphore.acquire()
+                try {
+                    if (!isActive) return@async
+                    val localPort = (30000..40000).random()
+                    val delay = realDelayTest(ipScan.ip, baseConfig, context, localPort)
+                    
+                    if (delay > 0) {
+                        ipScan.downloadSpeed = delay
+                        successCount++
+                        finalValidIps.add(ipScan)
+                        withContext(Dispatchers.Main) {
+                            onIpFound(ipScan)
+                        }
+                    }
+                } finally {
+                    measureSemaphore.release()
+                    val currentCompleted = ++speedCompletedCount
+                    withContext(Dispatchers.Main) {
+                        onProgress(currentCompleted, topIps.size)
+                    }
+                }
+            }
+        }
+        
+        // Await all and allow early exit if target reached
+        for (deferred in deferreds) {
+            deferred.await()
+            if (successCount >= successTarget) {
+                Log.d(TAG, "Found $successTarget successful IPs. Cancelling remaining.")
+                deferreds.forEach { it.cancel() }
+                break
+            }
+        }
+
+        withContext(Dispatchers.Main) {
+            onPhaseChange(ScanPhase.DONE)
+        }
+
+        // Final sort by real delay ascending (lower is better)
+        return@coroutineScope finalValidIps.sortedBy { it.downloadSpeed }
+    }
+
+    /**
+     * Performs a TCP ping on port 443, 4 times.
+     */
+    private fun tcping(ip: String): ScanResult? {
+        var successCount = 0
+        var totalDelay = 0L
+
+        for (i in 0 until PING_TIMES) {
+            val start = System.currentTimeMillis()
+            var socket: Socket? = null
+            try {
+                socket = Socket()
+                socket.connect(InetSocketAddress(ip, TCP_PORT), TCP_TIMEOUT)
+                val delay = System.currentTimeMillis() - start
+                totalDelay += delay
+                successCount++
+            } catch (e: Exception) {
+                // Timeout or refused
+            } finally {
+                try { socket?.close() } catch (e: Exception) {}
+            }
+        }
+
+        val lossRate = (PING_TIMES - successCount).toFloat() / PING_TIMES
+        // Only accept IPs with 0 loss or max 1 loss (0.25 loss rate) to filter out dirty IPs
+        if (successCount == 0 || lossRate > 0.25f) {
+            return null
+        }
+
+        val avgPing = (totalDelay / successCount).toInt()
+        // Only accept IPs with reasonable ping
+        if (avgPing > 800) {
+            return null
+        }
+        return ScanResult(ip = ip, ping = avgPing, lossRate = lossRate)
+    }
+
+    /**
+     * Performs a real delay test using Xray native measureOutboundDelay.
+     * Returns real delay in milliseconds, or 0f if failed.
+     */
+    private suspend fun realDelayTest(ip: String, baseConfigUri: String, context: android.content.Context, localPort: Int): Float {
+        var realDelay = 0f
+
+        try {
+            val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(baseConfigUri) ?: return 0f
+            config.address = ip // Replace the address with our target IP
+            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
+
+            withContext(Dispatchers.IO) {
+                // Initialize Core Environment if not already done
+                try {
+                    val keyBytes = ByteArray(32)
+                    java.security.SecureRandom().nextBytes(keyBytes)
+                    val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                    val xudpBaseKey = android.util.Base64.encodeToString(keyBytes, flags)
+                    libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey)
+                } catch (e: Exception) {}
+
+                val delayMs = libv2ray.Libv2ray.measureOutboundDelay(jsonConfig, "https://clients3.google.com/generate_204")
+                if (delayMs > 0) {
+                    realDelay = delayMs.toFloat()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Real delay test failed for $ip", e)
+        }
+        return realDelay
+    }
+
+    private fun ipToLong(ipAddress: String): Long? {
+        val ipAddressInArray = ipAddress.split(".")
+        if (ipAddressInArray.size != 4) return null
+        var result: Long = 0
+        for (i in 0..3) {
+            val ipPart = ipAddressInArray[i].toLongOrNull() ?: return null
+            val power = 3 - i
+            result += ipPart * Math.pow(256.0, power.toDouble()).toLong()
+        }
+        return result
+    }
+
+    private fun longToIp(ip: Long): String {
+        return ((ip shr 24 and 0xFF).toString() + "."
+                + (ip shr 16 and 0xFF) + "."
+                + (ip shr 8 and 0xFF) + "."
+                + (ip and 0xFF))
+    }
+}

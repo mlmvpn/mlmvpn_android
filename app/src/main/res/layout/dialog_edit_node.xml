@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/gs_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Edit Configuration"
+                android:textColor="@color/gs_on_surface"
+                android:textSize="22sp"
+                android:fontFamily="sans-serif-medium"
+                android:layout_centerVertical="true" />
+
+            <ImageView
+                android:id="@+id/btn_close"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_alignParentEnd="true"
+                android:layout_centerVertical="true"
+                android:padding="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:src="@android:drawable/ic_menu_close_clear_cancel"
+                app:tint="@color/gs_on_surface_dim" />
+        </RelativeLayout>
+
+        <!-- Name -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/App.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Remarks (Name)"
+            android:layout_marginBottom="12dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/gs_on_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- Address -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/App.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Address (IP or Domain)"
+            android:layout_marginBottom="12dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_address"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/gs_on_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- Port -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/App.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Port"
+            android:layout_marginBottom="12dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_port"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:textColor="@color/gs_on_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- UUID/Password -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/App.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="ID / Password"
+            android:layout_marginBottom="16dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_uuid"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/gs_primary" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Transport Settings"
+            android:textColor="@color/gs_on_surface_dim"
+            android:textSize="13sp"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="12dp" />
+
+        <!-- Network -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/App.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Network (ws, grpc, etc.)"
+            android:layout_marginBottom="12dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_network"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/gs_on_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- WS Host -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/App.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="WS Host (host)"
+            android:layout_marginBottom="12dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_wshost"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/gs_on_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- WS Path -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/App.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="WS Path (path)"
+            android:layout_marginBottom="12dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_wspath"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/gs_on_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- TLS -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/App.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="TLS (tls, none)"
+            android:layout_marginBottom="12dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_tls"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/gs_on_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- SNI -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/App.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="SNI"
+            android:layout_marginBottom="12dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_sni"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/gs_on_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
+        
+        <!-- ALPN -->
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/App.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="ALPN"
+            android:layout_marginBottom="24dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_alpn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/gs_on_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_save"
+            style="@style/App.Button.Filled"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="Save Configuration"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+</ScrollView>

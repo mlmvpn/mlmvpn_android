@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+
+    <!-- Google Dark Theme - Material Design 3 -->
+    <color name="gs_bg">#0F0F0F</color>
+    <color name="gs_surface">#1C1B1F</color>
+    <color name="gs_surface2">#232327</color>
+    <color name="gs_panel">#1C1B1F</color>
+    <color name="gs_card">#2A2930</color>
+    <color name="gs_outline">#49454F</color>
+    <color name="gs_outline_variant">#302D38</color>
+
+    <!-- Google Blue (Primary) -->
+    <color name="gs_primary">#8AB4F8</color>
+    <color name="gs_primary_dim">#4A90D9</color>
+    <color name="gs_primary_container">#1A3050</color>
+
+    <!-- Google Green (Secondary/Active) -->
+    <color name="gs_secondary">#81C995</color>
+    <color name="gs_secondary_container">#1A3525</color>
+
+    <!-- Google Red (Error/Danger) -->
+    <color name="gs_error">#CF6679</color>
+    <color name="gs_error_container">#3B1020</color>
+
+    <!-- Google Yellow (Warning) -->
+    <color name="gs_warning">#FDD663</color>
+
+    <!-- Text Colors -->
+    <color name="gs_on_surface">#E6E1E5</color>
+    <color name="gs_on_surface_variant">#CAC4D0</color>
+    <color name="gs_on_surface_dim">#938F99</color>
+</resources>

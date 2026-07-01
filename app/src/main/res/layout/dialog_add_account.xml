@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:background="@drawable/dialog_bg">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Add Cloudflare Account"
+        android:textSize="22sp"
+        android:fontFamily="sans-serif-medium"
+        android:textColor="@color/gs_on_surface"
+        android:layout_marginBottom="24dp"/>
+
+    <com.google.android.material.textfield.TextInputLayout
+        style="@style/App.TextInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="API Token / Global API Key"
+        android:layout_marginBottom="16dp">
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/input_token"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/gs_on_surface"/>
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        style="@style/App.TextInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Email (Optional for Token)"
+        android:layout_marginBottom="32dp">
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/input_email"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="textEmailAddress"
+            android:textColor="@color/gs_on_surface"/>
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="end">
+
+        <Button
+            android:id="@+id/btn_cancel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Cancel"
+            style="?android:attr/borderlessButtonStyle"
+            android:textColor="@color/gs_primary"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_add"
+            style="@style/App.Button.Filled"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Add Account"
+            android:layout_marginStart="8dp"/>
+    </LinearLayout>
+</LinearLayout>

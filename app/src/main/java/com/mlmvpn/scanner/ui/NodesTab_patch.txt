@@ -1,0 +1,312 @@
+            val btnContentColor by animateColorAsState(if (isRunning || !isConnecting) BgDark else Primary, label = "fabContent")
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (isRunning && activeRealCountry != null) {
+                    Box(modifier = Modifier.padding(bottom = 12.dp)) {
+                        Text(
+                            text = getNodeFlagEmoji(activeRealCountry ?: "XX"),
+                            fontSize = 36.sp,
+                            modifier = Modifier.graphicsLayer { rotationZ = windRotation }
+                        )
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .offset(x = 6.dp, y = 6.dp)
+                                .background(BgDark, CircleShape)
+                                .padding(2.dp)
+                        ) {
+                            Text(
+                                text = activeRealCountry ?: "",
+                                color = TextPrimary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.background(Primary, RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+                
+                Surface(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clickable {
+                            if (activeNodeId == null) {
+                                Toast.makeText(context, "???? ?? ??? ?????? ????", Toast.LENGTH_SHORT).show()
+                                return@clickable
+                            }
+                            if (isRunning) {
+                                val stopIntent = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
+                                context.startService(stopIntent)
+                                MyVpnService.isRunning = false
+                            } else if (!isConnecting) {
+                                isConnecting = true
+                                val intent = VpnService.prepare(context)
+                                if (intent != null) {
+                                    vpnLauncher.launch(intent)
+                                } else {
+                                    val selectedId = activeNodeId
+                                    val node = nodes.find { it.id == selectedId }
+                                    if (node != null) {
+                                        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+                                        val isProxyMode = prefs.getBoolean("proxy_mode", false)
+                                        val localPort = prefs.getString("local_port", "10808")
+
+                                        val startIntent = Intent(context, MyVpnService::class.java).apply {
+                                            putExtra("NODE_URI", node.uri)
+                                            putExtra("NODE_ID", node.id)
+                                            putExtra("PROXY_MODE", isProxyMode)
+                                            putExtra("LOCAL_PORT", localPort)
+                                        }
+                                        context.startService(startIntent)
+                                        MyVpnService.isRunning = true
+                                        MyVpnService.connectedNodeId = node.id
+                                        isConnecting = false
+                                        Toast.makeText(context, "VPN Tunnel Initialized!", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        isConnecting = false
+                                    }
+                                }
+                            }
+                        },
+                    shape = RoundedCornerShape(16.dp),
+                    color = btnBgColor,
+                    border = if (isConnecting) androidx.compose.foundation.BorderStroke(2.dp, Primary) else null,
+                    shadowElevation = 8.dp
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        if (isConnecting) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Primary, strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.PowerSettingsNew, contentDescription = "Connect", modifier = Modifier.size(26.dp), tint = btnContentColor)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ActionButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color = TextMuted, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.clickable { onClick() }.padding(vertical = 8.dp, horizontal = 16.dp)
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(label, color = tint, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+suspend fun tlsPing(host: String, port: Int, sni: String): Int = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    try {
+        val socket = java.net.Socket()
+        MyVpnService.instance?.protect(socket)
+        val start = System.currentTimeMillis()
+        socket.connect(java.net.InetSocketAddress(host, port), 3000)
+        
+        val sslSocketFactory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
+        val sslSocket = sslSocketFactory.createSocket(socket, host, port, true) as javax.net.ssl.SSLSocket
+        
+        val params = sslSocket.sslParameters
+        val sniHostName = javax.net.ssl.SNIHostName(if (sni.isNotEmpty()) sni else host)
+        params.serverNames = listOf(sniHostName)
+        sslSocket.sslParameters = params
+        
+        sslSocket.startHandshake()
+        
+        val end = System.currentTimeMillis()
+        sslSocket.close()
+        (end - start).toInt()
+    } catch (e: Exception) {
+        -1
+    }
+}
+
+suspend fun tcpPing(host: String, port: Int): Int = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    try {
+        val socket = java.net.Socket()
+        MyVpnService.instance?.protect(socket)
+        val start = System.currentTimeMillis()
+        socket.connect(java.net.InetSocketAddress(host, port), 3000)
+        val end = System.currentTimeMillis()
+        socket.close()
+        (end - start).toInt()
+    } catch (e: Exception) {
+        -1
+    }
+}
+
+suspend fun httpDelay(host: String, port: Int): Int = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    try {
+        val socket = java.net.Socket()
+        MyVpnService.instance?.protect(socket)
+        val start = System.currentTimeMillis()
+        socket.connect(java.net.InetSocketAddress(host, port), 3000)
+        
+        val output = socket.getOutputStream()
+        output.write("GET / HTTP/1.1\r\nHost: $host\r\n\r\n".toByteArray())
+        output.flush()
+        
+        val input = socket.getInputStream()
+        input.read() // read first byte
+        val end = System.currentTimeMillis()
+        socket.close()
+        (end - start).toInt()
+    } catch (e: Exception) {
+        tcpPing(host, port)
+    }
+}
+
+suspend fun simulatedSpeedTest(host: String, port: Int, sni: String, tls: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    try {
+        val delay = if (tls == "tls" || sni.isNotEmpty()) {
+            tlsPing(host, port, sni)
+        } else {
+            httpDelay(host, port)
+        }
+        if (delay < 0 || delay > 3000) return@withContext "Timeout"
+        
+        val speedMb = 1000.0 / delay.coerceAtLeast(10).toDouble()
+        String.format(java.util.Locale.US, "%.1f MB/s", speedMb)
+    } catch (e: Exception) {
+        "Error"
+    }
+}
+
+fun showShareDialog(context: android.content.Context, uri: String) {
+    val dialogView = android.view.LayoutInflater.from(context).inflate(com.mlmvpn.scanner.R.layout.dialog_share_node, null)
+    val btnCopy = dialogView.findViewById<com.google.android.material.button.MaterialButton>(com.mlmvpn.scanner.R.id.btn_copy)
+    val btnClose = dialogView.findViewById<com.google.android.material.button.MaterialButton>(com.mlmvpn.scanner.R.id.btn_close)
+    val ivQr = dialogView.findViewById<android.widget.ImageView>(com.mlmvpn.scanner.R.id.iv_qr_code)
+    
+    btnCopy.setOnClickListener {
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val clip = android.content.ClipData.newPlainText("VPN Node", uri)
+        clipboard.setPrimaryClip(clip)
+        android.widget.Toast.makeText(context, "??? ??", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    try {
+        val hints = java.util.EnumMap<com.google.zxing.EncodeHintType, Any>(com.google.zxing.EncodeHintType::class.java)
+        hints[com.google.zxing.EncodeHintType.MARGIN] = 1
+        val writer = com.google.zxing.qrcode.QRCodeWriter()
+        val bitMatrix = writer.encode(uri, com.google.zxing.BarcodeFormat.QR_CODE, 512, 512, hints)
+        val width = bitMatrix.width
+        val height = bitMatrix.height
+        val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.RGB_565)
+        for (x in 0 until width) {
+            for (y in 0 until height) {
+                bitmap.setPixel(x, y, if (bitMatrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+            }
+        }
+        ivQr.setImageBitmap(bitmap)
+    } catch (e: Exception) {
+        android.widget.Toast.makeText(context, "??? ?? ???? QR Code", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    val dialog = androidx.appcompat.app.AlertDialog.Builder(context)
+        .setView(dialogView)
+        .create()
+        
+    btnClose.setOnClickListener { dialog.dismiss() }
+    dialog.show()
+    dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+}
+
+fun showEditNodeDialog(context: android.content.Context, node: com.mlmvpn.scanner.models.VpnNode, nodeManager: com.mlmvpn.scanner.data.NodeManager, onUpdated: () -> Unit) {
+    val dialogView = android.view.LayoutInflater.from(context).inflate(com.mlmvpn.scanner.R.layout.dialog_edit_node, null)
+    val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(node.uri) ?: com.mlmvpn.scanner.utils.VpnConfig(name = node.name)
+    
+    val etName = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(com.mlmvpn.scanner.R.id.et_name)
+    val etAddress = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(com.mlmvpn.scanner.R.id.et_address)
+    val etPort = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(com.mlmvpn.scanner.R.id.et_port)
+    val etUuid = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(com.mlmvpn.scanner.R.id.et_uuid)
+    val etNetwork = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(com.mlmvpn.scanner.R.id.et_network)
+    val etWsHost = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(com.mlmvpn.scanner.R.id.et_wshost)
+    val etWsPath = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(com.mlmvpn.scanner.R.id.et_wspath)
+    val etTls = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(com.mlmvpn.scanner.R.id.et_tls)
+    val etSni = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(com.mlmvpn.scanner.R.id.et_sni)
+    val etAlpn = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(com.mlmvpn.scanner.R.id.et_alpn)
+    
+    etName.setText(config.name)
+    etAddress.setText(config.address)
+    etPort.setText(config.port.toString())
+    etUuid.setText(config.uuid)
+    etNetwork.setText(config.network)
+    etWsHost.setText(config.wsHost)
+    etWsPath.setText(config.wsPath)
+    etTls.setText(config.tls)
+    etSni.setText(config.sni)
+    etAlpn.setText(config.alpn)
+
+    val dialog = androidx.appcompat.app.AlertDialog.Builder(context, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        .setView(dialogView)
+        .create()
+
+    dialogView.findViewById<android.widget.ImageView>(com.mlmvpn.scanner.R.id.btn_close).setOnClickListener { dialog.dismiss() }
+    
+    dialogView.findViewById<android.widget.Button>(com.mlmvpn.scanner.R.id.btn_save).setOnClickListener {
+        config.name = etName.text.toString().trim()
+        config.address = etAddress.text.toString().trim()
+        config.port = etPort.text.toString().toIntOrNull() ?: 443
+        config.uuid = etUuid.text.toString().trim()
+        config.network = etNetwork.text.toString().trim()
+        config.wsHost = etWsHost.text.toString().trim()
+        config.wsPath = etWsPath.text.toString().trim()
+        config.tls = etTls.text.toString().trim()
+        config.sni = etSni.text.toString().trim()
+        config.alpn = etAlpn.text.toString().trim()
+        
+        val newUri = config.toUriString()
+        
+        val index = nodeManager.nodes.indexOf(node)
+        if (index != -1) {
+            val updatedNode = node.copy(name = config.name, uri = newUri, countryCode = null)
+            updatedNode.ping = node.ping
+            updatedNode.delay = node.delay
+            updatedNode.speed = node.speed
+            nodeManager.nodes[index] = updatedNode
+            nodeManager.saveNodes()
+            onUpdated()
+        }
+        dialog.dismiss()
+    }
+    
+    dialog.show()
+}
+
+@Composable
+fun NodeCard(node: com.mlmvpn.scanner.models.VpnNode, isActive: Boolean, isExpanded: Boolean, onClick: () -> Unit, onExpandClick: () -> Unit, onDelete: () -> Unit) {
+    val bgColor = if (isActive) Primary.copy(alpha = 0.05f) else SurfaceDark
+    val borderColor = if (isActive) Primary.copy(alpha = 0.5f) else BorderDark
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bgColor, RoundedCornerShape(12.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+    ) {
+        Box(modifier = Modifier.padding(12.dp)) {
+            if (isActive) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Primary, modifier = Modifier.size(18.dp).align(Alignment.TopStart))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(start = if (isActive) 24.dp else 0.dp)) {
+                Box(
+                    modifier = Modifier.background(if (isActive) Primary else BorderDark, RoundedCornerShape(8.dp)).padding(8.dp)
+                ) {
+                    Icon(Icons.Default.Storage, contentDescription = null, tint = if (isActive) BgDark else TextPrimary, modifier = Modifier.size(20.dp))
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(node.name, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, modifier = Modifier.weight(1f, fill = false))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(modifier = Modifier.background(
+                            (if (node.engineType == "NHN") GreenOk else Primary).copy(alpha = 0.15f),
+                            RoundedCornerShape(4.dp)
+                        ).border(1.dp, (if (node.engineType == "NHN") GreenOk else Primary).copy(alpha=0.3f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 2.dp)) {
+                            val badgeText = when (node.engineType) {
+                                "EDG" -> "EDG"
+                                "NHN" -> "NHN"

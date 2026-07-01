@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/gs_bg">
+
+    <!-- Header -->
+    <LinearLayout
+        android:id="@+id/cloud_header"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingTop="64dp"
+        android:paddingHorizontal="20dp"
+        android:paddingBottom="12dp"
+        android:gravity="center_vertical"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Cloudflare Panel"
+                android:textColor="@color/gs_on_surface"
+                android:textSize="28sp"
+                android:letterSpacing="0.01"
+                android:fontFamily="sans-serif-medium"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Manage your Cloudflare accounts"
+                android:textColor="@color/gs_on_surface_dim"
+                android:textSize="14sp"
+                android:layout_marginTop="2dp"/>
+        </LinearLayout>
+
+        <!-- Add account FAB icon -->
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/fab_add_account"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:src="@android:drawable/ic_input_add"
+            app:backgroundTint="@color/gs_primary_container"
+            app:tint="@color/gs_primary"
+            app:fabSize="mini"
+            app:elevation="0dp"/>
+    </LinearLayout>
+
+    <!-- Accounts List -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/accounts_recycler"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="80dp"
+        android:clipToPadding="false"
+        app:layout_constraintTop_toBottomOf="@id/cloud_header"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

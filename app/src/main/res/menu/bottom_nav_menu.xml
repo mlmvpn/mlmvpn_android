@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_scanner"
+        android:icon="@drawable/ic_scanner"
+        android:title="Scanner" />
+    <item
+        android:id="@+id/nav_cloud"
+        android:icon="@drawable/ic_cloud"
+        android:title="Cloudflare" />
+    <item
+        android:id="@+id/nav_vpn"
+        android:icon="@drawable/ic_vpn"
+        android:title="VPN Nodes" />
+</menu>

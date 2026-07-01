@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MLMVPNScanner" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Primary = Google Blue -->
+        <item name="colorPrimary">@color/gs_primary</item>
+        <item name="colorPrimaryVariant">@color/gs_primary_dim</item>
+        <item name="colorOnPrimary">#0F0F0F</item>
+
+        <!-- Secondary = Google Green -->
+        <item name="colorSecondary">@color/gs_secondary</item>
+        <item name="colorSecondaryVariant">@color/gs_secondary_container</item>
+        <item name="colorOnSecondary">#0F0F0F</item>
+
+        <!-- Background & Surface -->
+        <item name="android:windowBackground">@color/gs_bg</item>
+        <item name="colorSurface">@color/gs_surface</item>
+        <item name="colorOnSurface">@color/gs_on_surface</item>
+        <item name="colorError">@color/gs_error</item>
+
+        <!-- Status bar = black -->
+        <item name="android:statusBarColor">@color/gs_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">@color/gs_bg</item>
+
+        <!-- Text Input fields -->
+        <item name="textInputStyle">@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox</item>
+        <item name="editTextStyle">@style/Widget.AppCompat.EditText</item>
+    </style>
+
+    <!-- Google Blue outlined button -->
+    <style name="App.Button.Outlined" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="strokeColor">@color/gs_primary</item>
+        <item name="android:textColor">@color/gs_primary</item>
+        <item name="cornerRadius">12dp</item>
+    </style>
+
+    <!-- Google Blue filled button -->
+    <style name="App.Button.Filled" parent="Widget.MaterialComponents.Button">
+        <item name="backgroundTint">@color/gs_primary</item>
+        <item name="android:textColor">@color/gs_bg</item>
+        <item name="cornerRadius">12dp</item>
+    </style>
+
+    <!-- TextInput Google style -->
+    <style name="App.TextInput" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+        <item name="boxStrokeColor">@color/gs_outline</item>
+        <item name="hintTextColor">@color/gs_on_surface_variant</item>
+        <item name="android:textColorHint">@color/gs_on_surface_dim</item>
+        <item name="boxCornerRadiusTopStart">12dp</item>
+        <item name="boxCornerRadiusTopEnd">12dp</item>
+        <item name="boxCornerRadiusBottomStart">12dp</item>
+        <item name="boxCornerRadiusBottomEnd">12dp</item>
+    </style>
+
+    <!-- TextInput focused Google style -->
+    <style name="App.TextInput.Active" parent="App.TextInput">
+        <item name="boxStrokeColor">@color/gs_primary</item>
+        <item name="hintTextColor">@color/gs_primary</item>
+    </style>
+</resources>

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:background="@drawable/dialog_bg"
+    android:gravity="center_horizontal">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Share Configuration"
+        android:textColor="@color/gs_on_surface"
+        android:textSize="20sp"
+        android:fontFamily="sans-serif-medium"
+        android:layout_marginBottom="24dp" />
+
+    <!-- QR Code Image -->
+    <ImageView
+        android:id="@+id/iv_qr_code"
+        android:layout_width="200dp"
+        android:layout_height="200dp"
+        android:background="#FFFFFF"
+        android:padding="8dp"
+        android:layout_marginBottom="24dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_copy"
+            style="@style/App.Button.Outlined"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Copy URI"
+            android:layout_marginEnd="12dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_close"
+            style="@style/App.Button.Filled"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Done" />
+    </LinearLayout>
+
+</LinearLayout>
