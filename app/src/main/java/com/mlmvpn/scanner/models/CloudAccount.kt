@@ -33,6 +33,16 @@ data class CloudAccount(
     var mlmAdminPassword: String? = null,
     var mlmStatus: String = "idle", // 'idle', 'deployed'
 
+    // Dedicated DNS (per-user ECS-steering resolver worker) fields
+    var dnsWorkerUrl: String? = null,
+    var dnsKvNamespaceId: String? = null,
+    var dnsStatus: String = "idle", // 'idle', 'deployed'
+
+    // GST relay accelerator (Cloudflare Worker that speeds up / stabilizes the
+    // Google Apps Script tunnel by relaying the same protocol on the CF edge)
+    var gstRelayWorkerUrl: String? = null,
+    var gstRelayStatus: String = "idle", // 'idle', 'deployed'
+
     // Smart Verification fields
     var isEmailVerified: Boolean = true,
     var hasSubdomain: Boolean = false

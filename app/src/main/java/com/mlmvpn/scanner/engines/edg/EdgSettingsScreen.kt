@@ -240,7 +240,11 @@ fun EdgSettingsScreen(
                                             .headers(authHeaders)
                                             .put(newConfig.toString().toRequestBody("application/json".toMediaTypeOrNull()))
                                             .build()
-                                        client.newCall(req1).execute()
+                                        client.newCall(req1).execute().use { response ->
+                                            if (!response.isSuccessful) {
+                                                throw IOException("HTTP ${response.code}")
+                                            }
+                                        }
 
                                         withContext(Dispatchers.Main) {
                                             isSaving = false

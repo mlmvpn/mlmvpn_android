@@ -1,0 +1,200 @@
+﻿Created At: 2026-07-09T13:54:53Z
+Tool is running as a background task with task id: 8c795e54-6f26-4ec8-a8ff-0fca1c9c76a5/task-6248
+Task Description: $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+cd "g:\ip scanner\android"
+.\gradlew --stop
+Write-Host "Wiping corrupted gradle caches..."
+Remove-Item -Recurse -Force "C:\Users\ehsan computer\.gradle\caches\8.13" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "C:\Users\ehsan computer\.gradle\caches\transforms-4" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "C:\Users\ehsan computer\.gradle\caches\transforms-3" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force ".gradle" -ErrorAction SilentlyContinue
+
+Write-Host "Re-building..."
+.\gradlew assembleRelease --no-build-cache
+Task logs are available at: file:///C:/Users/ehsan%20computer/.gemini/antigravity-ide/brain/8c795e54-6f26-4ec8-a8ff-0fca1c9c76a5/.system_generated/tasks/task-6248.log
+Created At: 2026-07-09T17:11:02Z
+Completed At: 2026-07-09T17:11:02Z
+File Path: `file:///g:/ip%20scanner/android/app/src/main/java/com/mlmvpn/scanner/utils/SingboxJsonGenerator.kt`
+Total Lines: 177
+Total Bytes: 5112
+Showing lines 1 to 177
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: package com.mlmvpn.scanner.utils
+2: 
+3: import org.json.JSONArray
+4: import org.json.JSONObject
+5: 
+6: object SingboxJsonGenerator {
+7: 
+8:     fun generateAmneziaWgConfig(
+9:         privateKey: String,
+10:         address: String, // format: "10.8.0.x/24"
+11:         serverPubkey: String,
+12:         endpoint: String, // format: "ip:port"
+13:         mtu: Int = 1280,
+14:         dns: String = "8.8.8.8",
+15:         gameSubnets: List<String> = emptyList(),
+16:         jc: Int = 4,
+17:         jmin: Int = 40,
+18:         jmax: Int = 70,
+19:         s1: Int = 0,
+20:         s2: Int = 0,
+21:         h1: Int = 1,
+22:         h2: Int = 2,
+23:         h3: Int = 3,
+24:         h4: Int = 4
+25:     ): String {
+26:         val json = JSONObject()
+27: 
+28:         // Log
+29:         json.put("log", JSONObject().apply {
+30:             put("level", "warn")
+31:             put("disabled", false)
+32:         })
+33: 
+34:         // DNS
+35:         json.put("dns", JSONObject().apply {
+36:             val servers = JSONArray()
+37:             servers.put(JSONObject().apply {
+38:                 put("tag", "dns_proxy")
+39:                 put("address", dns)
+40:                 put("detour", "proxy")
+41:             })
+42:             servers.put(JSONObject().apply {
+43:                 put("tag", "dns_direct")
+44:                 put("address", "local")
+45:                 put("detour", "direct")
+46:             })
+47:             put("servers", servers)
+48:             
+49:             val rules = JSONArray()
+50:             rules.put(JSONObject().apply {
+51:                 put("outbound", JSONArray().put("any"))
+52:                 put("server", "dns_direct")
+53:             })
+54:             put("rules", rules)
+55:         })
+56: 
+57:         // Inbounds
+58:         val inbounds = JSONArray()
+59:         inbounds.put(JSONObject().apply {
+60:             put("type", "tun")
+61:             put("tag", "tun-in")
+62:             put("interface_name", "tun0")
+63:             put("inet4_address", "172.19.0.2/30")
+64:             put("mtu", mtu)
+65:             put("auto_route", true)
+66:             put("strict_route", true)
+67:             put("endpoint_independent_nat", true)
+68:             put("sniff", true)
+69:         })
+70:         json.put("inbounds", inbounds)
+71: 
+72:         // Outbounds
+73:         val outbounds = JSONArray()
+74: 
+75:         val endpointParts = endpoint.split(":")
+76:         val serverIp = endpointParts.firstOrNull() ?: ""
+77:         val serverPort = endpointParts.getOrNull(1)?.toIntOrNull() ?: 443
+78: 
+79:         val proxyOutbound = JSONObject().apply {
+80:             put("type", "wireguard")
+81:             put("tag", "proxy")
+82:             put("server", serverIp)
+83:             put("server_port", serverPort)
+84:             put("local_address", JSONArray().put(address))
+85:             put("private_key", privateKey)
+86:             put("peer_public_key", serverPubkey)
+87:             put("mtu", mtu)
+88:             put("reserved", JSONArray().put(0).put(0).put(0))
+89:             
+90:             // Amnezia properties
+91:             put("jc", jc)
+92:             put("jmin", jmin)
+93:             put("jmax", jmax)
+94:             put("s1", s1)
+95:             put("s2", s2)
+96:             put("h1", h1)
+97:             put("h2", h2)
+98:             put("h3", h3)
+99:             put("h4", h4)
+100:         }
+101:         outbounds.put(proxyOutbound)
+102: 
+103:         outbounds.put(JSONObject().apply {
+104:             put("type", "direct")
+105:             put("tag", "direct")
+106:         })
+107: 
+108:         outbounds.put(JSONObject().apply {
+109:             put("type", "block")
+110:             put("tag", "block")
+111:         })
+112: 
+113:         outbounds.put(JSONObject().apply {
+114:             put("type", "dns")
+115:             put("tag", "dns-out")
+116:         })
+117: 
+118:         json.put("outbounds", outbounds)
+119: 
+120:         // Route
+121:         val routeRules = JSONArray()
+122: 
+123:         routeRules.put(JSONObject().apply {
+124:             put("protocol", "dns")
+125:             put("outbound", "dns-out")
+126:         })
+127: 
+128:         // Private IPs go direct
+129:         routeRules.put(JSONObject().apply {
+130:             put("ip_is_private", true)
+131:             put("outbound", "direct")
+132:         })
+133: 
+134:         if (serverIp.isNotEmpty()) {
+135:             routeRules.put(JSONObject().apply {
+136:                 put("ip_cidr", JSONArray().put("$serverIp/32"))
+137:                 put("outbound", "direct")
+138:             })
+139:         }
+140: 
+141:         if (gameSubnets.contains("0.0.0.0/0")) {
+142:             routeRules.put(JSONObject().apply {
+143:                 put("network", "tcp")
+144:                 put("outbound", "proxy")
+145:             })
+146:             routeRules.put(JSONObject().apply {
+147:                 put("network", "udp")
+148:                 put("outbound", "proxy")
+149:             })
+150:         } else if (gameSubnets.isNotEmpty()) {
+151:             val cidrArray = JSONArray()
+152:             gameSubnets.forEach { cidrArray.put(it) }
+153:             routeRules.put(JSONObject().apply {
+154:                 put("ip_cidr", cidrArray)
+155:                 put("outbound", "proxy")
+156:             })
+157:         }
+158: 
+159:         // Everything else direct
+160:         routeRules.put(JSONObject().apply {
+161:             put("network", "tcp")
+162:             put("outbound", "direct")
+163:         })
+164:         routeRules.put(JSONObject().apply {
+165:             put("network", "udp")
+166:             put("outbound", "direct")
+167:         })
+168: 
+169:         json.put("route", JSONObject().apply {
+170:             put("auto_detect_interface", true)
+171:             put("rules", routeRules)
+172:         })
+173: 
+174:         return json.toString()
+175:     }
+176: }
+177: 
+The above content shows the entire, complete file contents of the requested file.
+

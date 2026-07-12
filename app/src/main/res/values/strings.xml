@@ -131,6 +131,7 @@
     <string name="nav_scanner">Scanner</string>
     <string name="nav_cloud">Cloud</string>
     <string name="nav_warp">WARP</string>
+    <string name="nav_wireguard">Wireguard</string>
     <string name="nav_nodes">Connect</string>
     <string name="action_ping">Ping</string>
     <string name="action_delay">Delay</string>
@@ -214,6 +215,8 @@
     <string name="settings_usage_tracking_desc">Record daily usage data</string>
     <string name="settings_warp_tab">Show WARP Tab</string>
     <string name="settings_warp_tab_desc">Enable WARP tool tab on main screen</string>
+    <string name="settings_enable_wireguard_tab">Show Wireguard Tab</string>
+    <string name="settings_enable_wireguard_tab_desc">Enable Wireguard tool tab</string>
     <string name="settings_screen_off_timeout">Behavior after screen off</string>
     <string name="settings_screen_off_timeout_desc">By default VPN stays awake causing battery drain.</string>
     <string name="settings_timeout_0">Always connected (No disconnect)</string>

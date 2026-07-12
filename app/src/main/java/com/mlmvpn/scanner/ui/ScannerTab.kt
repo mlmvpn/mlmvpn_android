@@ -108,6 +108,30 @@ fun ScannerProgressCard(scanPhase: com.mlmvpn.scanner.data.CloudflareScanner.Sca
 }
 
 @Composable
+fun NetworkPausedBanner(message: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+            .background(YellowWarn.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
+            .border(1.dp, YellowWarn.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = YellowWarn, strokeWidth = 2.dp)
+        Spacer(modifier = Modifier.width(12.dp))
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.WifiOff, contentDescription = null, tint = YellowWarn, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Ø§ØªØµØ§Ù„ Ø§ÛŒÙ†ØªØ±Ù†Øª Ù‚Ø·Ø¹ Ø´Ø¯Ù‡", color = YellowWarn, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+            Text(message, color = TextMuted, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
+        }
+    }
+}
+
+@Composable
 fun ScannerSettingsCard(
     baseConfig: String,
     onBaseConfigChange: (String) -> Unit,
@@ -195,6 +219,7 @@ fun ScannerTab() {
     val healthTestResults by com.mlmvpn.scanner.data.ScannerManager.healthTestResults.collectAsState()
     val lastScanNewCount by com.mlmvpn.scanner.data.ScannerManager.lastScanNewCount.collectAsState()
     val lastScanDuplicateCount by com.mlmvpn.scanner.data.ScannerManager.lastScanDuplicateCount.collectAsState()
+    val pauseMessage by com.mlmvpn.scanner.data.ScannerManager.pauseMessage.collectAsState()
 
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -291,7 +316,11 @@ fun ScannerTab() {
                         if (scanning) {
                             ScannerProgressCard(scanPhase, foundCount, progress)
                         }
-                        
+
+                        pauseMessage?.let { msg ->
+                            NetworkPausedBanner(msg)
+                        }
+
                         if (scannedIPs.isNotEmpty()) {
                             // Results List
                             Row(modifier = Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -514,7 +543,7 @@ fun ScannerTab() {
                                                                 java.security.SecureRandom().nextBytes(keyBytes)
                                                                 val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                                                                 val xudpBaseKey = android.util.Base64.encodeToString(keyBytes, flags)
-                                                                libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey) 
+//                                                                 libv2ray.libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey) 
                                                             } catch (e: Exception) {}
 
                                                             val measureSemaphore = kotlinx.coroutines.sync.Semaphore(3)
@@ -527,7 +556,11 @@ fun ScannerTab() {
                                                                     try {
                                                                         val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(node.uri)
                                                                         if (config != null && config.address.isNotEmpty()) {
-                                                                            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
+                                                                            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(
+                                                                                config = config,
+                                                                                localPort = 0,
+                                                                                includeTun = false
+                                                                            )
                                                                             val delayMs = libv2ray.Libv2ray.measureOutboundDelay(jsonConfig, "https://clients3.google.com/generate_204")
                                                                             if (delayMs > 0) node else null
                                                                         } else {
@@ -604,15 +637,15 @@ fun ScannerTab() {
                                                                             )
                                                                             val success = api.updateUser(acc, mlmUsername, req)
                                                                             if (success) {
-                                                                                android.widget.Toast.makeText(context, "ساب‌اسکریپشن کاربر با IP های سالم بروزرسانی شد", android.widget.Toast.LENGTH_LONG).show()
+                                                                                android.widget.Toast.makeText(context, "Ø³Ø§Ø¨â€ŒØ§Ø³Ú©Ø±ÛŒÙ¾Ø´Ù† Ú©Ø§Ø±Ø¨Ø± Ø¨Ø§ IP Ù‡Ø§ÛŒ Ø³Ø§Ù„Ù… Ø¨Ø±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ Ø´Ø¯", android.widget.Toast.LENGTH_LONG).show()
                                                                             } else {
-                                                                                android.widget.Toast.makeText(context, "خطا در بروزرسانی ساب‌اسکریپشن", android.widget.Toast.LENGTH_LONG).show()
+                                                                                android.widget.Toast.makeText(context, "Ø®Ø·Ø§ Ø¯Ø± Ø¨Ø±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ Ø³Ø§Ø¨â€ŒØ§Ø³Ú©Ø±ÛŒÙ¾Ø´Ù†", android.widget.Toast.LENGTH_LONG).show()
                                                                             }
                                                                         } else {
-                                                                            android.widget.Toast.makeText(context, "کاربر یافت نشد!", android.widget.Toast.LENGTH_SHORT).show()
+                                                                            android.widget.Toast.makeText(context, "Ú©Ø§Ø±Ø¨Ø± ÛŒØ§ÙØª Ù†Ø´Ø¯!", android.widget.Toast.LENGTH_SHORT).show()
                                                                         }
                                                                     } else {
-                                                                        android.widget.Toast.makeText(context, "اکانت MLM یافت نشد!", android.widget.Toast.LENGTH_SHORT).show()
+                                                                        android.widget.Toast.makeText(context, "Ø§Ú©Ø§Ù†Øª MLM ÛŒØ§ÙØª Ù†Ø´Ø¯!", android.widget.Toast.LENGTH_SHORT).show()
                                                                     }
                                                                     isUpdatingSub = false
                                                                 }
@@ -624,7 +657,7 @@ fun ScannerTab() {
                                                             if (isUpdatingSub) {
                                                                 CircularProgressIndicator(modifier = Modifier.size(24.dp), color = BgDark, strokeWidth = 2.dp)
                                                             } else {
-                                                                Text("بروزرسانی ساب (${healthyNodes.size})", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                                Text("Ø¨Ø±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ Ø³Ø§Ø¨ (${healthyNodes.size})", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                                                 Spacer(modifier = Modifier.width(4.dp))
                                                                 Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
                                                             }
@@ -1168,3 +1201,6 @@ fun ScannerTab() {
         }
     }
 }
+
+
+

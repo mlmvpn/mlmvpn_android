@@ -5,12 +5,16 @@ import android.util.Log
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 object RstaSpoofManager {
     private const val TAG = "RstaSpoofManager"
     private const val LISTEN_HOST = "127.0.0.1"
     private const val LISTEN_PORT = 40443
     private var process: Process? = null
+    private val lifecycleMutex = Mutex()
     val isRunningFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
 
     // Track what config we started with for auto-restart
@@ -20,9 +24,18 @@ object RstaSpoofManager {
     private var lastMethod: String = "combined"
 
     fun start(context: Context, connectIp: String, connectPort: Int, fakeSni: String, methodArg: String = "combined") {
+        runBlocking {
+            lifecycleMutex.withLock {
+                startLocked(context, connectIp, connectPort, fakeSni, methodArg)
+            }
+        }
+    }
+
+    // Must only be called while holding lifecycleMutex.
+    private fun startLocked(context: Context, connectIp: String, connectPort: Int, fakeSni: String, methodArg: String = "combined") {
         val method = "combined" // Use combined method for DPI bypass
         Log.d(TAG, ">>> start() called: connect=$connectIp:$connectPort fakeSni=$fakeSni method=$method")
-        stop()
+        stopLocked()
 
         val destFile = File(context.applicationInfo.nativeLibraryDir, "librstaspoof.so")
         if (!destFile.exists()) {
@@ -53,7 +66,8 @@ object RstaSpoofManager {
             val pb = ProcessBuilder(*args)
             pb.redirectErrorStream(true)
 
-            process = pb.start()
+            val proc = pb.start()
+            process = proc
 
             // Save config for potential auto-restart
             lastConnectIp = connectIp
@@ -65,9 +79,9 @@ object RstaSpoofManager {
             Thread.sleep(200)
 
             // Verify the process is still alive
-            val alive = try { process?.exitValue(); false } catch (e: IllegalThreadStateException) { true }
+            val alive = try { proc.exitValue(); false } catch (e: IllegalThreadStateException) { true }
             if (!alive) {
-                val exitCode = process?.exitValue()
+                val exitCode = proc.exitValue()
                 Log.e(TAG, "Process died immediately with exit code $exitCode")
                 logFile.appendText("FATAL: Process exited immediately with code $exitCode\n")
                 isRunningFlow.value = false
@@ -87,12 +101,12 @@ object RstaSpoofManager {
             isRunningFlow.value = true
             Log.d(TAG, ">>> RSTA Spoof STARTED successfully on $LISTEN_HOST:$LISTEN_PORT")
 
-            // Log reader thread
+            // Log reader thread (captures proc locally so a concurrent restart can't swap it mid-read)
             Thread {
                 try {
-                    process?.inputStream?.bufferedReader()?.useLines { lines ->
+                    proc.inputStream?.bufferedReader()?.useLines { lines ->
                         lines.forEach { line ->
-                            val isSpam = line.contains("â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆ") || line.contains("[SVR RESP ]") || line.contains("[CLI REQ  ]")
+                            val isSpam = line.contains("██████") || line.contains("[SVR RESP ]") || line.contains("[CLI REQ  ]")
                             if (!isSpam) {
                                 Log.d(TAG, "RSTA RAW: $line")
                             }
@@ -107,8 +121,8 @@ object RstaSpoofManager {
                     Log.e(TAG, "Error reading process output", e)
                     try { logFile.appendText("Error reading output: ${e.message}\n") } catch (_: Exception) {}
                 } finally {
-                    val exitCode = try { process?.waitFor() } catch (_: Exception) { null }
-                    isRunningFlow.value = false
+                    val exitCode = try { proc.waitFor() } catch (_: Exception) { null }
+                    if (process === proc) isRunningFlow.value = false
                     val exitMsg = "Process exited with code $exitCode"
                     Log.d(TAG, exitMsg)
                     try { logFile.appendText("$exitMsg\n") } catch (_: Exception) {}
@@ -122,6 +136,15 @@ object RstaSpoofManager {
     }
 
     fun stop() {
+        runBlocking {
+            lifecycleMutex.withLock {
+                stopLocked()
+            }
+        }
+    }
+
+    // Must only be called while holding lifecycleMutex.
+    private fun stopLocked() {
         try {
             process?.destroyForcibly()
             process = null
@@ -138,28 +161,32 @@ object RstaSpoofManager {
      * Returns true if RSTA is running (or was successfully started).
      */
     fun ensureRunning(context: Context): Boolean {
-        // Already running and port is open?
-        if (isRunningFlow.value && isProcessAlive() && isPortOpen(LISTEN_HOST, LISTEN_PORT, 500)) {
-            Log.d(TAG, "ensureRunning: already running, process alive, and port is open")
-            return true
+        return runBlocking {
+            lifecycleMutex.withLock {
+                // Already running and port is open?
+                if (isRunningFlow.value && isProcessAlive() && isPortOpen(LISTEN_HOST, LISTEN_PORT, 500)) {
+                    Log.d(TAG, "ensureRunning: already running, process alive, and port is open")
+                    return@withLock true
+                }
+
+                // Read saved config from SharedPreferences (set by EmergencyLevel3Screen)
+                val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+
+                val connectIp = lastConnectIp
+                    ?: prefs.getString("rsta_connect_ip", null)
+                    ?: "188.114.98.0"
+                val connectPort = lastConnectPort
+                    ?: prefs.getInt("rsta_connect_port", 443)
+                val fakeSni = lastFakeSni
+                    ?: prefs.getString("rsta_fake_sni", null)
+                    ?: "security.vercel.com"
+                val method = "combined" // Force combined method for stability
+
+                Log.d(TAG, "ensureRunning: (re)starting with connect=$connectIp:$connectPort sni=$fakeSni method=$method")
+                startLocked(context, connectIp, connectPort, fakeSni, method)
+                isRunningFlow.value
+            }
         }
-
-        // Read saved config from SharedPreferences (set by EmergencyLevel3Screen)
-        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
-
-        val connectIp = lastConnectIp 
-            ?: prefs.getString("rsta_connect_ip", null) 
-            ?: "188.114.98.0"
-        val connectPort = lastConnectPort 
-            ?: prefs.getInt("rsta_connect_port", 443)
-        val fakeSni = lastFakeSni 
-            ?: prefs.getString("rsta_fake_sni", null) 
-            ?: "security.vercel.com"
-        val method = "combined" // Force combined method for stability
-
-        Log.d(TAG, "ensureRunning: (re)starting with connect=$connectIp:$connectPort sni=$fakeSni method=$method")
-        start(context, connectIp, connectPort, fakeSni, method)
-        return isRunningFlow.value
     }
 
     /**

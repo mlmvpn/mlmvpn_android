@@ -219,6 +219,61 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                     "نسخه 1.0.8",
                     listOf(
                         ChangelogItem(
+                            "وایرگارد اختصاصی امارات برای کاهش پینگ",
+                            "افزودن سرور اختصاصی وایرگارد در امارات مخصوص کاهش پینگ بازی‌ها، با مسیر بهینه و پایدار. قابل استفاده برای همه‌ی بازی‌های فهرست تب گیم.",
+                            Icons.Default.Speed
+                        ),
+                        ChangelogItem(
+                            "بازطراحی و یکپارچه‌سازی تب گیم",
+                            "تب گیم به‌طور کامل بازطراحی شد؛ حالت خودکار (AUTO) اکنون همه‌ی روش‌های کاهش پینگ را با سنجش پینگ واقعی مقایسه می‌کند و بهترین گزینه را پیشنهاد می‌دهد. رابط کاربری ساده‌تر و یکدست‌تر شد.",
+                            Icons.Default.FlashOn
+                        ),
+                        ChangelogItem(
+                            "DNS اختصاصی کلادفلر با انتخاب کشور",
+                            "بهینه‌سازی کامل DNS اختصاصی کلادفلر با هدایت هوشمند بر اساس کشور، برای رسیدن به نزدیک‌ترین و کم‌تأخیرترین سرور بازی روی اتصال شما.",
+                            Icons.Default.Cloud
+                        ),
+                        ChangelogItem(
+                            "DNS اختصاصی امارات (رایگان و نامحدود)",
+                            "افزودن سرویس DNS اختصاصی روی سرور امارات با ارتباط رمزنگاری‌شده و امن، به‌عنوان گزینه‌ای سبک و پایدار برای کاهش پینگ بدون نیاز به تونل کامل.",
+                            Icons.Default.Language
+                        ),
+                        ChangelogItem(
+                            "بهبود پایداری و رفع باگ",
+                            "رفع چند مشکل گزارش‌شده و افزایش پایداری کلی برنامه برای تجربه‌ای روان‌تر و مطمئن‌تر.",
+                            Icons.Default.CheckCircle
+                        )
+                    )
+                ),
+                ChangelogVersion(
+                    "نسخه 1.0.8 beta",
+                    listOf(
+                        ChangelogItem(
+                            "پنل جدید Deno (میزبانی رایگان بدون کارت)",
+                            "اضافه‌شدن پنل Deno برای ساخت کاملاً خودکار سرور اختصاصی، بدون نیاز به کارت اعتباری. پشتیبانی از چند اکانت با جابجایی آسان و نمایش آمار مصرف (روزانه/هفتگی/ماهانه به‌همراه آپلود و دانلود) هر اکانت.",
+                            Icons.Default.Cloud
+                        ),
+                        ChangelogItem(
+                            "کانفیگ‌های VLESS و Trojan روی WS و xHTTP",
+                            "سرور Deno هم VLESS و هم Trojan را روی دو بستر WebSocket و xHTTP پشتیبانی می‌کند. دکمه‌ی «دریافت کانفیگ xHTTP� با یک کلیک دو کانفیگ (VLESS و Trojan) می‌سازد. کانفیگ‌ها به تب اختصاصی DENO و بخش ترکیب اسکنر هم اضافه می‌شوند.",
+                            Icons.Default.Bolt
+                        ),
+                        ChangelogItem(
+                            "بهینه‌سازی مصرف و پایداری Deno",
+                            "بستن خودکار اتصال‌های بیکار برای کاهش مصرف و دووم بیشتر سرورهای رایگان، به‌همراه مسیردهی هوشمند درخواست‌ها از داخل تونل و راهنمای کامل در بخش پرسش و پاسخ.",
+                            Icons.Default.Speed
+                        ),
+                        ChangelogItem(
+                            "دکمه‌ی اتصال سریع در پنل بالای گوشی",
+                            "افزودن دکمه‌ی mlmvpn به پنل تنظیمات سریع (Quick Settings) گوشی؛ با یک لمس، VPN روشن/خاموش می‌شود و از میان سرورهای اخیر شما تأخیر (delay) گرفته و به سریع‌ترین متصل می‌شود. تعداد سرورها در تنظیمات VPN قابل تغییر است.",
+                            Icons.Default.Bolt
+                        ),
+                        ChangelogItem(
+                            "کاهش چشمگیر حجم برنامه",
+                            "حذف فایل‌های بلااستفاده و فعال‌سازی فشرده‌سازی کد برای کم‌کردن قابل‌توجه حجم برنامه، ضمن حفظ حالت یونیورسال و نصب روی همه‌ی گوشی‌ها (از قدیمی تا جدیدترین).",
+                            Icons.Default.Compress
+                        ),
+                        ChangelogItem(
                             "سیستم گیم بوستر اختصاصی",
                             "اضافه‌شدن هوشمندترین سیستم گیم بوستر با قابلیت تشخیص و انتخاب بهترین مسیر (مستقیم یا تونل) جهت کاهش حداکثری پینگ و تجربه بازی بدون لگ.",
                             Icons.Default.FlashOn
@@ -361,6 +416,56 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                 ChangelogVersion(
                     "Version 1.0.8",
                     listOf(
+                        ChangelogItem(
+                            "Dedicated UAE WireGuard for lower ping",
+                            "Added a dedicated WireGuard server in the UAE, purpose-built to reduce game ping over an optimized, stable route. Works for every game in the Game tab list.",
+                            Icons.Default.Speed
+                        ),
+                        ChangelogItem(
+                            "Redesigned, unified Game tab",
+                            "The Game tab has been fully redesigned. AUTO now compares every ping-reduction method by real measured ping and recommends the best one. The interface is simpler and more consistent.",
+                            Icons.Default.FlashOn
+                        ),
+                        ChangelogItem(
+                            "Cloudflare Dedicated DNS with country steering",
+                            "Cloudflare Dedicated DNS is fully optimized with smart country-based steering, so you reach the nearest, lowest-latency game server on your connection.",
+                            Icons.Default.Cloud
+                        ),
+                        ChangelogItem(
+                            "UAE Dedicated DNS (free & unlimited)",
+                            "Added a dedicated DNS service on our UAE server over a secure, encrypted connection — a lightweight, stable option to lower ping without a full tunnel.",
+                            Icons.Default.Language
+                        ),
+                        ChangelogItem(
+                            "Stability improvements & bug fixes",
+                            "Fixed several reported issues and improved overall stability for a smoother, more reliable experience.",
+                            Icons.Default.CheckCircle
+                        )
+                    )
+                ),
+                ChangelogVersion(
+                    "Version 1.0.8 beta",
+                    listOf(
+                        ChangelogItem(
+                            "New Deno Panel (free hosting, no card)",
+                            "A new Deno panel to fully auto-create your own dedicated server with no credit card required. Supports multiple accounts with easy switching and per-account usage stats (daily/weekly/monthly plus upload and download).",
+                            Icons.Default.Cloud
+                        ),
+                        ChangelogItem(
+                            "VLESS & Trojan over WS and xHTTP",
+                            "The Deno server supports both VLESS and Trojan over WebSocket and xHTTP. The 'Get xHTTP config' button creates two configs (VLESS + Trojan) in one tap. Configs are also added to a dedicated DENO tab and the scanner's combine feature.",
+                            Icons.Default.Bolt
+                        ),
+                        ChangelogItem(
+                            "Quick Settings tile (fast connect)",
+                            "Add the mlmvpn tile to your phone's Quick Settings panel to toggle the VPN in one tap � it delay-tests your most recent servers and connects to the fastest. The number of servers to test is adjustable in VPN Settings.",
+                            Icons.Default.Speed
+                        ),
+                        ChangelogItem(
+                            "Smaller app size",
+                            "Removed unused bundled files and enabled code shrinking to significantly reduce the app size, while keeping it universal and installable on all phones (old to newest).",
+                            Icons.Default.Compress
+                        ),
                         ChangelogItem(
                             "Exclusive Game Booster System",
                             "Introduced the smartest Game Booster system capable of detecting and selecting the optimal route (Direct or Tunnel) to massively reduce ping for a lag-free gaming experience.",

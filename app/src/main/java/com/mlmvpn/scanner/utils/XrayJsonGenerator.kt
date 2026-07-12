@@ -1,129 +1,24 @@
-package com.mlmvpn.scanner.utils
+﻿package com.mlmvpn.scanner.utils
 
 import org.json.JSONArray
 import org.json.JSONObject
 
 object XrayJsonGenerator {
-    fun generateSpeedtestConfig(config: VpnConfig): String {
-        val json = JSONObject()
-        val log = JSONObject().apply { put("loglevel", "warning") }
-        json.put("log", log)
-
-        val outbounds = JSONArray()
-        val mainOutbound = JSONObject()
-        
-        if (config.protocol == "vless") {
-            mainOutbound.put("protocol", "vless")
-            val vnext = JSONArray().put(JSONObject().apply {
-                put("address", config.address)
-                put("port", config.port)
-                put("users", JSONArray().put(JSONObject().apply {
-                    put("id", config.uuid)
-                    put("encryption", "none")
-                }))
-            })
-            mainOutbound.put("settings", JSONObject().put("vnext", vnext))
-        } else if (config.protocol == "trojan") {
-            mainOutbound.put("protocol", "trojan")
-            val servers = JSONArray().put(JSONObject().apply {
-                put("address", config.address)
-                put("port", config.port)
-                put("password", config.uuid)
-            })
-            mainOutbound.put("settings", JSONObject().put("servers", servers))
-        }
-
-        val streamSettings = JSONObject()
-        streamSettings.put("network", config.network)
-        if (config.tls.isNotEmpty() && config.tls != "none") {
-            streamSettings.put("security", config.tls)
-            val tlsSettings = JSONObject()
-            tlsSettings.put("serverName", if (config.sni.isNotEmpty()) config.sni else config.wsHost)
-            if (config.fingerprint.isNotEmpty()) {
-                tlsSettings.put("fingerprint", config.fingerprint)
-            } else {
-                tlsSettings.put("fingerprint", "chrome")
-            }
-            
-            if (config.alpn.isNotEmpty()) {
-                val alpnArr = JSONArray()
-                config.alpn.split(",").forEach { alpnArr.put(it) }
-                tlsSettings.put("alpn", alpnArr)
-            } else {
-                val alpnArr = JSONArray()
-                if (config.network == "ws" || config.network == "h2" || config.network == "http") {
-                    alpnArr.put("http/1.1")
-                } else if (config.network == "grpc") {
-                    alpnArr.put("h2")
-                } else {
-                    alpnArr.put("h2").put("http/1.1")
-                }
-                tlsSettings.put("alpn", alpnArr)
-            }
-            streamSettings.put("tlsSettings", tlsSettings)
-        }
-
-        if (config.network == "ws") {
-            val wsSettings = JSONObject()
-            wsSettings.put("path", if (config.wsPath.isNotEmpty()) config.wsPath else "/")
-            val headers = JSONObject()
-            if (config.wsHost.isNotEmpty()) {
-                wsSettings.put("host", config.wsHost)
-                headers.put("Host", config.wsHost)
-            }
-            wsSettings.put("headers", headers)
-            streamSettings.put("wsSettings", wsSettings)
-        }
-        
-        if (config.network == "xhttp") {
-            val xhttpSettings = JSONObject().apply {
-                put("path", if (config.xhttpPath.isNotEmpty()) config.xhttpPath else "/")
-                put("host", if (config.xhttpHost.isNotEmpty()) config.xhttpHost else config.sni)
-                put("mode", if (config.xhttpMode.isNotEmpty()) config.xhttpMode else "auto")
-                if (config.xhttpExtra.isNotEmpty()) {
-                    try {
-                        val extraObj = JSONObject(config.xhttpExtra)
-                        val keys = extraObj.keys()
-                        while (keys.hasNext()) {
-                            val key = keys.next()
-                            put(key, extraObj.get(key))
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
-            }
-            streamSettings.put("xhttpSettings", xhttpSettings)
-        }
-        
-        mainOutbound.put("streamSettings", streamSettings)
-        mainOutbound.put("tag", "proxy")
-        outbounds.put(mainOutbound)
-        
-        json.put("outbounds", outbounds)
-        return json.toString()
-    }
-
-    fun generateConfig(config: VpnConfig, localPort: Int, backendDns: String = "1.1.1.1", allowLan: Boolean = false, includeTun: Boolean = true, mtu: Int = 1280, useFragment: Boolean = false, gameMode: Boolean = false): String {
+    fun generateConfig(
+        config: VpnConfig,
+        localPort: Int,
+        backendDns: String = "1.1.1.1",
+        allowLan: Boolean = false,
+        includeTun: Boolean = true,
+        mtu: Int = 1280,
+        useFragment: Boolean = false,
+        gameMode: Boolean = false,
+        warpHybrid: org.json.JSONObject? = null,
+        dedicatedDnsUrl: String? = null,
+        dedicatedDnsDomains: List<String> = emptyList()
+    ): String {
         val json = JSONObject()
         
-        // Stats and Policy for v2rayNG core compatibility
-        json.put("stats", JSONObject())
-        json.put("policy", JSONObject().apply {
-            put("levels", JSONObject().apply {
-                put("8", JSONObject().apply {
-                    put("handshake", 4)
-                    put("connIdle", 300)
-                    put("uplinkOnly", 1)
-                    put("downlinkOnly", 1)
-                })
-            })
-            put("system", JSONObject().apply {
-                put("statsOutboundUplink", true)
-                put("statsOutboundDownlink", true)
-            })
-        })
-
         // Log
         val log = JSONObject()
         log.put("loglevel", "warning")
@@ -139,49 +34,35 @@ object XrayJsonGenerator {
             put("settings", JSONObject().apply {
                 put("auth", "noauth")
                 put("udp", true)
-                put("userLevel", 8)
             })
             put("sniffing", JSONObject().apply {
                 put("enabled", true)
-                val destOverride = JSONArray().put("http").put("tls").put("quic")
-                if (includeTun) destOverride.put("fakedns")
-                put("destOverride", destOverride)
+                put("destOverride", JSONArray().put("http").put("tls").put("fakedns"))
             })
         }
         if (includeTun) {
             val tunInbound = JSONObject().apply {
                 put("protocol", "tun")
-                put("tag", "tun")
+                put("tag", "tun2socks")
                 put("settings", JSONObject().apply {
-                    put("name", "xray0")
-                    put("MTU", mtu)
-                    put("userLevel", 8)
+                    put("mtu", mtu)
+                    put("autoRoute", false)
+                    put("strictRoute", false)
+                    put("endpoint", "10.0.0.2")
+                    put("stack", "system")
                 })
                 put("sniffing", JSONObject().apply {
                     put("enabled", true)
-                    val destOverride = JSONArray().put("http").put("tls").put("quic")
-                    if (includeTun) destOverride.put("fakedns")
-                    put("destOverride", destOverride)
+                    put("destOverride", JSONArray().put("http").put("tls").put("fakedns"))
                 })
             }
             inbounds.put(tunInbound)
         }
         inbounds.put(socksInbound)
-
-        // Add HTTP inbound for OkHttp to pass DNS resolution to proxy
-        val httpInbound = JSONObject().apply {
-            put("port", localPort + 10000)
-            put("listen", "127.0.0.1")
-            put("protocol", "http")
-            put("tag", "http")
-        }
-        inbounds.put(httpInbound)
-        
         json.put("inbounds", inbounds)
 
         // Outbounds
         val outbounds = JSONArray()
-        
         val mainOutbound = JSONObject()
         
         if (config.protocol == "vless") {
@@ -212,25 +93,11 @@ object XrayJsonGenerator {
             streamSettings.put("security", config.tls)
             val tlsSettings = JSONObject()
             tlsSettings.put("serverName", if (config.sni.isNotEmpty()) config.sni else config.wsHost)
-            if (config.fingerprint.isNotEmpty()) {
-                tlsSettings.put("fingerprint", config.fingerprint)
-            } else {
-                tlsSettings.put("fingerprint", "chrome")
-            }
+            tlsSettings.put("fingerprint", "chrome") // ALWAYS KEEP CHROME FINGERPRINT FOR uTLS
             
             if (config.alpn.isNotEmpty()) {
                 val alpnArr = JSONArray()
                 config.alpn.split(",").forEach { alpnArr.put(it) }
-                tlsSettings.put("alpn", alpnArr)
-            } else {
-                val alpnArr = JSONArray()
-                if (config.network == "ws" || config.network == "h2" || config.network == "http") {
-                    alpnArr.put("http/1.1")
-                } else if (config.network == "grpc") {
-                    alpnArr.put("h2")
-                } else {
-                    alpnArr.put("h2").put("http/1.1")
-                }
                 tlsSettings.put("alpn", alpnArr)
             }
             streamSettings.put("tlsSettings", tlsSettings)
@@ -244,79 +111,21 @@ object XrayJsonGenerator {
                 wsSettings.put("host", config.wsHost)
                 headers.put("Host", config.wsHost)
             }
+            headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             wsSettings.put("headers", headers)
             streamSettings.put("wsSettings", wsSettings)
-        }
-        
-        if (config.network == "xhttp") {
-            val xhttpSettings = JSONObject().apply {
-                put("path", if (config.xhttpPath.isNotEmpty()) config.xhttpPath else "/")
-                put("host", if (config.xhttpHost.isNotEmpty()) config.xhttpHost else config.sni)
-                put("mode", if (config.xhttpMode.isNotEmpty()) config.xhttpMode else "auto")
-                if (config.xhttpExtra.isNotEmpty()) {
-                    try {
-                        val extraObj = JSONObject(config.xhttpExtra)
-                        val keys = extraObj.keys()
-                        while (keys.hasNext()) {
-                            val key = keys.next()
-                            put(key, extraObj.get(key))
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
-            }
-            streamSettings.put("xhttpSettings", xhttpSettings)
-        }
-        
-        if (useFragment) {
-            val sockopt = JSONObject().apply {
-                put("dialerProxy", "fragment-out")
-            }
-            streamSettings.put("sockopt", sockopt)
         }
         
         mainOutbound.put("streamSettings", streamSettings)
         mainOutbound.put("tag", "proxy")
         outbounds.put(mainOutbound)
-        
-        if (useFragment) {
-            outbounds.put(JSONObject().apply {
-                put("tag", "fragment-out")
-                put("protocol", "freedom")
-                put("settings", JSONObject().apply {
-                    put("fragment", JSONObject().apply {
-                        put("packets", "tlshello")
-                        put("length", "100-200")
-                        put("interval", "10-20")
-                    })
-                })
-            })
-        }
 
         // Direct Outbound
         val directOutbound = JSONObject().apply {
             put("protocol", "freedom")
             put("tag", "direct")
-            put("streamSettings", JSONObject().apply {
-                put("sockopt", JSONObject().apply {
-                    put("domainStrategy", "UseIP")
-                })
-            })
         }
         outbounds.put(directOutbound)
-        
-        // Block Outbound
-        val blockOutbound = JSONObject().apply {
-            put("protocol", "blackhole")
-            put("tag", "block")
-            put("settings", JSONObject().apply {
-                put("response", JSONObject().apply {
-                    put("type", "http")
-                })
-            })
-        }
-        outbounds.put(blockOutbound)
         
         json.put("outbounds", outbounds)
 
@@ -324,121 +133,42 @@ object XrayJsonGenerator {
         val dns = JSONObject()
         val servers = JSONArray()
         
-        // 1. Direct DNS for Server IPs/Hosts
         val directDns = JSONObject()
         directDns.put("address", backendDns)
         val directDomains = JSONArray()
-        val hosts = setOf(config.address, config.wsHost, config.sni).filter { 
-            it.isNotEmpty() && !it.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) 
-        }
+        val hosts = setOf(config.address, config.wsHost, config.sni).filter { it.isNotEmpty() }
         hosts.forEach { directDomains.put(it) }
         directDns.put("domains", directDomains)
-        directDns.put("skipFallback", true)
-        directDns.put("tag", "direct-dns-out")
         servers.put(directDns)
-
-        // 2. FakeDNS Server
-        if (includeTun) {
-            servers.put(JSONObject().apply {
-                put("address", "fakedns")
-            })
-        }
         
-        // 3. DoH server with a dedicated tag — routed through the tunnel
-        servers.put(JSONObject().apply {
-            put("address", "https://8.8.8.8/dns-query")
-            put("tag", "doh-dns-out")
-        })
-        
-        // 4. Fallback DNS
-        servers.put("localhost")
+        servers.put("fakedns")
         
         dns.put("servers", servers)
-        dns.put("queryStrategy", "UseIPv4")
         json.put("dns", dns)
         
-        if (includeTun) {
-            // FakeDNS Root Object
-            val fakednsArray = JSONArray()
-            fakednsArray.put(JSONObject().apply {
-                put("ipPool", "198.18.0.0/15")
-                put("poolSize", 65535)
-            })
-            json.put("fakedns", fakednsArray)
-        }
-
+        val fakedns = JSONObject()
+        fakedns.put("ipPool", "198.18.0.0/15")
+        fakedns.put("poolSize", 65535)
+        json.put("fakedns", JSONArray().put(fakedns))
 
         // Routing
         val routing = JSONObject()
         routing.put("domainStrategy", "AsIs")
         
         val rules = JSONArray()
-        
-        // Route Direct DNS explicitly to direct
+        // Route user DNS queries to Xray's internal DNS
         rules.put(JSONObject().apply {
             put("type", "field")
-            put("inboundTag", JSONArray().put("direct-dns-out"))
-            put("outboundTag", "direct")
-        })
-        
-        // Route DoH traffic through proxy
-        rules.put(JSONObject().apply {
-            put("type", "field")
-            put("inboundTag", JSONArray().put("doh-dns-out"))
-            put("outboundTag", "proxy")
-        })
-
-        // 1. Route user DNS queries to Xray's internal DNS
-        rules.put(JSONObject().apply {
-            put("type", "field")
-            put("inboundTag", if (includeTun) JSONArray().put("tun").put("socks") else JSONArray().put("socks"))
+            put("inboundTag", if (includeTun) JSONArray().put("tun2socks").put("socks") else JSONArray().put("socks"))
             put("port", 53)
             put("outboundTag", "dns-out")
         })
-        
-        // Block QUIC (UDP/443) to force fallback to TCP
+        // Route Xray's internal DNS queries to direct to avoid UDP drops over proxy
         rules.put(JSONObject().apply {
             put("type", "field")
-            put("network", "udp")
-            put("port", 443)
-            put("outboundTag", "block")
-        })
-        
-        val isWorker = config.wsHost.contains("workers.dev", ignoreCase = true) || 
-                       config.sni.contains("workers.dev", ignoreCase = true) || 
-                       config.wsHost.contains("pages.dev", ignoreCase = true) || 
-                       config.sni.contains("pages.dev", ignoreCase = true)
-        
-        // Route UDP to direct ONLY if not in game mode OR if the proxy is a worker (which can't proxy UDP)
-        if (!gameMode || isWorker) {
-            rules.put(JSONObject().apply {
-                put("type", "field")
-                put("network", "udp")
-                put("outboundTag", "direct")
-            })
-        } else {
-            // In game mode, we must ensure UDP (except QUIC/DNS) goes to proxy
-            rules.put(JSONObject().apply {
-                put("type", "field")
-                put("network", "udp")
-                put("outboundTag", "proxy")
-            })
-        }
-        
-        val directIps = JSONArray().put("geoip:private")
-        if (backendDns.isNotEmpty() && backendDns != "8.8.8.8" && backendDns != "1.1.1.1") {
-            // Only add custom backend DNS to direct if strictly necessary
-            // directIps.put(backendDns) 
-        }
-        if (config.address.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$"))) {
-            directIps.put(config.address)
-        }
-        rules.put(JSONObject().apply {
-            put("type", "field")
-            put("ip", directIps)
+            put("port", 53)
             put("outboundTag", "direct")
         })
-        
         routing.put("rules", rules)
         json.put("routing", routing)
         
@@ -452,14 +182,13 @@ object XrayJsonGenerator {
         return json.toString()
     }
 
-    fun generateMultiConfig(configs: List<VpnConfig>, baseSocksPort: Int, backendDns: String = "1.1.1.1", useFragment: Boolean = false): String {
+    fun generateMultiConfig(configs: List<VpnConfig>, baseSocksPort: Int, backendDns: String = "1.1.1.1"): String {
         val json = JSONObject()
         val log = JSONObject().apply { put("loglevel", "warning") }
         json.put("log", log)
 
         val inbounds = JSONArray()
         val outbounds = JSONArray()
-        
         val routingRules = JSONArray()
         val hosts = mutableSetOf<String>()
 
@@ -479,7 +208,7 @@ object XrayJsonGenerator {
                 })
                 put("sniffing", JSONObject().apply {
                     put("enabled", true)
-                    put("destOverride", JSONArray().put("http").put("tls").put("quic"))
+                    put("destOverride", JSONArray().put("http").put("tls").put("fakedns"))
                 })
             })
 
@@ -520,9 +249,7 @@ object XrayJsonGenerator {
                 streamSettings.put("security", config.tls)
                 val tlsSettings = JSONObject()
                 tlsSettings.put("serverName", if (config.sni.isNotEmpty()) config.sni else config.wsHost)
-                if (config.fingerprint.isNotEmpty()) {
-                    tlsSettings.put("fingerprint", config.fingerprint)
-                }
+                tlsSettings.put("fingerprint", "chrome")
                 
                 if (config.alpn.isNotEmpty()) {
                     val alpnArr = JSONArray()
@@ -535,79 +262,27 @@ object XrayJsonGenerator {
             if (config.network == "ws") {
                 val wsSettings = JSONObject()
                 wsSettings.put("path", if (config.wsPath.isNotEmpty()) config.wsPath else "/")
+                val headers = JSONObject()
                 if (config.wsHost.isNotEmpty()) {
                     wsSettings.put("host", config.wsHost)
+                    headers.put("Host", config.wsHost)
                 }
+                headers.put("User-Agent", "Mozilla/5.0")
+                wsSettings.put("headers", headers)
                 streamSettings.put("wsSettings", wsSettings)
-            }
-            
-            if (config.network == "xhttp") {
-                val xhttpSettings = JSONObject().apply {
-                    put("path", if (config.xhttpPath.isNotEmpty()) config.xhttpPath else "/")
-                    put("host", if (config.xhttpHost.isNotEmpty()) config.xhttpHost else config.sni)
-                    put("mode", if (config.xhttpMode.isNotEmpty()) config.xhttpMode else "auto")
-                    if (config.xhttpExtra.isNotEmpty()) {
-                        try {
-                            val extraObj = JSONObject(config.xhttpExtra)
-                            val keys = extraObj.keys()
-                            while (keys.hasNext()) {
-                                val key = keys.next()
-                                put(key, extraObj.get(key))
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                    }
-                }
-                streamSettings.put("xhttpSettings", xhttpSettings)
-            }
-            
-            if (useFragment) {
-                val sockopt = JSONObject().apply {
-                    put("dialerProxy", "fragment-out")
-                }
-                streamSettings.put("sockopt", sockopt)
             }
             
             outbound.put("streamSettings", streamSettings)
             outbound.put("tag", tag)
             outbounds.put(outbound)
 
-            hosts.addAll(listOf(config.address, config.wsHost, config.sni).filter { 
-                it.isNotEmpty() && !it.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) 
-            })
-        }
-        
-        if (useFragment) {
-            outbounds.put(JSONObject().apply {
-                put("tag", "fragment-out")
-                put("protocol", "freedom")
-                put("settings", JSONObject().apply {
-                    put("fragment", JSONObject().apply {
-                        put("packets", "tlshello")
-                        put("length", "100-200")
-                        put("interval", "10-20")
-                    })
-                })
-            })
+            hosts.addAll(listOf(config.address, config.wsHost, config.sni).filter { it.isNotEmpty() })
         }
 
         // Direct Outbound
         outbounds.put(JSONObject().apply {
             put("protocol", "freedom")
             put("tag", "direct")
-        })
-        
-        // Block Outbound
-        outbounds.put(JSONObject().apply {
-            put("protocol", "blackhole")
-            put("tag", "block")
-        })
-        
-        // DNS Outbound
-        outbounds.put(JSONObject().apply {
-            put("protocol", "dns")
-            put("tag", "dns-out")
         })
 
         json.put("inbounds", inbounds)
@@ -627,102 +302,249 @@ object XrayJsonGenerator {
 
         val routing = JSONObject()
         routing.put("domainStrategy", "AsIs")
-        
-        val directIps = JSONArray().put("geoip:private")
-        if (backendDns.isNotEmpty() && backendDns != "8.8.8.8" && backendDns != "1.1.1.1") {
-            directIps.put(backendDns)
-        }
-        hosts.forEach {
-            if (it.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$"))) {
-                directIps.put(it)
-            }
-        }
-        routingRules.put(JSONObject().apply {
-            put("type", "field")
-            put("ip", directIps)
-            put("outboundTag", "direct")
-        })
-        
         routing.put("rules", routingRules)
         json.put("routing", routing)
 
         return json.toString()
     }
 
-    fun generateWarpWireguardConfig(
-        privateKey: String,
-        localAddress: String,
-        endpointIp: String,
-        endpointPort: Int = 2408,
-        localPort: Int = 10808,
-        includeTun: Boolean = true
+    /**
+     * "DNS boost" config: a local tun VPN that ONLY changes DNS resolution and sends all
+     * real traffic out direct (freedom) -- no proxy tunnel. Game hostnames can be resolved
+     * via a dedicated DoH worker (dedicatedDnsUrl) and/or pinned to specific IPs (staticHosts),
+     * with plain resolvers (dnsServers) plus 1.1.1.1 / 8.8.8.8 as fallbacks.
+     */
+    fun generateDnsBoostConfig(
+        localPort: Int,
+        dnsServers: List<String>,
+        dedicatedDnsUrl: String? = null,
+        dedicatedDnsDomains: List<String> = emptyList(),
+        staticHosts: Map<String, List<String>> = emptyMap(),
+        mtu: Int = 1280
     ): String {
         val json = JSONObject()
-        json.put("log", JSONObject().apply { put("loglevel", "warning") })
+        json.put("log", JSONObject().put("loglevel", "warning"))
 
+        // Inbounds: tun (captures device traffic) + a local socks for good measure.
         val inbounds = JSONArray()
-        if (includeTun) {
-            inbounds.put(JSONObject().apply {
-                put("port", localPort)
-                put("protocol", "tun")
-                put("settings", JSONObject().apply {
-                    put("mtu", 1500)
-                    put("autoRoute", true)
-                    put("strictRoute", true)
-                    put("endpointIndependentNat", true)
-                    put("stack", "system")
-                })
-                put("tag", "tun-in")
+        inbounds.put(JSONObject().apply {
+            put("protocol", "tun")
+            put("tag", "tun2socks")
+            put("settings", JSONObject().apply {
+                put("mtu", mtu)
+                put("autoRoute", false)
+                put("strictRoute", false)
+                put("endpoint", "10.0.0.2")
+                put("stack", "system")
             })
-        } else {
-            inbounds.put(JSONObject().apply {
-                put("port", localPort)
-                put("protocol", "socks")
-                put("settings", JSONObject().apply {
-                    put("auth", "noauth")
-                    put("udp", true)
-                })
-                put("tag", "socks-in")
+            put("sniffing", JSONObject().apply {
+                put("enabled", true)
+                put("destOverride", JSONArray().put("http").put("tls").put("fakedns"))
+            })
+        })
+        inbounds.put(JSONObject().apply {
+            put("port", localPort)
+            put("listen", "127.0.0.1")
+            put("protocol", "socks")
+            put("tag", "socks")
+            put("settings", JSONObject().apply {
+                put("auth", "noauth")
+                put("udp", true)
+            })
+        })
+        json.put("inbounds", inbounds)
+
+        // Everything goes out direct; DNS queries are handled internally.
+        val outbounds = JSONArray()
+        outbounds.put(JSONObject().apply { put("protocol", "freedom"); put("tag", "direct") })
+        outbounds.put(JSONObject().apply { put("protocol", "dns"); put("tag", "dns-out") })
+        json.put("outbounds", outbounds)
+
+        // DNS
+        val dns = JSONObject()
+        val servers = JSONArray()
+        if (!dedicatedDnsUrl.isNullOrEmpty()) {
+            servers.put(JSONObject().apply {
+                put("address", dedicatedDnsUrl)
+                if (dedicatedDnsDomains.isNotEmpty()) {
+                    put("domains", JSONArray().apply { dedicatedDnsDomains.forEach { put(it) } })
+                }
             })
         }
+        dnsServers.forEach { servers.put(it) }
+        // Fallback resolvers
+        servers.put("1.1.1.1")
+        servers.put("8.8.8.8")
+        dns.put("servers", servers)
+        if (staticHosts.isNotEmpty()) {
+            val hostsObj = JSONObject()
+            staticHosts.forEach { (host, ips) ->
+                hostsObj.put(host, JSONArray().apply { ips.forEach { put(it) } })
+            }
+            dns.put("hosts", hostsObj)
+        }
+        json.put("dns", dns)
+
+        // Routing: send DNS (port 53) to the dns outbound, everything else direct.
+        val rules = JSONArray()
+        rules.put(JSONObject().apply {
+            put("type", "field")
+            put("port", 53)
+            put("outboundTag", "dns-out")
+        })
+        json.put("routing", JSONObject().apply {
+            put("domainStrategy", "AsIs")
+            put("rules", rules)
+        })
+        return json.toString()
+    }
+
+    /**
+     * Minimal proxy-only config used purely for native outbound-delay measurement
+     * (libv2ray.measureOutboundDelay). No tun, a single socks inbound + proxy outbound.
+     */
+    fun generateSpeedtestConfig(config: VpnConfig): String =
+        generateConfig(config, localPort = 10853, includeTun = false)
+
+    // Cloudflare WARP well-known peer public key.
+    private const val WARP_PUBLIC_KEY = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuMdxHkJfChtBg="
+
+    /**
+     * MASQUE / WARP-forward config: a tun + socks inbound whose traffic is
+     * forwarded to an already-running upstream SOCKS proxy (e.g. usque / warp-plus)
+     * listening on 127.0.0.1:socksPort.
+     */
+    fun generateMasqueConfig(
+        localPort: Int,
+        socksPort: Int,
+        mtu: Int = 1280,
+        dedicatedDnsUrl: String? = null,
+        dedicatedDnsDomains: List<String> = emptyList()
+    ): String {
+        val json = JSONObject()
+        json.put("log", JSONObject().put("loglevel", "warning"))
+
+        val inbounds = JSONArray()
+        inbounds.put(JSONObject().apply {
+            put("protocol", "tun")
+            put("tag", "tun2socks")
+            put("settings", JSONObject().apply {
+                put("mtu", mtu)
+                put("autoRoute", false)
+                put("strictRoute", false)
+                put("endpoint", "10.0.0.2")
+                put("stack", "system")
+            })
+            put("sniffing", JSONObject().apply {
+                put("enabled", true)
+                put("destOverride", JSONArray().put("http").put("tls").put("fakedns"))
+            })
+        })
+        inbounds.put(JSONObject().apply {
+            put("port", localPort)
+            put("listen", "127.0.0.1")
+            put("protocol", "socks")
+            put("tag", "socks")
+            put("settings", JSONObject().apply {
+                put("auth", "noauth")
+                put("udp", true)
+            })
+        })
         json.put("inbounds", inbounds)
 
         val outbounds = JSONArray()
         outbounds.put(JSONObject().apply {
-            put("protocol", "wireguard")
-            put("settings", JSONObject().apply {
-                put("secretKey", privateKey)
-                put("address", JSONArray().apply { put(localAddress) })
-                put("peers", JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("publicKey", "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=")
-                        put("endpoint", "$endpointIp:$endpointPort")
-                    })
-                })
-                put("mtu", 1280)
-            })
+            put("protocol", "socks")
             put("tag", "proxy")
+            put("settings", JSONObject().put("servers", JSONArray().put(JSONObject().apply {
+                put("address", "127.0.0.1")
+                put("port", socksPort)
+            })))
         })
-
-        outbounds.put(JSONObject().apply {
-            put("protocol", "freedom")
-            put("settings", JSONObject())
-            put("tag", "direct")
-        })
+        outbounds.put(JSONObject().apply { put("protocol", "freedom"); put("tag", "direct") })
+        outbounds.put(JSONObject().apply { put("protocol", "dns"); put("tag", "dns-out") })
         json.put("outbounds", outbounds)
 
-        val routing = JSONObject().apply {
+        val rules = JSONArray()
+        rules.put(JSONObject().apply {
+            put("type", "field")
+            put("port", 53)
+            put("outboundTag", "dns-out")
+        })
+        json.put("routing", JSONObject().apply {
             put("domainStrategy", "AsIs")
-            put("rules", JSONArray().apply {
-                put(JSONObject().apply {
-                    put("type", "field")
-                    put("outboundTag", "proxy")
-                    put("network", "tcp,udp")
+            put("rules", rules)
+        })
+        return json.toString()
+    }
+
+    /**
+     * One Xray config that tests many WARP endpoints in parallel: for each endpoint
+     * a dedicated SOCKS inbound (baseSocksPort + index) routed to its own WireGuard
+     * outbound, using a WARP account for the interface keys.
+     */
+    fun generateMultiWireguardConfig(
+        accounts: List<com.mlmvpn.core.warp.WarpAccountManager.WarpAccountData>,
+        endpoints: List<String>,
+        baseSocksPort: Int,
+        mtu: Int = 1280
+    ): String {
+        val json = JSONObject()
+        json.put("log", JSONObject().put("loglevel", "warning"))
+
+        val inbounds = JSONArray()
+        val outbounds = JSONArray()
+        val rules = JSONArray()
+
+        endpoints.forEachIndexed { index, endpoint ->
+            if (accounts.isEmpty()) return@forEachIndexed
+            val account = accounts[index % accounts.size]
+            val socksPort = baseSocksPort + index
+            val tag = "wg_$index"
+
+            inbounds.put(JSONObject().apply {
+                put("port", socksPort)
+                put("listen", "127.0.0.1")
+                put("protocol", "socks")
+                put("tag", "in_$tag")
+                put("settings", JSONObject().apply {
+                    put("auth", "noauth")
+                    put("udp", true)
+                })
+            })
+
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("inboundTag", JSONArray().put("in_$tag"))
+                put("outboundTag", tag)
+            })
+
+            outbounds.put(JSONObject().apply {
+                put("protocol", "wireguard")
+                put("tag", tag)
+                put("settings", JSONObject().apply {
+                    put("secretKey", account.privateKey)
+                    put("address", JSONArray().put("${account.ipv4}/32").put("${account.ipv6}/128"))
+                    put("mtu", mtu)
+                    put("reserved", JSONArray().apply { account.reserved.forEach { put(it) } })
+                    put("peers", JSONArray().put(JSONObject().apply {
+                        put("publicKey", WARP_PUBLIC_KEY)
+                        put("endpoint", endpoint)
+                        put("allowedIPs", JSONArray().put("0.0.0.0/0").put("::/0"))
+                    }))
                 })
             })
         }
-        json.put("routing", routing)
 
-        return json.toString(2)
+        outbounds.put(JSONObject().apply { put("protocol", "freedom"); put("tag", "direct") })
+
+        json.put("inbounds", inbounds)
+        json.put("outbounds", outbounds)
+        json.put("routing", JSONObject().apply {
+            put("domainStrategy", "AsIs")
+            put("rules", rules)
+        })
+        return json.toString()
     }
 }
+

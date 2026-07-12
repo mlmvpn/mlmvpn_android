@@ -128,6 +128,7 @@
     <string name="nav_scanner">اسکن</string>
     <string name="nav_cloud">ابری</string>
     <string name="nav_warp">وارپ</string>
+    <string name="nav_wireguard">وایرگارد</string>
     <string name="nav_nodes">اتصال</string>
     <string name="action_ping">پینگ</string>
     <string name="action_delay">دیلی</string>
@@ -207,6 +208,8 @@
     <string name="settings_usage_tracking_desc">ثبت روزانه دیتای مصرفی</string>
     <string name="settings_warp_tab">نمایش تب WARP</string>
     <string name="settings_warp_tab_desc">فعال‌سازی تب ابزار WARP در صفحه اصلی</string>
+    <string name="settings_enable_wireguard_tab">نمایش تب وایرگارد</string>
+    <string name="settings_enable_wireguard_tab_desc">فعال‌سازی ابزار وایرگارد در صفحه اصلی</string>
     <string name="settings_screen_off_timeout">رفتار هنگام خاموش شدن صفحه</string>
     <string name="settings_screen_off_timeout_desc">به‌طور پیش‌فرض VPN بیدار می‌ماند که مصرف باتری دارد.</string>
     <string name="settings_timeout_0">همیشه متصل بماند (بدون قطعی)</string>

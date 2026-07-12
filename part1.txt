@@ -1,0 +1,275 @@
+﻿Created At: 2026-07-09T15:41:28Z
+Completed At: 2026-07-09T15:41:30Z
+The following changes were made by the multi_replace_file_content tool to: g:\ip scanner\android\app\src\main\java\com\mlmvpn\scanner\engines\gst\GstCompositeEngine.kt. If relevant, proactively run terminal commands to execute this code for the USER. Don't ask for permission.
+[diff_block_start]
+@@ -9,7 +9,7 @@
+ 
+ class GstCompositeEngine(private val vpnFd: Int) : IVpnEngine {
+     private val gstEngine = GstEngine()
+-    private val proxyEngine = SingboxInjector(vpnFd)
++    private val xrayInjector = SingboxInjector(vpnFd)
+     private var isRunning = false
+ 
+     override suspend fun start(context: Context, config: String, localPort: Int): Boolean {
+[diff_block_end]
+
+Please note that the above snippet only shows the MODIFIED lines from the last change. It shows up to 3 lines of unchanged lines before and after the modified lines. The actual file contents may have many more lines not shown.
+Created At: 2026-07-09T17:55:33Z
+Completed At: 2026-07-09T17:55:34Z
+File Path: `file:///g:/ip%20scanner/android/app/src/main/java/com/mlmvpn/scanner/engines/wireguard/WireguardScannerEngine.kt`
+Total Lines: 337
+Total Bytes: 13090
+Showing lines 1 to 250
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: package com.mlmvpn.scanner.engines.wireguard
+2: 
+3: import android.content.Context
+4: import android.util.Log
+5: import com.mlmvpn.core.warp.VlessXrayInjector
+6: import com.mlmvpn.core.warp.WarpAccountManager
+7: import com.mlmvpn.scanner.utils.XrayJsonGenerator
+8: import kotlinx.coroutines.*
+9: import kotlinx.coroutines.flow.MutableStateFlow
+10: import kotlinx.coroutines.flow.asStateFlow
+11: import okhttp3.OkHttpClient
+12: import okhttp3.Request
+13: import java.net.InetSocketAddress
+14: import java.net.Proxy
+15: import java.net.Socket
+16: import java.util.concurrent.TimeUnit
+17: import kotlin.random.Random
+18: 
+19: data class ScanResult(val ip: String, val port: Int, val timeMs: Long)
+20: 
+21: object WireguardScannerEngine {
+22: 
+23:     enum class EngineState { IDLE, SCANNING, TESTING }
+24: 
+25:     private val _engineState = MutableStateFlow(EngineState.IDLE)
+26:     val engineState = _engineState.asStateFlow()
+27: 
+28:     private val _scanProgress = MutableStateFlow(0f)
+29:     val scanProgress = _scanProgress.asStateFlow()
+30: 
+31:     private val _scannedCount = MutableStateFlow(0)
+32:     val scannedCount = _scannedCount.asStateFlow()
+33: 
+34:     private val _totalScanCount = MutableStateFlow(0)
+35:     val totalScanCount = _totalScanCount.asStateFlow()
+36: 
+37:     private val _endpointsList = MutableStateFlow<List<ScanResult>>(emptyList())
+38:     val endpointsList = _endpointsList.asStateFlow()
+39: 
+40:     private val _realPings = MutableStateFlow<Map<String, Long>>(emptyMap())
+41:     val realPings = _realPings.asStateFlow()
+42: 
+43:     private val _selectedEndpoint = MutableStateFlow<String?>(null)
+44:     val selectedEndpoint = _selectedEndpoint.asStateFlow()
+45: 
+46:     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+47:     private var scanJob: Job? = null
+48:     private var testJob: Job? = null
+49:     
+50:     private val baseClient by lazy {
+51:         OkHttpClient.Builder()
+52:             .connectTimeout(8000, TimeUnit.MILLISECONDS)
+53:             .readTimeout(8000, TimeUnit.MILLISECONDS)
+54:             .build()
+55:     }
+56: 
+57:     fun loadPersistedResults(context: Context) {
+58:         val prefs = context.getSharedPreferences("wg_scanner_prefs", Context.MODE_PRIVATE)
+59:         val str = prefs.getString("saved_endpoints", "") ?: ""
+60:         if (str.isEmpty()) return
+61:         
+62:         val list = str.split(",").mapNotNull {
+63:             val parts = it.split(":")
+64:             if (parts.size == 3) {
+65:                 ScanResult(parts[0], parts[1].toIntOrNull() ?: 2408, parts[2].toLongOrNull() ?: 0L)
+66:             } else null
+67:         }
+68:         _endpointsList.value = list
+69:         if (list.isNotEmpty() && _selectedEndpoint.value == null) {
+70:             _selectedEndpoint.value = "${list.first().ip}:${list.first().port}"
+71:         }
+72:     }
+73: 
+74:     private fun persistResults(context: Context) {
+75:         val prefs = context.getSharedPreferences("wg_scanner_prefs", Context.MODE_PRIVATE)
+76:         val str = _endpointsList.value.joinToString(",") { "${it.ip}:${it.port}:${it.timeMs}" }
+77:         prefs.edit().putString("saved_endpoints", str).apply()
+78:     }
+79: 
+80:     fun clearEndpoints(context: Context) {
+81:         _endpointsList.value = emptyList()
+82:         _realPings.value = emptyMap()
+83:         _selectedEndpoint.value = null
+84:         persistResults(context)
+85:     }
+86: 
+87:     fun selectEndpoint(id: String) {
+88:         _selectedEndpoint.value = id
+89:     }
+90: 
+91:     fun stopAll() {
+92:         scanJob?.cancel()
+93:         testJob?.cancel()
+94:         _engineState.value = EngineState.IDLE
+95:     }
+96: 
+97:     fun startScan(
+98:         context: Context,
+99:         cidrs: List<String>,
+100:         ports: List<Int>,
+101:         maxSamples: Int,
+102:         targetSuccess: Int
+103:     ) {
+104:         if (_engineState.value != EngineState.IDLE) return
+105:         _engineState.value = EngineState.SCANNING
+106:         
+107:         scanJob = engineScope.launch {
+108:             try {
+109:                 val samplesPerCidr = (maxSamples / (cidrs.size * ports.size)).coerceAtLeast(1)
+110:                 scanRandomEndpointsInternal(context, cidrs, ports, 800, samplesPerCidr, targetSuccess)
+111:             } finally {
+112:                 if (_engineState.value == EngineState.SCANNING) {
+113:                     _engineState.value = EngineState.IDLE
+114:                 }
+115:             }
+116:         }
+117:     }
+118: 
+119:     private suspend fun scanRandomEndpointsInternal(
+120:         context: Context,
+121:         cidrs: List<String>,
+122:         ports: List<Int>,
+123:         timeoutMs: Int,
+124:         samplesPerCidr: Int,
+125:         targetSuccessCount: Int
+126:     ) = coroutineScope {
+127:         val targetIps = mutableListOf<String>()
+128:         for (cidr in cidrs) {
+129:             for (i in 0 until samplesPerCidr) {
+130:                 getRandomIpFromCidr(cidr)?.let { targetIps.add(it) }
+131:             }
+132:         }
+133:         targetIps.shuffle()
+134: 
+135:         var currentScannedCount = 0
+136:         val totalToScan = targetIps.size * ports.size
+137:         _scannedCount.value = 0
+138:         _totalScanCount.value = totalToScan
+139:         _scanProgress.value = 0f
+140: 
+141:         val workChannel = kotlinx.coroutines.channels.Channel<Pair<String, Int>>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+142:         val allTasks = mutableListOf<Pair<String, Int>>()
+143:         targetIps.forEach { ip -> ports.forEach { port -> allTasks.add(Pair(ip, port)) } }
+144:         allTasks.shuffle()
+145:         allTasks.forEach { workChannel.trySend(it) }
+146:         workChannel.close()
+147: 
+148:         val resultChannel = kotlinx.coroutines.channels.Channel<ScanResult>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+149:         
+150:         val workers = (1..50).map {
+151:             launch(Dispatchers.IO) {
+152:                 for ((ip, port) in workChannel) {
+153:                     ensureActive()
+154:                     val time = testTcpPort(ip, port, timeoutMs)
+155:                     
+156:                     val newCount = synchronized(this@WireguardScannerEngine) {
+157:                         currentScannedCount++
+158:                         currentScannedCount
+159:                     }
+160:                     if (newCount % 20 == 0 || newCount == totalToScan) { // throttle updates
+161:                         _scannedCount.value = newCount
+162:                         _scanProgress.value = newCount.toFloat() / totalToScan.toFloat()
+163:                     }
+164:                     
+165:                     if (time != -1L) {
+166:                         resultChannel.trySend(ScanResult(ip, port, time))
+167:                     }
+168:                 }
+169:             }
+170:         }
+171: 
+172:         val collectorJob = launch {
+173:             val octetCounts = mutableMapOf<String, Int>()
+174:             val maxPerOctet = (targetSuccessCount / 4).coerceAtLeast(5)
+175:             val currentList = _endpointsList.value.toMutableList()
+176:             var addedCount = 0
+177: 
+178:             for (result in resultChannel) {
+179:                 val parts = result.ip.split(".")
+180:                 val subnet16 = if (parts.size >= 2) "${parts[0]}.${parts[1]}" else parts[0]
+181:                 val count = octetCounts.getOrDefault(subnet16, 0)
+182:                 
+183:                 if (count < maxPerOctet) {
+184:                     octetCounts[subnet16] = count + 1
+185:                     
+186:                     // Add distinct and sort
+187:                     val isDuplicate = currentList.any { it.ip == result.ip && it.port == result.port }
+188:                     if (!isDuplicate) {
+189:                         currentList.add(result)
+190:                         currentList.sortBy { it.timeMs }
+191:                         _endpointsList.value = currentList.toList()
+192:                         persistResults(context)
+193:                         
+194:                         if (_selectedEndpoint.value == null) {
+195:                             _selectedEndpoint.value = "${currentList.first().ip}:${currentList.first().port}"
+196:                         }
+197:                         
+198:                         addedCount++
+199:                         if (addedCount >= targetSuccessCount) break
+200:                     }
+201:                 }
+202:             }
+203:         }
+204: 
+205:         workers.joinAll()
+206:         resultChannel.close()
+207:         collectorJob.join()
+208:     }
+209: 
+210:     fun startTest100(
+211:         context: Context,
+212:         accountsList: List<WarpAccountManager.WarpAccountData>
+213:     ) {
+214:         if (_engineState.value != EngineState.IDLE) return
+215:         if (accountsList.isEmpty() || _endpointsList.value.isEmpty()) return
+216:         
+217:         _engineState.value = EngineState.TESTING
+218:         
+219:         testJob = engineScope.launch {
+220:             try {
+221:                 val allEps = _endpointsList.value.map { "${it.ip}:${it.port}" }.take(150)
+222:                 val newPings = _realPings.value.toMutableMap()
+223:                 
+224:                 val batches = allEps.chunked(25)
+225:                 val injector = VlessXrayInjector(0)
+226:                 
+227:                 // Reset progress tracking for test phase
+228:                 var completed = 0
+229:                 _scannedCount.value = 0
+230:                 _totalScanCount.value = allEps.size
+231:                 _scanProgress.value = 0f
+232:                 
+233:                 for (batch in batches) {
+234:                     if (!isActive || _engineState.value != EngineState.TESTING) break
+235:                     
+236:                     val config = XrayJsonGenerator.generateMultiWireguardConfig(
+237:                         accounts = accountsList,
+238:                         endpoints = batch,
+239:                         baseSocksPort = 10000
+240:                     )
+241:                     
+242:                     val started = injector.start(context, config, 0)
+243:                     if (started) {
+244:                         delay(5000)
+245:                         val deferreds = batch.mapIndexed { index, ep ->
+246:                             async(Dispatchers.IO) {
+247:                                 if (!isActive || _engineState.value != EngineState.TESTING) return@async
+248:                                 val port = 10000 + index
+249:                                 val ping = measureRealPing(port, baseClient)
+250:                                 synchronized(newPings) { newPings[ep] = ping }
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+

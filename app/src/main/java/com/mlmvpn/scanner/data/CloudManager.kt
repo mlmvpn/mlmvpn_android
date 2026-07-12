@@ -15,8 +15,18 @@ import java.util.UUID
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
-class CloudManager(private val context: Context) {
-    
+class CloudManager private constructor(private val context: Context) {
+    companion object {
+        @Volatile
+        private var instance: CloudManager? = null
+
+        operator fun invoke(context: Context): CloudManager {
+            return instance ?: synchronized(this) {
+                instance ?: CloudManager(context.applicationContext).also { instance = it }
+            }
+        }
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -74,6 +84,11 @@ class CloudManager(private val context: Context) {
                         mlmDbId = obj.optString("mlmDbId", ""),
                         mlmAdminPassword = obj.optString("mlmAdminPassword", ""),
                         mlmStatus = obj.optString("mlmStatus", "idle"),
+                        dnsWorkerUrl = obj.optString("dnsWorkerUrl", ""),
+                        dnsKvNamespaceId = obj.optString("dnsKvNamespaceId", ""),
+                        dnsStatus = obj.optString("dnsStatus", "idle"),
+                        gstRelayWorkerUrl = obj.optString("gstRelayWorkerUrl", ""),
+                        gstRelayStatus = obj.optString("gstRelayStatus", "idle"),
                         isEmailVerified = obj.optBoolean("isEmailVerified", true),
                         hasSubdomain = obj.optBoolean("hasSubdomain", 
                             obj.optString("workerUrl", "").isNotEmpty() || 
@@ -120,6 +135,11 @@ class CloudManager(private val context: Context) {
                 put("mlmDbId", account.mlmDbId ?: "")
                 put("mlmAdminPassword", account.mlmAdminPassword ?: "")
                 put("mlmStatus", account.mlmStatus)
+                put("dnsWorkerUrl", account.dnsWorkerUrl ?: "")
+                put("dnsKvNamespaceId", account.dnsKvNamespaceId ?: "")
+                put("dnsStatus", account.dnsStatus)
+                put("gstRelayWorkerUrl", account.gstRelayWorkerUrl ?: "")
+                put("gstRelayStatus", account.gstRelayStatus)
                 put("isEmailVerified", account.isEmailVerified)
                 put("hasSubdomain", account.hasSubdomain)
             }
@@ -172,8 +192,12 @@ class CloudManager(private val context: Context) {
                         val accName = firstAcc.getString("name")
                         val accId = firstAcc.getString("id")
 
+                        if (accounts.any { it.accountId == accId }) {
+                            return@withContext Pair(false, "Account already added")
+                        }
+
                         val newAcc = CloudAccount(
-                            id = System.currentTimeMillis().toString(),
+                            id = UUID.randomUUID().toString(),
                             token = token,
                             email = email,
                             name = accName,
@@ -975,6 +999,244 @@ class CloudManager(private val context: Context) {
         }
     }
 
+    /**
+     * Deploys the per-user Dedicated DNS relay worker (dns_worker.js) onto the user's own
+     * Cloudflare account. Mirrors [deployEdgWorker] exactly: ensure a workers.dev subdomain,
+     * create a KV namespace (for the resolver's short-TTL cache), upload the worker with
+     * DEFAULT_REGION + KV bindings, enable subdomain routing, and persist dnsWorkerUrl/dnsStatus.
+     *
+     * The resulting worker exposes /resolve (JSON) and /dns-query (binary DoH passthrough) and
+     * steers upstream (Google) answers per region via EDNS Client Subnet -- see dns_worker.js.
+     */
+    suspend fun deployDnsWorker(account: CloudAccount, onProgress: (Int, String) -> Unit): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val TAG = "DnsWorkerDeploy"
+        try {
+            Log.d(TAG, "Starting deploy for account=${account.name} (${account.accountId})")
+            val isCfat = account.token.startsWith("cfat_") || account.email.isEmpty()
+            val authHeaders = Headers.Builder().apply {
+                if (isCfat) add("Authorization", "Bearer ${account.token}")
+                else {
+                    add("X-Auth-Email", account.email)
+                    add("X-Auth-Key", account.token)
+                }
+            }.build()
+
+            // 1. Check Subdomain
+            onProgress(10, "Checking subdomain...")
+            var subdomain = ""
+            val subReq = Request.Builder()
+                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/subdomain")
+                .headers(authHeaders)
+                .get().build()
+
+            client.newCall(subReq).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                Log.d(TAG, "GET subdomain -> HTTP ${response.code}: ${body.take(300)}")
+                if (response.isSuccessful) {
+                    val json = JSONObject(body)
+                    if (json.optBoolean("success")) {
+                        subdomain = json.optJSONObject("result")?.optString("subdomain", "") ?: ""
+                    }
+                    Unit
+                } else {
+                    Log.w(TAG, "GET subdomain failed: HTTP ${response.code}")
+                    Unit
+                }
+            }
+
+            if (subdomain.isEmpty()) {
+                onProgress(20, "Creating new subdomain...")
+                var created = false
+                var attempts = 0
+                while (!created && attempts < 3) {
+                    val randomSub = com.mlmvpn.scanner.utils.AntiDpi.generateSafeSubdomain()
+                    val createReq = Request.Builder()
+                        .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/subdomain")
+                        .headers(authHeaders)
+                        .put("{\"subdomain\":\"$randomSub\"}".toRequestBody("application/json".toMediaTypeOrNull()))
+                        .build()
+                    client.newCall(createReq).execute().use { response ->
+                        val body = response.body?.string() ?: ""
+                        Log.d(TAG, "PUT create-subdomain (attempt ${attempts + 1}) -> HTTP ${response.code}: ${body.take(300)}")
+                        if (response.isSuccessful) {
+                            subdomain = randomSub
+                            created = true
+                        } else {
+                            try {
+                                val json = org.json.JSONObject(body)
+                                val errors = json.optJSONArray("errors")
+                                if (errors != null && errors.length() > 0) {
+                                    val errorCode = errors.getJSONObject(0).optInt("code")
+                                    if (errorCode == 10007) {
+                                        // The account ALREADY has a workers.dev subdomain; the initial
+                                        // GET just hadn't propagated yet (common right after connecting
+                                        // an account). Don't fail with a "duplicate" -- re-fetch the
+                                        // existing subdomain (with a few retries) and carry on. This is
+                                        // exactly the case that used to force an app restart.
+                                        Log.w(TAG, "Account already has a subdomain (code 10007) -- re-fetching it")
+                                        var fetched = ""
+                                        for (r in 0 until 5) {
+                                            kotlinx.coroutines.delay(800)
+                                            val gReq = Request.Builder()
+                                                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/subdomain")
+                                                .headers(authHeaders)
+                                                .get().build()
+                                            client.newCall(gReq).execute().use { gr ->
+                                                val gb = gr.body?.string() ?: ""
+                                                if (gr.isSuccessful) {
+                                                    val gj = JSONObject(gb)
+                                                    if (gj.optBoolean("success")) {
+                                                        fetched = gj.optJSONObject("result")?.optString("subdomain", "") ?: ""
+                                                    }
+                                                }
+                                            }
+                                            if (fetched.isNotEmpty()) break
+                                        }
+                                        if (fetched.isNotEmpty()) {
+                                            subdomain = fetched
+                                            created = true
+                                            Log.d(TAG, "Recovered existing subdomain: $subdomain")
+                                        } else {
+                                            return@withContext Pair(false, "ERR_ACCOUNT_HAS_SUBDOMAIN")
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) { }
+                        }
+                    }
+                    attempts++
+                }
+                if (!created) {
+                    Log.e(TAG, "Failed to create a workers subdomain after $attempts attempts")
+                    return@withContext Pair(false, "Failed to create a workers subdomain. Please create one manually in Cloudflare dashboard.")
+                }
+            }
+            Log.d(TAG, "Using subdomain: $subdomain")
+
+            // 2. Create KV Namespace (used by the resolver for short-TTL caching)
+            onProgress(40, "Creating KV Namespace...")
+            val kvTitle = "dns_${java.util.UUID.randomUUID().toString().substring(0, 8).replace("-", "")}"
+            val createKvReq = Request.Builder()
+                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/storage/kv/namespaces")
+                .headers(authHeaders)
+                .post("{\"title\":\"$kvTitle\"}".toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+
+            var kvId = ""
+            var kvErrorBody = ""
+            try {
+                val kvRes = client.newCall(createKvReq).execute()
+                val kvBody = kvRes.body?.string() ?: ""
+                kvErrorBody = kvBody
+                Log.d(TAG, "POST kv/namespaces -> HTTP ${kvRes.code}: ${kvBody.take(300)}")
+                if (kvRes.isSuccessful) {
+                    val kvJson = org.json.JSONObject(kvBody)
+                    if (kvJson.optBoolean("success", false)) {
+                        kvId = kvJson.getJSONObject("result").getString("id")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "KV namespace creation threw an exception", e)
+            }
+
+            if (kvId.isEmpty()) {
+                Log.e(TAG, "KV namespace id empty. Response was: ${kvErrorBody.take(500)}")
+                return@withContext Pair(false, "Failed to create KV namespace for DNS worker: ${kvErrorBody.take(200)}")
+            }
+            Log.d(TAG, "KV namespace created: $kvId")
+
+            account.dnsKvNamespaceId = kvId
+            saveAccounts()
+
+            // 3. Upload Worker
+            onProgress(60, "Uploading DNS Worker...")
+            var workerScript = ""
+            try {
+                context.assets.open("dns_worker.js").bufferedReader().use {
+                    workerScript = it.readText()
+                }
+                Log.d(TAG, "Loaded dns_worker.js from assets (${workerScript.length} chars)")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to read dns_worker.js from assets", e)
+                return@withContext Pair(false, "Failed to read dns_worker.js from assets: ${e.message}")
+            }
+
+            val metadata = JSONObject().apply {
+                put("main_module", "worker.js")
+                put("compatibility_date", "2024-03-03")
+                val bindings = org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("type", "plain_text")
+                        put("name", "DEFAULT_REGION")
+                        put("text", "AE")
+                    })
+                    put(JSONObject().apply {
+                        put("type", "kv_namespace")
+                        put("name", "KV")
+                        put("namespace_id", kvId)
+                    })
+                }
+                put("bindings", bindings)
+            }
+
+            val multipartBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("metadata", "metadata.json", metadata.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+                .addFormDataPart("worker.js", "worker.js", workerScript.toRequestBody("application/javascript+module".toMediaTypeOrNull()))
+                .build()
+
+            val workerName = com.mlmvpn.scanner.utils.AntiDpi.generateSafeWorkerName() + "-dns"
+            Log.d(TAG, "Uploading worker as: $workerName")
+            val uploadReq = Request.Builder()
+                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/scripts/$workerName")
+                .headers(authHeaders)
+                .put(multipartBody)
+                .build()
+
+            client.newCall(uploadReq).execute().use { response ->
+                val body = response.body?.string()
+                Log.d(TAG, "PUT workers/scripts/$workerName -> HTTP ${response.code}: ${body?.take(500)}")
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "Worker upload failed: HTTP ${response.code}")
+                    return@withContext Pair(false, "Failed to upload DNS worker (HTTP ${response.code}): ${body?.take(300)}")
+                }
+            }
+
+            // 4. Enable Subdomain
+            onProgress(80, "Enabling subdomain routing...")
+            val enableReq = Request.Builder()
+                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/scripts/$workerName/subdomain")
+                .headers(authHeaders)
+                .post("{\"enabled\":true}".toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+
+            client.newCall(enableReq).execute().use { response ->
+                val body = response.body?.string()
+                Log.d(TAG, "POST enable subdomain -> HTTP ${response.code}: ${body?.take(300)}")
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "Enable subdomain failed: HTTP ${response.code}")
+                    return@withContext Pair(false, "Failed to enable subdomain (HTTP ${response.code}): ${body?.take(300)}")
+                }
+            }
+
+            // 5. Finalize
+            onProgress(100, "Done!")
+            val finalUrl = "https://$workerName.$subdomain.workers.dev"
+
+            account.dnsStatus = "deployed"
+            account.dnsWorkerUrl = finalUrl
+
+            saveAccounts()
+
+            Log.d(TAG, "Deploy succeeded: $finalUrl")
+            Pair(true, "Dedicated DNS Worker deployed! URL: $finalUrl")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Deploy threw an unhandled exception", e)
+            Pair(false, "Error: ${e.message}")
+        }
+    }
+
     suspend fun fetchEdgConfigs(account: CloudAccount): Pair<Boolean, List<String>> = withContext(Dispatchers.IO) {
         try {
             if (account.edgWorkerUrl.isNullOrEmpty() || account.edgUuid.isNullOrEmpty()) {
@@ -1037,6 +1299,144 @@ class CloudManager(private val context: Context) {
         }
     }
 
+    /**
+     * Deploys the GST relay accelerator worker (gst_relay_worker.js) onto the user's
+     * Cloudflare account. It speaks the same relay protocol as the Google Apps Script
+     * (assets/gst/Code.gs), so the mhrv-rs core can use it as an optional `relay_url`
+     * to speed up / stabilize the Google tunnel. The shared secret [authKey] is injected
+     * as an AUTH_KEY secret binding and MUST match the GST relay auth key in the app.
+     *
+     * Mirrors [deployEdgWorker]: ensure a workers.dev subdomain, upload the worker,
+     * enable subdomain routing, and persist gstRelayWorkerUrl/gstRelayStatus.
+     */
+    suspend fun deployGstRelayWorker(
+        account: CloudAccount,
+        authKey: String,
+        onProgress: (Int, String) -> Unit
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        try {
+            val isCfat = account.token.startsWith("cfat_") || account.email.isEmpty()
+            val authHeaders = Headers.Builder().apply {
+                if (isCfat) add("Authorization", "Bearer ${account.token}")
+                else {
+                    add("X-Auth-Email", account.email)
+                    add("X-Auth-Key", account.token)
+                }
+            }.build()
+
+            // 1. Check / create subdomain
+            onProgress(10, "Checking subdomain...")
+            var subdomain = ""
+            val subReq = Request.Builder()
+                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/subdomain")
+                .headers(authHeaders)
+                .get().build()
+            client.newCall(subReq).execute().use { response ->
+                if (response.isSuccessful) {
+                    val json = JSONObject(response.body?.string() ?: "")
+                    if (json.optBoolean("success")) {
+                        subdomain = json.optJSONObject("result")?.optString("subdomain", "") ?: ""
+                    }
+                }
+            }
+            if (subdomain.isEmpty()) {
+                onProgress(20, "Creating new subdomain...")
+                var created = false
+                var attempts = 0
+                while (!created && attempts < 3) {
+                    val randomSub = com.mlmvpn.scanner.utils.AntiDpi.generateSafeSubdomain()
+                    val createReq = Request.Builder()
+                        .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/subdomain")
+                        .headers(authHeaders)
+                        .put("{\"subdomain\":\"$randomSub\"}".toRequestBody("application/json".toMediaTypeOrNull()))
+                        .build()
+                    client.newCall(createReq).execute().use { response ->
+                        val body = response.body?.string() ?: ""
+                        if (response.isSuccessful) {
+                            subdomain = randomSub
+                            created = true
+                        } else if (body.contains("10007")) {
+                            return@withContext Pair(false, "ERR_ACCOUNT_HAS_SUBDOMAIN")
+                        }
+                    }
+                    attempts++
+                }
+                if (!created) {
+                    return@withContext Pair(false, "Failed to create a workers subdomain.")
+                }
+            }
+
+            // 2. Upload worker with AUTH_KEY secret binding
+            onProgress(50, "Uploading GST relay worker...")
+            var workerScript = ""
+            try {
+                context.assets.open("gst_relay_worker.js").bufferedReader().use {
+                    workerScript = it.readText()
+                }
+            } catch (e: Exception) {
+                return@withContext Pair(false, "Failed to read gst_relay_worker.js: ${e.message}")
+            }
+
+            val metadata = JSONObject().apply {
+                put("main_module", "worker.js")
+                put("compatibility_date", "2024-09-23")
+                // Force the worker's fetch() subrequests to resolve to PUBLIC IPs, so
+                // fetching script.googleapis.com isn't mistaken for a same-zone request
+                // (Cloudflare error 1042). Required for the deploy-proxy use.
+                put("compatibility_flags", org.json.JSONArray().apply { put("global_fetch_strictly_public") })
+                put("bindings", org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        // plain_text (not secret_text) � secret_text bindings are not
+                        // populated by the multipart script-upload path, leaving env.AUTH_KEY
+                        // empty so the worker rejects every request with its decoy page.
+                        put("type", "plain_text")
+                        put("name", "AUTH_KEY")
+                        put("text", authKey)
+                    })
+                })
+            }
+
+            val multipartBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("metadata", "metadata.json", metadata.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+                .addFormDataPart("worker.js", "worker.js", workerScript.toRequestBody("application/javascript+module".toMediaTypeOrNull()))
+                .build()
+
+            val workerName = com.mlmvpn.scanner.utils.AntiDpi.generateSafeWorkerName() + "-gst"
+            val uploadReq = Request.Builder()
+                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/scripts/$workerName")
+                .headers(authHeaders)
+                .put(multipartBody)
+                .build()
+            client.newCall(uploadReq).execute().use { response ->
+                val body = response.body?.string()
+                if (!response.isSuccessful) return@withContext Pair(false, "Failed to upload GST worker: $body")
+            }
+
+            // 3. Enable subdomain routing
+            onProgress(80, "Enabling subdomain routing...")
+            val enableReq = Request.Builder()
+                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/scripts/$workerName/subdomain")
+                .headers(authHeaders)
+                .post("{\"enabled\":true}".toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+            client.newCall(enableReq).execute().use { response ->
+                if (!response.isSuccessful) return@withContext Pair(false, "Failed to enable subdomain: ${response.body?.string()}")
+            }
+
+            // 4. Finalize
+            onProgress(100, "Done!")
+            val finalUrl = "https://$workerName.$subdomain.workers.dev"
+            account.gstRelayStatus = "deployed"
+            account.gstRelayWorkerUrl = finalUrl
+            saveAccounts()
+
+            Pair(true, finalUrl)
+        } catch (e: Exception) {
+            Pair(false, "Error: ${e.message}")
+        }
+    }
+
     suspend fun checkAccountStatus(account: CloudAccount): Pair<Boolean, Boolean> = withContext(Dispatchers.IO) {
         var hasSubdomain = false
         var isEmailVerified = false
@@ -1067,10 +1467,23 @@ class CloudManager(private val context: Context) {
                 }
             }
 
-            // If they have a subdomain, their email is definitely verified (Cloudflare requires it).
-            // We cannot rely on testing https://$subdomainName.workers.dev/ because workers.dev
-            // is heavily filtered/blocked in Iran and will cause false negatives for email verification.
-            isEmailVerified = true
+            if (hasSubdomain) {
+                // Cloudflare requires a verified email before a Workers subdomain can be created.
+                isEmailVerified = true
+            } else {
+                val userReq = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/user")
+                    .headers(authHeaders)
+                    .get().build()
+                client.newCall(userReq).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val json = org.json.JSONObject(response.body?.string() ?: "")
+                        if (json.optBoolean("success")) {
+                            isEmailVerified = json.optJSONObject("result")?.optBoolean("email_verified", false) ?: false
+                        }
+                    }
+                }
+            }
 
         } catch (e: Exception) {
             e.printStackTrace()

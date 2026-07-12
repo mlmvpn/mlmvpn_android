@@ -51,5 +51,48 @@
             </intent-filter>
         </service>
 
+        <!-- AmneziaWG (GoBackend) establishes the WireGuard tun through its own internal
+             VpnService. It must be declared here or the tunnel comes up but no traffic flows. -->
+        <service
+            android:name="org.amnezia.awg.backend.AbstractBackend$VpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
+        <!-- Keeps the WARP endpoint scan running (with a progress notification) while the app is
+             backgrounded, closed from recents, or the screen is locked. -->
+        <service
+            android:name=".data.WarpScanService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continues an in-progress network scan for the fastest WARP VPN endpoint while the app is backgrounded" />
+        </service>
+
+        <service
+            android:name=".engines.wireguard.WireguardScanService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continues the wireguard endpoint scan in the background" />
+        </service>
+
+        <!-- Quick Settings tile: one-tap toggle that connects to the fastest recent server. -->
+        <service
+            android:name=".VpnTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_vpn"
+            android:label="mlmvpn"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
     </application>
 </manifest>

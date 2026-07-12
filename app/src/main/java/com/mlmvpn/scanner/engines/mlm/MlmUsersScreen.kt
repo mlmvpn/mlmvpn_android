@@ -221,9 +221,13 @@ fun MlmUserCard(
                 IconButton(onClick = {
                     isBusy = true
                     scope.launch {
-                        apiManager.toggleUser(account, user.username)
-                        onRefresh()
+                        val success = apiManager.toggleUser(account, user.username)
                         isBusy = false
+                        if (success) {
+                            onRefresh()
+                        } else {
+                            Toast.makeText(context, "خطا در تغییر وضعیت کاربر", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }) {
                     Icon(
@@ -316,9 +320,13 @@ fun MlmUserCard(
                     showDeleteConfirm = false
                     isBusy = true
                     scope.launch {
-                        apiManager.deleteUser(account, user.username)
-                        onRefresh()
+                        val success = apiManager.deleteUser(account, user.username)
                         isBusy = false
+                        if (success) {
+                            onRefresh()
+                        } else {
+                            Toast.makeText(context, "خطا در حذف کاربر", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }) {
                     Text("بله، حذف شود", color = RedError, fontWeight = FontWeight.Bold)

@@ -21,7 +21,7 @@ class NodeManager private constructor(context: Context) {
     }
     private val prefs: SharedPreferences = context.getSharedPreferences("vpn_nodes_prefs", Context.MODE_PRIVATE)
     
-    var nodes: MutableList<VpnNode> = mutableListOf()
+    var nodes: MutableList<VpnNode> = java.util.Collections.synchronizedList(mutableListOf<VpnNode>())
         private set
 
     private val _nodesFlow = kotlinx.coroutines.flow.MutableStateFlow<List<VpnNode>>(emptyList())
@@ -30,7 +30,7 @@ class NodeManager private constructor(context: Context) {
     init {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             loadNodes()
-            _nodesFlow.value = nodes.toList()
+            _nodesFlow.value = synchronized(nodes) { nodes.toList() }
         }
     }
 
@@ -60,8 +60,11 @@ class NodeManager private constructor(context: Context) {
                     )
                 )
             }
-            nodes = list
-            injectDefaultConfigs()
+            synchronized(nodes) {
+                nodes.clear()
+                nodes.addAll(list)
+                injectDefaultConfigs()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -69,7 +72,8 @@ class NodeManager private constructor(context: Context) {
 
     fun saveNodes() {
         val arr = JSONArray()
-        for (node in nodes) {
+        val snapshot = synchronized(nodes) { nodes.toList() }
+        for (node in snapshot) {
             val obj = JSONObject().apply {
                 put("id", node.id)
                 put("name", node.name)
@@ -86,47 +90,51 @@ class NodeManager private constructor(context: Context) {
             arr.put(obj)
         }
         prefs.edit().putString("nodes_list", arr.toString()).apply()
-        _nodesFlow.value = nodes.toList()
+        _nodesFlow.value = snapshot
     }
 
     fun removeNodesByGroup(groupId: String) {
-        nodes.removeAll { it.engineType == "Manual" && it.groupTitle == groupId }
+        synchronized(nodes) {
+            nodes.removeAll { it.engineType == "Manual" && it.groupTitle == groupId }
+        }
         saveNodes()
     }
 
     fun addConfigs(configs: List<String>, groupTitle: String? = null): Int {
         var addedCount = 0
-        for (config in configs) {
-            if (config.isBlank()) continue
-            val type = if (config.startsWith("vless://")) "VLESS"
-                       else if (config.startsWith("trojan://")) "TROJAN"
-                       else "UNKNOWN"
-            
-            // Extract name from fragment (#Name)
-            var name = "Node ${nodes.size + 1}"
-            val hashIdx = config.lastIndexOf("#")
-            if (hashIdx != -1) {
-                try {
-                    name = java.net.URLDecoder.decode(config.substring(hashIdx + 1), "UTF-8")
-                } catch(e: Exception) {}
-            }
-            
-            // Prevent duplicates within the same group
-            if (nodes.any { it.uri == config && it.groupTitle == groupTitle }) continue
-            
-            nodes.add(
-                VpnNode(
-                    id = UUID.randomUUID().toString(),
-                    name = name,
-                    uri = config,
-                    type = type,
-                    engineType = "Manual",
-                    groupTitle = groupTitle
+        synchronized(nodes) {
+            for (config in configs) {
+                if (config.isBlank()) continue
+                val type = if (config.startsWith("vless://")) "VLESS"
+                           else if (config.startsWith("trojan://")) "TROJAN"
+                           else "UNKNOWN"
+
+                // Extract name from fragment (#Name)
+                var name = "Node ${nodes.size + 1}"
+                val hashIdx = config.lastIndexOf("#")
+                if (hashIdx != -1) {
+                    try {
+                        name = java.net.URLDecoder.decode(config.substring(hashIdx + 1), "UTF-8")
+                    } catch(e: Exception) {}
+                }
+
+                // Prevent duplicates within the same group
+                if (nodes.any { it.uri == config && it.groupTitle == groupTitle }) continue
+
+                nodes.add(
+                    VpnNode(
+                        id = UUID.randomUUID().toString(),
+                        name = name,
+                        uri = config,
+                        type = type,
+                        engineType = "Manual",
+                        groupTitle = groupTitle
+                    )
                 )
-            )
-            addedCount++
+                addedCount++
+            }
         }
-        
+
         if (addedCount > 0) {
             saveNodes()
         }
@@ -135,10 +143,14 @@ class NodeManager private constructor(context: Context) {
 
 
     fun clearAll() {
-        nodes.clear()
-        injectDefaultConfigs()
+        synchronized(nodes) {
+            nodes.clear()
+            injectDefaultConfigs()
+        }
         saveNodes()
     }
+
+    // Caller must hold `synchronized(nodes)` already; not synchronized internally to avoid re-entrant lock churn.
     private fun injectDefaultConfigs() {
         val default1 = """{"remarks":"Serverless-v44-low_delay","version":{"min":"26.6.1"},"log":{"loglevel":"debug","dnsLog":true,"access":""},"policy":{"levels":{"0":{"uplinkOnly":0,"downlinkOnly":0},"1":{"uplinkOnly":0,"downlinkOnly":0,"connIdle":12}}},"dns":{"hosts":{"cloudflare-dns.com":"challenges.cloudflare.com"},"servers":[{"address":"fakedns","domains":["domain:com","domain:net","domain:org","domain:co","domain:io","domain:tv","domain:info","domain:xyz","geosite:geolocation-!cn","geosite:telegram"]},{"tag":"no-filter-dns","address":"tcp://8.8.8.8","timeoutMs":12000,"finalQuery":true},{"address":"8.8.8.8","domains":["domain:ir","geosite:category-ir"],"finalQuery":true}],"queryStrategy":"UseSystem","useSystemHosts":true,"serveStale":true},"inbounds":[{"tag":"mixed-in","port":10808,"protocol":"mixed","sniffing":{"enabled":true,"destOverride":["fakedns","tls","http","quic"],"routeOnly":false},"settings":{"udp":true,"ip":"127.0.0.1"},"streamSettings":{"sockopt":{"tcpKeepAliveInterval":1,"tcpKeepAliveIdle":11}}}],"outbounds":[{"tag":"block","protocol":"block"},{"tag":"tcp-direct","protocol":"direct","streamSettings":{"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-direct","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"}},{"tag":"dns-out","protocol":"dns","settings":{"userLevel":1}},{"tag":"tcp-fragment","protocol":"direct","streamSettings":{"finalmask":{"tcp":[{"type":"fragment","settings":{"packets":"1-3","length":"1-5","delay":"10","maxSplit":"163"}}]},"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-noises","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"},"streamSettings":{"finalmask":{"udp":[{"type":"noise","settings":{"reset":"28","noise":[{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"}]}}]}}}],"routing":{"domainStrategy":"IPOnDemand","rules":[{"outboundTag":"tcp-fragment","inboundTag":["no-filter-dns"]},{"outboundTag":"dns-out","port":53},{"outboundTag":"tcp-direct","network":"tcp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"udp-direct","network":"udp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"tcp-direct","network":"tcp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-direct","network":"udp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-noises","network":"udp","protocol":["quic"],"domain":["geosite:youtube","domain:youtube.com","domain:googlevideo.com","domain:googleapis.com","domain:tiktokv.eu","domain:tiktok.com","domain:tiktokcdn.com"]},{"outboundTag":"block","network":"udp","protocol":["quic"]},{"outboundTag":"udp-direct","network":"udp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","protocol":["tls","http"],"ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","port":"443,80,5222,5228,8080","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"block","port":"0-65535"}]}}"""
         val default2 = """{"remarks":"Serverless-v44-low_delay","version":{"min":"26.6.1"},"log":{"loglevel":"debug","dnsLog":true,"access":""},"policy":{"levels":{"0":{"uplinkOnly":0,"downlinkOnly":0},"1":{"uplinkOnly":0,"downlinkOnly":0,"connIdle":12}}},"dns":{"hosts":{"cloudflare-dns.com":"challenges.cloudflare.com"},"servers":[{"address":"fakedns","domains":["domain:com","domain:net","domain:org","domain:co","domain:io","domain:tv","domain:info","domain:xyz","geosite:geolocation-!cn","geosite:telegram"]},{"tag":"no-filter-dns","address":"tcp://8.8.8.8","timeoutMs":12000,"finalQuery":true},{"address":"8.8.8.8","domains":["domain:ir","geosite:category-ir"],"finalQuery":true}],"queryStrategy":"UseSystem","useSystemHosts":true,"serveStale":true},"inbounds":[{"tag":"mixed-in","port":10808,"protocol":"mixed","sniffing":{"enabled":true,"destOverride":["fakedns","tls","http","quic"],"routeOnly":false},"settings":{"udp":true,"ip":"127.0.0.1"},"streamSettings":{"sockopt":{"tcpKeepAliveInterval":1,"tcpKeepAliveIdle":11}}}],"outbounds":[{"tag":"block","protocol":"block"},{"tag":"tcp-direct","protocol":"direct","streamSettings":{"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-direct","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"}},{"tag":"dns-out","protocol":"dns","settings":{"userLevel":1}},{"tag":"tcp-fragment","protocol":"direct","streamSettings":{"finalmask":{"tcp":[{"type":"fragment","settings":{"packets":"1-3","length":"1-5","delay":"10","maxSplit":"163"}}]},"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-noises","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"},"streamSettings":{"finalmask":{"udp":[{"type":"noise","settings":{"reset":"28","noise":[{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"}]}}]}}}],"routing":{"domainStrategy":"IPOnDemand","rules":[{"outboundTag":"tcp-fragment","inboundTag":["no-filter-dns"]},{"outboundTag":"dns-out","port":53},{"outboundTag":"tcp-direct","network":"tcp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"udp-direct","network":"udp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"tcp-direct","network":"tcp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-direct","network":"udp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-noises","network":"udp","protocol":["quic"],"domain":["geosite:youtube","domain:youtube.com","domain:googlevideo.com","domain:googleapis.com","domain:tiktokv.eu","domain:tiktok.com","domain:tiktokcdn.com"]},{"outboundTag":"block","network":"udp","protocol":["quic"]},{"outboundTag":"udp-direct","network":"udp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","protocol":["tls","http"],"ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","port":"443,80,5222,5228,8080","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"block","port":"0-65535"}]}}"""

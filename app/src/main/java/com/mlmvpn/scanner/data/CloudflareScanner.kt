@@ -1,11 +1,13 @@
 package com.mlmvpn.scanner.data
 
 import android.util.Log
+import com.mlmvpn.scanner.utils.NetworkWatchdog
 import kotlinx.coroutines.*
 import okhttp3.*
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
@@ -92,11 +94,13 @@ class CloudflareScanner {
         limit: Int = 50,
         successTarget: Int = 10,
         maxConcurrency: Int = 200,
+        watchdog: NetworkWatchdog,
         onPhaseChange: (ScanPhase) -> Unit,
         onProgress: (Int, Int) -> Unit, // (Completed, Total)
-        onIpFound: (ScanResult) -> Unit // Real-time emit of found IP
+        onIpFound: (ScanResult) -> Unit, // Real-time emit of found IP
+        onPaused: (String?) -> Unit = {} // non-null while the scan is frozen waiting for connectivity
     ): List<ScanResult> = coroutineScope {
-        var completedCount = 0
+        val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
         val totalIps = ips.size
 
         Log.d(TAG, "Starting TCP ping on ${ips.size} IPs...")
@@ -109,9 +113,13 @@ class CloudflareScanner {
             async(Dispatchers.IO) {
                 semaphore.acquire()
                 try {
+                    // If the device's own connection just dropped, a bare TCP connect fails
+                    // almost instantly (no route) instead of waiting out TCP_TIMEOUT -- which
+                    // would otherwise make the scan look like it suddenly sped up while really
+                    // just marking every remaining IP "dead" without ever truly testing it.
+                    ensureOnline(watchdog, onPaused)
                     val result = tcping(ip)
-                    completedCount++
-                    onProgress(completedCount, totalIps)
+                    onProgress(completedCount.incrementAndGet(), totalIps)
                     if (result != null) {
                         onIpFound(result)
                     }
@@ -137,47 +145,48 @@ class CloudflareScanner {
         }
 
         // Phase 2: Real Delay Test
-        var speedCompletedCount = 0
-        var successCount = 0
+        val speedCompletedCount = java.util.concurrent.atomic.AtomicInteger(0)
+        val successCount = java.util.concurrent.atomic.AtomicInteger(0)
         val finalValidIps = java.util.concurrent.CopyOnWriteArrayList<ScanResult>()
-        
+
         val measureSemaphore = kotlinx.coroutines.sync.Semaphore(15)
 
-        val deferreds = topIps.mapIndexed { index, ipScan ->
-            async(Dispatchers.IO) {
+        // Declared as a mutable list up front so each task can cancel its siblings
+        // as soon as the target is reached, without waiting for slower earlier tasks.
+        val deferreds = mutableListOf<Deferred<Unit>>()
+        topIps.forEach { ipScan ->
+            deferreds.add(async(Dispatchers.IO) {
                 measureSemaphore.acquire()
                 try {
                     if (!isActive) return@async
+                    ensureOnline(watchdog, onPaused)
                     val localPort = (30000..40000).random()
                     val delay = realDelayTest(ipScan.ip, baseConfig, context, localPort)
-                    
+
                     if (delay > 0) {
                         ipScan.downloadSpeed = delay
-                        successCount++
                         finalValidIps.add(ipScan)
                         withContext(Dispatchers.Main) {
                             onIpFound(ipScan)
                         }
+                        if (successCount.incrementAndGet() >= successTarget) {
+                            Log.d(TAG, "Found $successTarget successful IPs. Cancelling remaining.")
+                            val selfJob = coroutineContext[Job]
+                            deferreds.forEach { if (it !== selfJob) it.cancel() }
+                        }
                     }
                 } finally {
                     measureSemaphore.release()
-                    val currentCompleted = ++speedCompletedCount
+                    val currentCompleted = speedCompletedCount.incrementAndGet()
                     withContext(Dispatchers.Main) {
                         onProgress(currentCompleted, topIps.size)
                     }
                 }
-            }
+            })
         }
-        
-        // Await all and allow early exit if target reached
-        for (deferred in deferreds) {
-            deferred.await()
-            if (successCount >= successTarget) {
-                Log.d(TAG, "Found $successTarget successful IPs. Cancelling remaining.")
-                deferreds.forEach { it.cancel() }
-                break
-            }
-        }
+
+        // Wait for every task to finish or be cancelled (join never throws on cancellation).
+        deferreds.forEach { it.join() }
 
         withContext(Dispatchers.Main) {
             onPhaseChange(ScanPhase.DONE)
@@ -188,7 +197,30 @@ class CloudflareScanner {
     }
 
     /**
+     * If the device is currently offline, mark the scan paused (for the UI banner) and suspend
+     * here until connectivity is back, instead of racing through the rest of the IP list marking
+     * every one "dead" in a few milliseconds each.
+     */
+    private suspend fun ensureOnline(watchdog: NetworkWatchdog, onPaused: (String?) -> Unit) {
+        if (watchdog.isOnline.value) return
+        withContext(Dispatchers.Main) {
+            onPaused("Ø§ØªØµØ§Ù„ Ø§ÛŒÙ†ØªØ±Ù†Øª Ù‚Ø·Ø¹ Ø´Ø¯Ù‡ â€” Ø§Ø³Ú©Ù† Ù…ØªÙˆÙ‚Ù Ø´Ø¯ Ùˆ Ø¨Ø¹Ø¯ Ø§Ø² ÙˆØµÙ„ Ø´Ø¯Ù† Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ø¯Ø§Ù…Ù‡ Ù¾ÛŒØ¯Ø§ Ù…ÛŒâ€ŒÚ©Ù†Ø¯...")
+        }
+        Log.w(TAG, "Paused: device has no internet connectivity")
+        watchdog.waitUntilOnline()
+        withContext(Dispatchers.Main) {
+            onPaused(null)
+        }
+        Log.d(TAG, "Resumed: connectivity is back")
+    }
+
+    /**
      * Performs a TCP ping on port 443, 4 times.
+     *
+     * Note: unlike the WARP UDP probe, a fast failure here ("connection refused") is a normal,
+     * expected outcome when scanning random Cloudflare IPs and does NOT reliably mean the device
+     * itself is offline -- so we don't try to infer an outage from timing in this function; that
+     * detection is handled up in startScan via the real OS-level NetworkWatchdog instead.
      */
     private fun tcping(ip: String): ScanResult? {
         var successCount = 0
@@ -203,8 +235,10 @@ class CloudflareScanner {
                 val delay = System.currentTimeMillis() - start
                 totalDelay += delay
                 successCount++
+            } catch (e: SocketTimeoutException) {
+                Log.v(TAG, "tcping $ip: timed out after ~${TCP_TIMEOUT}ms (normal miss)")
             } catch (e: Exception) {
-                // Timeout or refused
+                Log.v(TAG, "tcping $ip: ${e.javaClass.simpleName}: ${e.message}")
             } finally {
                 try { socket?.close() } catch (e: Exception) {}
             }
@@ -234,7 +268,11 @@ class CloudflareScanner {
         try {
             val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(baseConfigUri) ?: return 0f
             config.address = ip // Replace the address with our target IP
-            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
+            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(
+                config = config,
+                localPort = localPort,
+                includeTun = false
+            )
 
             withContext(Dispatchers.IO) {
                 // Initialize Core Environment if not already done
@@ -276,3 +314,6 @@ class CloudflareScanner {
                 + (ip and 0xFF))
     }
 }
+
+
+

@@ -68,6 +68,38 @@ fun NodesTab() {
     var sortState by remember { mutableStateOf(sharedPrefs.getInt("sort_state", 0)) } // 0: None, 1: Best-to-Worst, 2: Worst-to-Best
     var isConnecting by remember { mutableStateOf(false) }
 
+    // Guard: switching to an Xray node while the WireGuard trial is up crashes the shared
+    // Go runtime. Ask the user to disable WireGuard first.
+    var showWgConflict by remember { mutableStateOf(false) }
+    var pendingNodeConnect by remember { mutableStateOf<com.mlmvpn.scanner.models.VpnNode?>(null) }
+
+    if (showWgConflict) {
+        WireguardConflictDialog(
+            onDismiss = { showWgConflict = false; pendingNodeConnect = null },
+            onConfirm = {
+                showWgConflict = false
+                val node = pendingNodeConnect
+                pendingNodeConnect = null
+                stopActiveVpn(context)
+                if (node != null) {
+                    scope.launch {
+                        kotlinx.coroutines.delay(800) // let WireGuard tear down first
+                        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+                        val startIntent = Intent(context, com.mlmvpn.scanner.MyVpnService::class.java).apply {
+                            putExtra("NODE_URI", node.uri)
+                            putExtra("NODE_ID", node.id)
+                            putExtra("PROXY_MODE", prefs.getBoolean("proxy_mode", false))
+                            putExtra("LOCAL_PORT", prefs.getString("local_port", "10808"))
+                        }
+                        context.startService(startIntent)
+                        com.mlmvpn.scanner.MyVpnService.isRunning = true
+                        com.mlmvpn.scanner.MyVpnService.connectedNodeId = node.id
+                    }
+                }
+            }
+        )
+    }
+
     var isGroupedByPanel by remember { mutableStateOf(false) }
     var selectedTabEngine by remember { mutableStateOf<String?>(null) }
     var selectedManualGroup by remember { mutableStateOf<String?>(null) }
@@ -1218,9 +1250,13 @@ fun NodesTab() {
                             node = node,
                             isActive = activeNodeId == node.id,
                             isExpanded = expandedNodeId == node.id,
-                            onClick = { 
+                            onClick = {
                                 activeNodeId = node.id
-                                if (isRunning) {
+                                if (isWireguardTrialActive()) {
+                                    // WireGuard trial is up — starting an Xray node now would crash.
+                                    pendingNodeConnect = node
+                                    showWgConflict = true
+                                } else if (isRunning) {
                                     val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
                                     val startIntent = android.content.Intent(context, com.mlmvpn.scanner.MyVpnService::class.java).apply {
                                         putExtra("NODE_URI", node.uri)

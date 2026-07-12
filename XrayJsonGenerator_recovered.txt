@@ -1,0 +1,109 @@
+﻿Created At: 2026-06-28T02:58:03Z
+Completed At: 2026-06-28T02:58:03Z
+File Path: `file:///g:/ip%20scanner/android/app/src/main/java/com/mlmvpn/scanner/utils/XrayJsonGenerator.kt`
+Total Lines: 446
+Total Bytes: 17268
+Showing lines 1 to 100
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: package com.mlmvpn.scanner.utils
+2: 
+3: import org.json.JSONArray
+4: import org.json.JSONObject
+5: 
+6: object XrayJsonGenerator {
+7:     fun generateSpeedtestConfig(config: VpnConfig): String {
+8:         val json = JSONObject()
+9:         val log = JSONObject().apply { put("loglevel", "warning") }
+10:         json.put("log", log)
+11: 
+12:         val outbounds = JSONArray()
+13:         val mainOutbound = JSONObject()
+14:         
+15:         if (config.protocol == "vless") {
+16:             mainOutbound.put("protocol", "vless")
+17:             val vnext = JSONArray().put(JSONObject().apply {
+18:                 put("address", config.address)
+19:                 put("port", config.port)
+20:                 put("users", JSONArray().put(JSONObject().apply {
+21:                     put("id", config.uuid)
+22:                     put("encryption", "none")
+23:                 }))
+24:             })
+25:             mainOutbound.put("settings", JSONObject().put("vnext", vnext))
+26:         } else if (config.protocol == "trojan") {
+27:             mainOutbound.put("protocol", "trojan")
+28:             val servers = JSONArray().put(JSONObject().apply {
+29:                 put("address", config.address)
+30:                 put("port", config.port)
+31:                 put("password", config.uuid)
+32:             })
+33:             mainOutbound.put("settings", JSONObject().put("servers", servers))
+34:         }
+35: 
+36:         val streamSettings = JSONObject()
+37:         streamSettings.put("network", config.network)
+38:         if (config.tls.isNotEmpty() && config.tls != "none") {
+39:             streamSettings.put("security", config.tls)
+40:             val tlsSettings = JSONObject()
+41:             tlsSettings.put("serverName", if (config.sni.isNotEmpty()) config.sni else config.wsHost)
+42:             tlsSettings.put("fingerprint", "chrome")
+43:             
+44:             if (config.alpn.isNotEmpty()) {
+45:                 val alpnArr = JSONArray()
+46:                 config.alpn.split(",").forEach { alpnArr.put(it) }
+47:                 tlsSettings.put("alpn", alpnArr)
+48:             }
+49:             streamSettings.put("tlsSettings", tlsSettings)
+50:         }
+51: 
+52:         if (config.network == "ws") {
+53:             val wsSettings = JSONObject()
+54:             wsSettings.put("path", if (config.wsPath.isNotEmpty()) config.wsPath else "/")
+55:             val headers = JSONObject()
+56:             if (config.wsHost.isNotEmpty()) {
+57:                 wsSettings.put("host", config.wsHost)
+58:                 headers.put("Host", config.wsHost)
+59:             }
+60:             headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+61:             wsSettings.put("headers", headers)
+62:             streamSettings.put("wsSettings", wsSettings)
+63:         }
+64:         
+65:         mainOutbound.put("streamSettings", streamSettings)
+66:         mainOutbound.put("tag", "proxy")
+67:         outbounds.put(mainOutbound)
+68:         
+69:         json.put("outbounds", outbounds)
+70:         return json.toString()
+71:     }
+72: 
+73:     fun generateConfig(config: VpnConfig, localPort: Int, backendDns: String = "1.1.1.1", allowLan: Boolean = false, includeTun: Boolean = true, mtu: Int = 1280, useFragment: Boolean = true): String {
+74:         val json = JSONObject()
+75:         
+76:         // Stats and Policy for v2rayNG core compatibility
+77:         json.put("stats", JSONObject())
+78:         json.put("policy", JSONObject().apply {
+79:             put("levels", JSONObject().apply {
+80:                 put("8", JSONObject().apply {
+81:                     put("handshake", 4)
+82:                     put("connIdle", 300)
+83:                     put("uplinkOnly", 1)
+84:                     put("downlinkOnly", 1)
+85:                 })
+86:             })
+87:             put("system", JSONObject().apply {
+88:                 put("statsOutboundUplink", true)
+89:                 put("statsOutboundDownlink", true)
+90:             })
+91:         })
+92: 
+93:         // Log
+94:         val log = JSONObject()
+95:         log.put("loglevel", "warning")
+96:         json.put("log", log)
+97: 
+98:         // Inbounds
+99:         val inbounds = JSONArray()
+100:         val socksInbound = JSONObject().apply {
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+

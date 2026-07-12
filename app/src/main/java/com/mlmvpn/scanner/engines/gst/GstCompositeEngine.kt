@@ -1,4 +1,4 @@
-﻿package com.mlmvpn.scanner.engines.gst
+package com.mlmvpn.scanner.engines.gst
 
 import android.content.Context
 import android.util.Log
@@ -82,6 +82,14 @@ class GstCompositeEngine(private val vpnFd: Int) : IVpnEngine {
                 put("udp", true)
             })
         })
+        // HTTP inbound at localPort+10000 so the app's RealIpCheck status probe (and any
+        // HTTP-proxy consumers) have a listener, matching the other engines' port scheme.
+        inbounds.put(JSONObject().apply {
+            put("port", inboundSocksPort + 10000)
+            put("listen", "127.0.0.1")
+            put("protocol", "http")
+            put("tag", "http")
+        })
         json.put("inbounds", inbounds)
 
         // Outbounds: SOCKS to GST
@@ -100,12 +108,22 @@ class GstCompositeEngine(private val vpnFd: Int) : IVpnEngine {
             put("protocol", "freedom")
             put("tag", "direct")
         })
+        outbounds.put(JSONObject().apply {
+            put("protocol", "blackhole")
+            put("tag", "block")
+        })
         json.put("outbounds", outbounds)
 
         // Routing
         val routing = JSONObject()
         routing.put("domainStrategy", "AsIs")
         val rules = JSONArray()
+        rules.put(JSONObject().apply {
+            put("type", "field")
+            put("port", 443)
+            put("network", "udp")
+            put("outboundTag", "block")
+        })
         rules.put(JSONObject().apply {
             put("type", "field")
             put("port", 53)

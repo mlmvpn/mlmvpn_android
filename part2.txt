@@ -1,0 +1,80 @@
+﻿Created At: 2026-07-09T16:43:58Z
+Completed At: 2026-07-09T16:43:58Z
+File Path: `file:///g:/ip%20scanner/android/app/src/main/java/com/mlmvpn/scanner/utils/SingboxJsonGenerator.kt`
+Total Lines: 690
+Total Bytes: 22955
+Showing lines 580 to 650
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+580:             put("type", "tun")
+581:             put("tag", "tun-in")
+582:             put("interface_name", "tun0")
+583:             put("inet4_address", "172.19.0.2/30")
+584:             put("mtu", mtu)
+585:             put("auto_route", true)
+586:             put("strict_route", true)
+587:             put("endpoint_independent_nat", true)
+588:             put("sniff", true)
+589:         })
+590:         json.put("inbounds", inbounds)
+591: 
+592:         // Outbounds
+593:         val outbounds = JSONArray()
+594: 
+595:         val endpointParts = endpoint.split(":")
+596:         val serverIp = endpointParts.firstOrNull() ?: ""
+597:         val serverPort = endpointParts.getOrNull(1)?.toIntOrNull() ?: 443
+598: 
+599:         val proxyOutbound = JSONObject().apply {
+600:             put("type", "wireguard")
+601:             put("tag", "proxy")
+602:             put("server", serverIp)
+603:             put("server_port", serverPort)
+604:             val finalAddress = if (address.contains("/")) address else "$address/32"
+605:             put("local_address", JSONArray().put(finalAddress))
+606:             put("private_key", privateKey)
+607:             put("peer_public_key", serverPubkey)
+608:             put("mtu", mtu)
+609:             put("reserved", JSONArray().put(0).put(0).put(0))
+610:             
+611:             // Standard WireGuard doesn't natively support AmneziaWG fields in this libcore version
+612:         }
+613:         outbounds.put(proxyOutbound)
+614: 
+615:         outbounds.put(JSONObject().apply {
+616:             put("type", "direct")
+617:             put("tag", "direct")
+618:         })
+619: 
+620:         outbounds.put(JSONObject().apply {
+621:             put("type", "block")
+622:             put("tag", "block")
+623:         })
+624: 
+625:         outbounds.put(JSONObject().apply {
+626:             put("type", "dns")
+627:             put("tag", "dns-out")
+628:         })
+629: 
+630:         json.put("outbounds", outbounds)
+631: 
+632:         // Route
+633:         val routeRules = JSONArray()
+634: 
+635:         routeRules.put(JSONObject().apply {
+636:             put("protocol", "dns")
+637:             put("outbound", "dns-out")
+638:         })
+639: 
+640:         // Private IPs go direct
+641:         routeRules.put(JSONObject().apply {
+642:             put("ip_is_private", true)
+643:             put("outbound", "direct")
+644:         })
+645: 
+646:         if (serverIp.isNotEmpty()) {
+647:             routeRules.put(JSONObject().apply {
+648:                 put("ip_cidr", JSONArray().put("$serverIp/32"))
+649:                 put("outbound", "direct")
+650:             })
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+

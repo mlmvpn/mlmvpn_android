@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.mlmvpn.scanner.ui.ScannedIP
+import com.mlmvpn.scanner.utils.NetworkWatchdog
 
 object ScannerManager {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -36,6 +37,9 @@ object ScannerManager {
     private val _healthTestResults = MutableStateFlow<Pair<Int, Int>?>(null) // Pair(total, blocked)
     val healthTestResults = _healthTestResults.asStateFlow()
 
+    private val _pauseMessage = MutableStateFlow<String?>(null)
+    val pauseMessage = _pauseMessage.asStateFlow()
+
     private var lastHealthTestIps: List<String>? = null
     private var lastHealthTestGoodIps: List<String>? = null
 
@@ -50,12 +54,15 @@ object ScannerManager {
         _lastScanDuplicateCount.value = 0
         lastHealthTestIps = if (isHealthTest) customIps else null
 
+        val watchdog = NetworkWatchdog(context)
+        watchdog.start()
+
         scanJob = scope.launch(Dispatchers.Default) {
             try {
                 val scanner = CloudflareScanner()
                 val ranges = CloudflareScanner.DEFAULT_RANGES
                 val ipsToScan = customIps ?: scanner.generateIPs(ranges)
-                
+
                 // Map to keep track of uniqueness based on IP string
                 val currentMap = java.util.concurrent.ConcurrentHashMap<String, ScannedIP>()
                 val idCounter = java.util.concurrent.atomic.AtomicInteger(0)
@@ -80,6 +87,7 @@ object ScannerManager {
                         baseConfig = baseConfig,
                         limit = limit,
                         successTarget = successTarget,
+                        watchdog = watchdog,
                         onPhaseChange = { newPhase ->
                             _phase.value = newPhase
                         },
@@ -103,10 +111,14 @@ object ScannerManager {
                                     selected = true
                                 )
                             }
+                        },
+                        onPaused = { message ->
+                            _pauseMessage.value = message
                         }
                     )
                 } finally {
                     uiUpdateJob.cancel()
+                    watchdog.stop()
                     val sortedList = currentMap.values.filter { it.downloadSpeed > 0 }.sortedBy { it.downloadSpeed }.take(successTarget)
                     _scannedIPs.value = sortedList
 
@@ -166,6 +178,7 @@ object ScannerManager {
         scanJob?.cancel()
         _isScanning.value = false
         _phase.value = CloudflareScanner.ScanPhase.DONE
+        _pauseMessage.value = null
     }
 
     fun toggleSelection(id: Int) {

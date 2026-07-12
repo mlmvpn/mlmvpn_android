@@ -63,7 +63,7 @@ class MlmApiManager(private val context: Context) {
                 val body = response.body?.string()
                 if (response.isSuccessful) {
                     val res = gson.fromJson(body, MlmUsersResponse::class.java)
-                    return@withContext res.users
+                    return@withContext res.users ?: emptyList()
                 } else {
                     android.util.Log.e("MlmApi", "getUsers Failed! Code: ${response.code}, Body: $body")
                 }

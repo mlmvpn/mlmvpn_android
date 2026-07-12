@@ -16,6 +16,7 @@ object GstConfigManager {
     private const val PREFS_KEY_RELAYS = "gst_relays"
     private const val PREFS_KEY_SNI_LIST = "gst_sni_list"
     private const val PREFS_KEY_CLEAN_IP_LIST = "gst_clean_ip_list"
+    private const val PREFS_KEY_RELAY_URLS = "gst_relay_urls"
 
     val DEFAULT_SNI_LIST = listOf(
         "www.google.com",
@@ -43,14 +44,21 @@ object GstConfigManager {
         "104.17.45.12" to "آی‌پی کلودفلر"
     )
 
+    // The canonical Google frontend IP from the upstream mhrv-rs reference config
+    // (therealaleph/MasterHttpRelayVPN-RUST). Used as the default `google_ip` for
+    // domain-fronting � it reliably fronts script.google.com AND the direct Google
+    // tunnel (YouTube/googlevideo/googleapis). Do NOT default to Cloudflare IPs here:
+    // Google services are not served from Cloudflare, so a CF google_ip breaks video.
+    const val DEFAULT_GOOGLE_IP = "216.239.38.120"
+
     val DEFAULT_IP_LIST = listOf(
-        "104.16.24.34", // Cloudflare
-        "104.17.45.12", // Cloudflare
-        "104.18.23.45", // Cloudflare
-        "104.19.12.34", // Cloudflare
+        "216.239.38.120", // Google frontend (reference default)
+        "216.239.32.120", // Google frontend
+        "216.239.34.120", // Google frontend
+        "216.239.36.120", // Google frontend
         "142.250.186.110", // Google edge
         "142.251.37.110",  // Google edge
-        "172.217.18.238",   // Google edge
+        "172.217.18.238",  // Google edge
         "142.250.181.142", // Google edge
         "142.251.32.14"    // Google edge
     )
@@ -108,6 +116,48 @@ object GstConfigManager {
         val array = org.json.JSONArray()
         snis.forEach { array.put(it) }
         PreferenceManager.getDefaultSharedPreferences(context).edit().putString(PREFS_KEY_SNI_LIST, array.toString()).apply()
+    }
+
+    /**
+     * Optional Cloudflare Worker relay URLs used to accelerate/stabilize the Apps
+     * Script tunnel. Empty = GST runs on Google alone (the default). When non-empty,
+     * [GstEngine] wires them in as `relay_url`/`parallel_relay` alongside the scripts.
+     */
+    fun getRelayUrls(context: Context): List<String> {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val json = prefs.getString(PREFS_KEY_RELAY_URLS, null) ?: return emptyList()
+        val list = mutableListOf<String>()
+        try {
+            val array = org.json.JSONArray(json)
+            for (i in 0 until array.length()) {
+                val url = array.getString(i).trim()
+                if (url.isNotEmpty()) list.add(url)
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+        return list
+    }
+
+    /**
+     * A stable, per-install random key used ONLY between the app and its Cloudflare
+     * deploy-proxy worker (gst_relay_worker). Kept separate from the GST relay/tunnel
+     * auth key so redeploying relays never desyncs it from the worker's AUTH_KEY binding
+     * (which previously caused the worker to reject requests with its decoy page / 502).
+     */
+    fun getOrCreateRelayProxyKey(context: Context): String {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        var k = prefs.getString("gst_relay_proxy_key", null)
+        if (k.isNullOrEmpty()) {
+            k = java.util.UUID.randomUUID().toString().replace("-", "")
+            prefs.edit().putString("gst_relay_proxy_key", k).apply()
+        }
+        return k
+    }
+
+    fun saveRelayUrls(context: Context, urls: List<String>) {
+        val array = org.json.JSONArray()
+        urls.filter { it.isNotBlank() }.forEach { array.put(it.trim()) }
+        PreferenceManager.getDefaultSharedPreferences(context)
+            .edit().putString(PREFS_KEY_RELAY_URLS, array.toString()).apply()
     }
 
     fun getSelectedCleanIpList(context: Context): List<String> {

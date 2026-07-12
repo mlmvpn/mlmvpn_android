@@ -2,7 +2,10 @@ package com.mlmvpn.scanner.engines.game
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.InetSocketAddress
+import java.net.PortUnreachableException
 import java.net.Proxy
 import java.net.Socket
 import kotlin.math.abs
@@ -13,22 +16,26 @@ object GamePingTester {
      * تست مستقیم پینگ TCP به سرور بازی (بدون VPN)
      * @return پینگ به ms یا -1 در صورت خطا
      */
-    suspend fun directPing(host: String, port: Int, timeoutMs: Int = 3000): Long = 
+    suspend fun directPing(host: String, port: Int, timeoutMs: Int = 3000): Long =
         withContext(Dispatchers.IO) {
+            var socket: Socket? = null
             try {
                 // Force IPv4 resolution to avoid IPv6 routing issues on some ISPs
                 val inetAddresses = java.net.InetAddress.getAllByName(host)
                 val ipv4Address = inetAddresses.firstOrNull { it is java.net.Inet4Address } ?: inetAddresses.first()
-                
-                val socket = Socket()
+
+                socket = Socket()
                 val startTime = System.currentTimeMillis()
                 socket.connect(InetSocketAddress(ipv4Address, port), timeoutMs)
-                val elapsed = System.currentTimeMillis() - startTime
-                socket.close()
-                elapsed
+                System.currentTimeMillis() - startTime
             } catch (e: Exception) {
-                android.util.Log.e("GamePingTester", "directPing failed for $host:$port - ${e.message}", e)
+                // SECURITY: never log the host/IP or the exception message (it embeds the address).
+                // A failed ping to one of our own servers would otherwise leak its IP to logcat,
+                // where it can be scraped and filtered. Log only the port, at debug level.
+                android.util.Log.d("GamePingTester", "directPing failed on port $port (unreachable/timeout)")
                 -1L
+            } finally {
+                try { socket?.close() } catch (_: Exception) {}
             }
         }
     
@@ -43,24 +50,62 @@ object GamePingTester {
         proxyPort: Int, 
         timeoutMs: Int = 5000
     ): Long = withContext(Dispatchers.IO) {
+        var socket: Socket? = null
         try {
             val proxy = Proxy(
-                Proxy.Type.SOCKS, 
+                Proxy.Type.SOCKS,
                 InetSocketAddress(proxyHost, proxyPort)
             )
-            val socket = Socket(proxy)
+            socket = Socket(proxy)
             socket.soTimeout = timeoutMs
             val dest = InetSocketAddress.createUnresolved(host, port)
             val startTime = System.currentTimeMillis()
             socket.connect(dest, timeoutMs)
-            val elapsed = System.currentTimeMillis() - startTime
-            socket.close()
-            elapsed
+            System.currentTimeMillis() - startTime
         } catch (e: Exception) {
             -1L
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
         }
     }
     
+    /**
+     * تست پینگ واقعی UDP به سرور بازی. بیشتر پروتکل‌های اختصاصی بازی به یک پکت ساده جواب
+     * نمی‌دهند، اما زمان لازم برای رفتن پکت و برگشتِ خطای ICMP Port Unreachable (وقتی پورت
+     * بسته باشد) هم از همان مسیر شبکه واقعی عبور می‌کند -- پس همچنان یک تخمین RTT واقعی‌تر از
+     * TCP connect است، چون پروتکل واقعی بازی (UDP) را امتحان می‌کند نه TCP.
+     * @return پینگ به ms یا -1 در صورت عدم پاسخ (نه پاسخ مستقیم و نه ICMP)
+     */
+    suspend fun udpPing(host: String, port: Int, timeoutMs: Int = 2000): Long =
+        withContext(Dispatchers.IO) {
+            var socket: DatagramSocket? = null
+            val startTime = System.currentTimeMillis()
+            try {
+                val inetAddresses = java.net.InetAddress.getAllByName(host)
+                val ipv4Address = inetAddresses.firstOrNull { it is java.net.Inet4Address } ?: inetAddresses.first()
+
+                socket = DatagramSocket()
+                socket.soTimeout = timeoutMs
+                socket.connect(ipv4Address, port)
+
+                val payload = ByteArray(32)
+                val sendPacket = DatagramPacket(payload, payload.size, ipv4Address, port)
+                socket.send(sendPacket)
+
+                val receiveBuffer = ByteArray(512)
+                val receivePacket = DatagramPacket(receiveBuffer, receiveBuffer.size)
+                socket.receive(receivePacket)
+                System.currentTimeMillis() - startTime
+            } catch (e: PortUnreachableException) {
+                // ICMP Port Unreachable از همون مسیر شبکه برگشته -- همچنان RTT واقعی به این IP است
+                System.currentTimeMillis() - startTime
+            } catch (e: Exception) {
+                -1L
+            } finally {
+                try { socket?.close() } catch (_: Exception) {}
+            }
+        }
+
     /**
      * تست چند endpoint و برگرداندن میانگین و Jitter
      * @return Pair(avgPing, jitter)

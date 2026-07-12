@@ -16,6 +16,8 @@ import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
+private class NahanNonRetryableException(message: String) : Exception(message)
+
 class NahanDeployer(private val context: Context) {
 
     private val client = OkHttpClient.Builder()
@@ -272,8 +274,8 @@ class NahanDeployer(private val context: Context) {
         if (account.nahanWorkerUrl.isNullOrEmpty()) return@withContext emptyList()
         val configs = mutableListOf<String>()
         try {
-            // First try default (no sub) — works when no multi-user
-            val subUrl = "${account.nahanWorkerUrl}/${account.nahanApiRoute}?flag=a"
+            // First try default (no sub) � works when no multi-user
+            val subUrl = "${account.nahanWorkerUrl}/${account.nahanApiRoute ?: "sync"}?flag=a"
             
             val req = Request.Builder()
                 .url(subUrl)
@@ -354,13 +356,16 @@ class NahanDeployer(private val context: Context) {
                             if (retries > 0) kotlinx.coroutines.delay(1500)
                         }
                     } else if (response.code == 403) {
-                        throw Exception("خطای دسترسی (کد 403).") // Definitive error, do not retry
+                        throw NahanNonRetryableException("خطای دسترسی (کد 403).") // Definitive error, do not retry
                     } else {
                         finalException = Exception("خطا در دریافت اطلاعات (کد ${response.code})")
                         retries--
                         if (retries > 0) kotlinx.coroutines.delay(1500)
                     }
                 }
+            } catch (e: NahanNonRetryableException) {
+                finalException = e
+                retries = 0
             } catch (e: Exception) {
                 e.printStackTrace()
                 finalException = e

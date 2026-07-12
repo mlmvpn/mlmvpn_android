@@ -46,6 +46,10 @@ fun VpnSettingsScreen(onDismiss: () -> Unit) {
     var routingMode by remember { mutableStateOf(prefs.getString("vpn_routing_mode", "ALL") ?: "ALL") }
     var selectedApps by remember { mutableStateOf(prefs.getStringSet("vpn_routing_apps", emptySet())?.toMutableSet() ?: mutableSetOf()) }
     var mtuValue by remember { mutableStateOf(prefs.getInt("vpn_mtu", 1280).toString()) }
+    // Quick Settings tile: how many recent servers to delay-test. Stored in the
+    // default prefs so the tile service reads the same value.
+    val defaultPrefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+    var tileCount by remember { mutableStateOf(defaultPrefs.getInt("quick_tile_count", 20).toString()) }
     
     var installedApps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
@@ -87,6 +91,8 @@ fun VpnSettingsScreen(onDismiss: () -> Unit) {
             .putStringSet("vpn_routing_apps", selectedApps)
             .putInt("vpn_mtu", mtu)
             .apply()
+        val tc = (tileCount.toIntOrNull() ?: 20).coerceIn(1, 200)
+        defaultPrefs.edit().putInt("quick_tile_count", tc).apply()
         android.widget.Toast.makeText(context, context.getString(com.mlmvpn.scanner.R.string.vpn_settings_saved), android.widget.Toast.LENGTH_LONG).show()
         onDismiss()
     }
@@ -155,6 +161,31 @@ fun VpnSettingsScreen(onDismiss: () -> Unit) {
                 ),
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp)
+            )
+        }
+
+        item {
+            // Quick Settings tile: number of recent servers to delay-test on quick connect
+            OutlinedTextField(
+                value = tileCount,
+                onValueChange = { tileCount = it.filter { c -> c.isDigit() }.take(3) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                label = { Text("تعداد سرور برای اتصال سریع (دکمه‌ی پنل بالا)", color = Color.Gray) },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                colors = TextFieldDefaults.outlinedTextFieldColors(
+                    focusedBorderColor = Color(0xFF00FF88),
+                    unfocusedBorderColor = Color.DarkGray,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    cursorColor = Color(0xFF00FF88)
+                ),
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp)
+            )
+            Text(
+                "دکمه‌ی �mlmvpn� را از پنل تنظیمات سریع گوشی اضافه کنید؛ با یک لمس، سریع‌ترین سرور از میان این تعداد سرور اخیر انتخاب و متصل می‌شود.",
+                color = Color.Gray, fontSize = 11.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             )
         }
 

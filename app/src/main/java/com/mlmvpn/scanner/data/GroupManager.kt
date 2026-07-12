@@ -30,7 +30,18 @@ data class IpArchive(
     val ips: List<String>
 )
 
-class GroupManager(context: Context) {
+class GroupManager private constructor(context: Context) {
+    companion object {
+        @Volatile
+        private var instance: GroupManager? = null
+
+        operator fun invoke(context: Context): GroupManager {
+            return instance ?: synchronized(this) {
+                instance ?: GroupManager(context.applicationContext).also { instance = it }
+            }
+        }
+    }
+
     private val prefs = context.getSharedPreferences("group_manager_prefs", Context.MODE_PRIVATE)
 
     val cloudGroups = mutableListOf<CloudGroup>()

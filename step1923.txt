@@ -1,0 +1,16 @@
+﻿{
+    "name":  "write_to_file",
+    "args":  {
+                 "ArtifactMetadata":  {
+                                          "RequestFeedback":  false,
+                                          "Summary":  "Summary of completed XHTTP implementation and UDP rule fixes.",
+                                          "UserFacing":  true
+                                      },
+                 "CodeContent":  "# گزارش انجام کار: پیاده‌سازی XHTTP و اصلاحات Routing\n\nتغییرات کدی سمت اندروید دقیقاً مطابق با درخواست متخصص شبکه با موفقیت اِعمال شد و نرم‌افزار شما اکنون کاملاً آماده‌ی دریافت ترافیک `XHTTP` است.\n\n## ۱. اصلاح معماری پارسر (`VpnConfig.kt`)\nفیلدهای اختصاصی زیر به کلاس `VpnConfig` اضافه شدند و توابع `parseUri` و `toUriString` برای خواندن و نوشتن آن‌ها آپدیت شدند:\n- `xhttpPath` (نگاشت از پارامتر `path`)\n- `xhttpHost` (نگاشت از پارامتر `host`)\n- `xhttpMode` (نگاشت از پارامتر `mode` با دیفالت `auto`)\n\n## ۲. اصلاح ساختار روتینگ UDP\nقانون بلاک کلیِ UDP که باعث اختلال در سرویس‌هایی مثل NTP می‌شد حذف گردید و با دو قانون جدید و دقیق جایگزین شد:\n```json\n// مسدودسازی QUIC جهت فال‌بک به TCP\n{\n  \"type\": \"field\",\n  \"network\": \"udp\",\n  \"port\": 443,\n  \"outboundTag\": \"block\"\n}\n// آزادسازی سایر ترافیک‌های UDP (عبور از VPN و اتصال مستقیم)\n{\n  \"type\": \"field\",\n  \"network\": \"udp\",\n  \"outboundTag\": \"direct\"\n}\n```\n\n## ۳. تزریق xhttpSettings به هسته Xray\nدر کلاس ژنراتور کلاینت (`XrayJsonGenerator.kt`)، در صورتی که شبکه (`config.network`) برابر با `xhttp` باشد، تنظیمات اختصاصی آن تولید شده و در کانفیگ نهایی هسته قرار می‌گیرد:\n```json\n\"xhttpSettings\": {\n  \"path\": \"/\",\n  \"host\": \"your-worker.workers.dev\",\n  \"mode\": \"auto\"\n}\n```\n*نکته:* به دلیل ساختار هوشمند کدهای قبلی، لیست ALPN برای XHTTP به طور خودکار مقادیر ایده‌آل `h2, http/1.1` را به هسته پاس می‌دهد.\n\n---\n\n\u003e [!TIP]\n\u003e **گام بعدی:**\n\u003e برنامه‌ی اندروید شما در سمت شبکه کاملاً آماده است. از متخصص شبکه بخواهید یک لینک VLESS با متغیر `type=xhttp` روی بستر کلودفلر آماده کرده و برای شما بفرستد تا سرعت شگفت‌انگیز و پایداری مطلق (بدون مشکل Rate-Limit وب‌سوکت) را تست کنید.",
+                 "Description":  "Create walkthrough of completed XHTTP changes",
+                 "Overwrite":  true,
+                 "TargetFile":  "C:\\Users\\ehsan computer\\.gemini\\antigravity-ide\\brain\\fd7253bd-76d7-4917-8d3a-87ed3b5afbf8\\walkthrough.md",
+                 "toolAction":  "Create walkthrough",
+                 "toolSummary":  "Create walkthrough"
+             }
+}

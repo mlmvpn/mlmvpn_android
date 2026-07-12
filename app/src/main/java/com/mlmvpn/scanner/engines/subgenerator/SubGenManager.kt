@@ -22,6 +22,10 @@ data class SubGenAccountData(
 )
 
 class SubGenManager(private val context: Context) {
+    companion object {
+        private var autoSyncJob: kotlinx.coroutines.Job? = null
+    }
+
     private val prefs = context.getSharedPreferences("subgen_prefs", Context.MODE_PRIVATE)
 
     private val client = OkHttpClient.Builder()
@@ -342,9 +346,10 @@ class SubGenManager(private val context: Context) {
     }
 
     fun startAutoSync() {
+        autoSyncJob?.cancel()
         val cloudManager = CloudManager(context)
         val nodeManager = NodeManager(context)
-        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+        autoSyncJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             nodeManager.nodesFlow.collectLatest { nodes ->
                 kotlinx.coroutines.delay(5000) // Wait 5 seconds after modifications
                 

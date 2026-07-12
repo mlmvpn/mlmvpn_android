@@ -34,11 +34,15 @@ data class BoostResult(
 )
 
 enum class BoostMode {
-    DIRECT,      // Direct Boost — بدون تانل
-    TUNNEL,      // Tunnel Turbo — از نودهای VLESS/Trojan
-    WORKER,      // Worker Relay — از Cloudflare Workers
-    WARP,        // Warp WireGuard — از Cloudflare WARP با پینگ پایین
-    AUTO         // Auto Hybrid — خودکار بهترین
+    // NOTE: DIRECT and TUNNEL are retired from the Game tab (removed from the UI and from the
+    // AUTO race). Kept in the enum only so old persisted values/when-branches don't break.
+    DIRECT,        // (retired) Direct Boost
+    TUNNEL,        // (retired) Tunnel Turbo (VLESS/Trojan)
+    WARP,          // WARP خودکار — سیستم چندموتوره (usque/warp-plus)
+    DEDICATED_DNS, // DNS اختصاصی کلادفلر (ورکر شخصی + انتخاب کشور)
+    UAE_DNS,       // DNS اختصاصی امارات — روی سرور خودمان (رایگان/نامحدود)
+    WIREGUARD,     // وایرگارد — سرور اختصاصی امارات (تست رایگان ۱ ساعته)
+    AUTO           // Auto — بهترین بین کلادفلر/امارات/وایرگارد بر اساس پینگ واقعی
 }
 
 // وضعیت کلی Game Booster
@@ -61,9 +65,13 @@ object GameDatabase {
             alternatePackages = listOf("com.garena.game.codm"),
             iconEmoji = "🔫",
             category = "shooter",
+            // NOTE: the old prod.atviservices.com / conntest.activision.com hostnames are dead
+            // (NXDOMAIN). These Akamai-fronted endpoints resolve; note CoD is behind Akamai which
+            // maps by resolver location and doesn't always honour our ECS override, so region
+            // steering has less effect here than for CloudFront-fronted games (PUBG/Blood Strike).
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("prod.atviservices.com", "conntest.activision.com"), 443),
-                GameServer("EU", "اروپا", listOf("eu.prod.atviservices.com", "conntest.activision.com"), 443)
+                GameServer("ME", "خاورمیانه", listOf("profile.callofduty.com", "cod.activision.com"), 443),
+                GameServer("EU", "اروپا", listOf("profile.callofduty.com", "callofduty.com"), 443)
             )
         ),
         
@@ -75,9 +83,11 @@ object GameDatabase {
             alternatePackages = listOf("com.pubg.krmobile", "com.rekoo.pubgm", "com.pubg.imobile"),
             iconEmoji = "🪖",
             category = "battle_royale",
+            // pubgmobile.com is AWS CloudFront-fronted and steers cleanly via ECS (different edge
+            // IP per region), so it's a strong signal for region comparison.
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("midas-public-slb-sg.proxima-world.com", "gp-pjp-sg.publb.tencentmna.com"), 443),
-                GameServer("EU", "اروپا", listOf("gp-pjp-eu.publb.tencentmna.com"), 443)
+                GameServer("ME", "خاورمیانه", listOf("pubgmobile.com", "www.pubgmobile.com"), 443),
+                GameServer("EU", "اروپا", listOf("pubgmobile.com"), 443)
             )
         ),
         
@@ -89,8 +99,8 @@ object GameDatabase {
             iconEmoji = "⚔️",
             category = "moba",
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("moba.mobilelegends.com", "gateway.mobilelegends.com"), 443),
-                GameServer("AS", "آسیا", listOf("as-gateway.mobilelegends.com"), 443)
+                GameServer("ME", "خاورمیانه", listOf("moba.mobilelegends.com", "api.mobilelegends.com"), 443),
+                GameServer("AS", "آسیا", listOf("api.mobilelegends.com", "moba.mobilelegends.com"), 443)
             )
         ),
         
@@ -103,8 +113,8 @@ object GameDatabase {
             iconEmoji = "🔥",
             category = "battle_royale",
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("apigw-sea.garena.com", "sea-login.garena.com"), 443),
-                GameServer("AS", "آسیا", listOf("api.garena.com"), 443)
+                GameServer("ME", "خاورمیانه", listOf("auth.garena.com", "connect.garena.com"), 443),
+                GameServer("AS", "آسیا", listOf("connect.garena.com", "auth.garena.com"), 443)
             )
         ),
         
@@ -116,7 +126,7 @@ object GameDatabase {
             iconEmoji = "👑",
             category = "strategy",
             servers = listOf(
-                GameServer("EU", "اروپا", listOf("game.clashroyaleapp.com", "game.supercell.com"), 9339)
+                GameServer("EU", "اروپا", listOf("game.clashroyaleapp.com"), 9339)
             )
         ),
         
@@ -128,7 +138,7 @@ object GameDatabase {
             iconEmoji = "⚔️",
             category = "strategy",
             servers = listOf(
-                GameServer("EU", "اروپا", listOf("game.clashofclans.com", "game.supercell.com"), 9339)
+                GameServer("EU", "اروپا", listOf("game.clashofclans.com"), 9339)
             )
         ),
         
@@ -153,7 +163,7 @@ object GameDatabase {
             iconEmoji = "💥",
             category = "shooter",
             servers = listOf(
-                GameServer("EU", "اروپا", listOf("game.brawlstarsgame.com", "game.supercell.com"), 9339)
+                GameServer("EU", "اروپا", listOf("game.brawlstarsgame.com"), 9339)
             )
         ),
 
@@ -165,9 +175,79 @@ object GameDatabase {
             alternatePackages = listOf("com.netease.newspike.gl"),
             iconEmoji = "🩸",
             category = "shooter",
+            // Old netease newspike hostnames are dead (NXDOMAIN). bloodstrike.com is AWS-fronted
+            // and steers via ECS (different edge IP per region).
             servers = listOf(
-                GameServer("ME", "خاورمیانه", listOf("login-global.service.newspike.netease.com", "common-global.service.newspike.netease.com"), 443),
-                GameServer("EU", "اروپا", listOf("login-global.service.newspike.netease.com"), 443)
+                GameServer("ME", "خاورمیانه", listOf("bloodstrike.com", "www.bloodstrike.com"), 443),
+                GameServer("EU", "اروپا", listOf("bloodstrike.com"), 443)
+            )
+        ),
+
+        // ────────────────── Stumble Guys ──────────────────
+        GameInfo(
+            id = "stumbleguys",
+            name = "Stumble Guys",
+            packageName = "com.kitkagames.fallbuddies",
+            iconEmoji = "🏃",
+            category = "party",
+            // CloudFront-fronted, steers cleanly via ECS (different edge IP per region).
+            servers = listOf(
+                GameServer("ME", "خاورمیانه", listOf("stumbleguys.com", "api.stumbleguys.com"), 443),
+                GameServer("EU", "اروپا", listOf("stumbleguys.com"), 443)
+            )
+        ),
+
+        // ────────────────── Apex Legends Mobile ──────────────────
+        GameInfo(
+            id = "apexmobile",
+            name = "Apex Legends Mobile",
+            packageName = "com.ea.gp.apexlegendsmobilefps",
+            iconEmoji = "🎯",
+            category = "battle_royale",
+            servers = listOf(
+                GameServer("ME", "خاورمیانه", listOf("apexlegendsmobile.com", "accounts.ea.com"), 443),
+                GameServer("EU", "اروپا", listOf("apexlegendsmobile.com"), 443)
+            )
+        ),
+
+        // ────────────────── EA SPORTS FC / FIFA Mobile ──────────────────
+        GameInfo(
+            id = "fifamobile",
+            name = "FIFA Mobile",
+            packageName = "com.ea.gp.fifamobile",
+            iconEmoji = "⚽",
+            category = "sports",
+            // Akamai-fronted -- resolves fine, but region steering has less effect than CloudFront.
+            servers = listOf(
+                GameServer("ME", "خاورمیانه", listOf("fifa.ea.com", "accounts.ea.com"), 443),
+                GameServer("EU", "اروپا", listOf("fifa.ea.com"), 443)
+            )
+        ),
+
+        // ────────────────── eFootball ──────────────────
+        GameInfo(
+            id = "efootball",
+            name = "eFootball",
+            packageName = "jp.konami.pesam",
+            iconEmoji = "⚽",
+            category = "sports",
+            servers = listOf(
+                GameServer("ME", "خاورمیانه", listOf("efootball-web.konami.net", "www.konami.com"), 443),
+                GameServer("EU", "اروپا", listOf("efootball-web.konami.net"), 443)
+            )
+        ),
+
+        // ────────────────── Roblox ──────────────────
+        GameInfo(
+            id = "roblox",
+            name = "Roblox",
+            packageName = "com.roblox.client",
+            iconEmoji = "🧱",
+            category = "sandbox",
+            // gamejoin.roblox.com is the actual join server and geo-varies via ECS.
+            servers = listOf(
+                GameServer("ME", "خاورمیانه", listOf("gamejoin.roblox.com", "clientsettings.roblox.com"), 443),
+                GameServer("EU", "اروپا", listOf("gamejoin.roblox.com"), 443)
             )
         )
     )

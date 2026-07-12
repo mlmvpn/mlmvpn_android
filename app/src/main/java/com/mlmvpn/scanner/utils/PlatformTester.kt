@@ -9,16 +9,16 @@ import java.net.Proxy
 import javax.net.ssl.SSLSocketFactory
 
 enum class Platform(val displayName: String, val testUrl: String) {
-    INSTAGRAM("اینستاگرام", "https://graph.instagram.com"),
-    YOUTUBE("یوتیوب", "https://googlevideo.com"),
-    TIKTOK("تیک‌تاک", "https://api.tiktokv.com"),
-    TWITTER("ایکس", "https://api.twitter.com"),
-    WHATSAPP("واتس‌اپ", "https://g.whatsapp.net"),
-    GEMINI("جمنای", "https://generativelanguage.googleapis.com"),
-    ANTIGRAVITY("آنتی‌گراویتی", "https://api.antigravity.google"),
-    CLAUDE("کلاد", "https://api.anthropic.com"),
-    TRAE("تِرِی", "https://api.trae.ai"),
-    CAPCUT("کپ‌کات", "https://api.capcut.com")
+    INSTAGRAM("Ø§ÛŒÙ†Ø³ØªØ§Ú¯Ø±Ø§Ù…", "https://graph.instagram.com"),
+    YOUTUBE("ÛŒÙˆØªÛŒÙˆØ¨", "https://googlevideo.com"),
+    TIKTOK("ØªÛŒÚ©â€ŒØªØ§Ú©", "https://api.tiktokv.com"),
+    TWITTER("Ø§ÛŒÚ©Ø³", "https://api.twitter.com"),
+    WHATSAPP("ÙˆØ§ØªØ³â€ŒØ§Ù¾", "https://g.whatsapp.net"),
+    GEMINI("Ø¬Ù…Ù†Ø§ÛŒ", "https://generativelanguage.googleapis.com"),
+    ANTIGRAVITY("Ø¢Ù†ØªÛŒâ€ŒÚ¯Ø±Ø§ÙˆÛŒØªÛŒ", "https://api.antigravity.google"),
+    CLAUDE("Ú©Ù„Ø§Ø¯", "https://api.anthropic.com"),
+    TRAE("ØªÙØ±ÙÛŒ", "https://api.trae.ai"),
+    CAPCUT("Ú©Ù¾â€ŒÚ©Ø§Øª", "https://api.capcut.com")
 }
 
 object PlatformTester {
@@ -36,6 +36,8 @@ object PlatformTester {
     ): Long = withContext(Dispatchers.IO) {
         var realDelay = -1L
         var coreController: libv2ray.CoreController? = null
+        var socket: java.net.Socket? = null
+        var sslSocket: javax.net.ssl.SSLSocket? = null
 
         try {
             val config = VpnConfig.parseUri(nodeUri) ?: return@withContext -1L
@@ -70,7 +72,7 @@ object PlatformTester {
 
             // Setup Socket with SOCKS5 Proxy
             val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", localPort))
-            val socket = java.net.Socket(proxy)
+            socket = java.net.Socket(proxy)
             socket.soTimeout = 5000
 
             // Extract host and use createUnresolved to force remote DNS resolution!
@@ -82,23 +84,31 @@ object PlatformTester {
 
             // Verify TLS Handshake to ensure it's not hijacked
             val sslSocketFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val sslSocket = sslSocketFactory.createSocket(socket, host, 443, true) as javax.net.ssl.SSLSocket
-            
+            sslSocket = sslSocketFactory.createSocket(socket, host, 443, true) as javax.net.ssl.SSLSocket
+
             val params = sslSocket.sslParameters
             val sniHostName = javax.net.ssl.SNIHostName(host)
             params.serverNames = listOf(sniHostName)
             sslSocket.sslParameters = params
-            
+
             sslSocket.startHandshake()
-            
+
             realDelay = System.currentTimeMillis() - startTime
-            sslSocket.close()
         } catch (e: Exception) {
             Log.e(TAG, "Platform test failed for ${platform.displayName}", e)
         } finally {
+            // sslSocket wraps socket with autoClose=true, so closing it also closes the underlying socket
+            if (sslSocket != null) {
+                try { sslSocket.close() } catch (e: Exception) {}
+            } else {
+                try { socket?.close() } catch (e: Exception) {}
+            }
             try { coreController?.stopLoop() } catch (e: Exception) {}
         }
         
         return@withContext realDelay
     }
 }
+
+
+

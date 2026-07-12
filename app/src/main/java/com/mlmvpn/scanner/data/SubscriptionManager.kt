@@ -17,7 +17,18 @@ data class VpnSubscription(
     val lastUpdated: Long = 0L
 )
 
-class SubscriptionManager(val context: Context) {
+class SubscriptionManager private constructor(val context: Context) {
+    companion object {
+        @Volatile
+        private var instance: SubscriptionManager? = null
+
+        operator fun invoke(context: Context): SubscriptionManager {
+            return instance ?: synchronized(this) {
+                instance ?: SubscriptionManager(context.applicationContext).also { instance = it }
+            }
+        }
+    }
+
     private val prefs = context.getSharedPreferences("subscription_manager_prefs", Context.MODE_PRIVATE)
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -104,18 +115,22 @@ class SubscriptionManager(val context: Context) {
             
             // Try decoding base64 if it's base64
             var decodedStr = bodyStr
+            var decodeFailed = false
             try {
                 if (!bodyStr.contains("://")) {
                     val decodedBytes = Base64.decode(bodyStr.trim(), Base64.DEFAULT)
                     decodedStr = String(decodedBytes)
                 }
-            } catch (e: Exception) {}
-            
+            } catch (e: Exception) {
+                decodeFailed = true
+                android.util.Log.w("SubscriptionManager", "Base64 decode failed for subscription ${sub.id}: ${e.message}")
+            }
+
             val lines = decodedStr.split("\n", "\r").map { it.trim() }.filter { it.isNotEmpty() }
             val validLines = lines.filter { it.startsWith("vless://") || it.startsWith("vmess://") || it.startsWith("trojan://") }
-            
+
             if (validLines.isEmpty()) {
-                return@withContext Pair(false, "No valid configs found in subscription")
+                return@withContext Pair(false, if (decodeFailed) "Failed to decode subscription content" else "No valid configs found in subscription")
             }
             
             // Remove old nodes for this sub

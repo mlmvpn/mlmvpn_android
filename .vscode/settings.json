@@ -1,0 +1,4 @@
+{
+    "java.configuration.updateBuildConfiguration": "interactive",
+    "gemini-cli.debug.logging.enabled": true
+}

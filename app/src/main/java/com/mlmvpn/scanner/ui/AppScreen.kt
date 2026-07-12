@@ -34,8 +34,21 @@ import kotlinx.coroutines.launch
 fun AppScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val hasCloudAccounts = remember { com.mlmvpn.scanner.data.CloudManager(context).accounts.isNotEmpty() }
-    var activeTab by remember { mutableStateOf(if (hasCloudAccounts) "nodes" else "cloud") }
-    var previousTab by remember { mutableStateOf(if (hasCloudAccounts) "nodes" else "cloud") }
+    // After an engine-conflict restart the game boost left a "pending_boost_mode" flag -- land the
+    // user straight back on the Game tab so they can retap Start on a clean process.
+    val hasPendingBoost = remember {
+        context.getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
+            .getString("pending_boost_mode", null) != null
+    }
+    val homeTab = if (hasPendingBoost) "game" else if (hasCloudAccounts) "nodes" else "cloud"
+    var activeTab by remember { mutableStateOf(homeTab) }
+    // Real back stack (was a single `previousTab`, which broke nested navigation: opening a screen
+    // FROM another overlay clobbered the one shared "previous" value, so the parent's back button
+    // went dead). openTab() pushes; goBack() pops; bottom-nav switches reset the stack.
+    val navStack = remember { mutableStateListOf<String>() }
+    fun openTab(tab: String) { if (activeTab != tab) { navStack.add(activeTab); activeTab = tab } }
+    fun goBack() { activeTab = navStack.removeLastOrNull() ?: homeTab }
+    fun switchTab(tab: String) { navStack.clear(); activeTab = tab }
     var activeModal by remember { mutableStateOf<String?>(null) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -52,18 +65,37 @@ fun AppScreen() {
 
     val isRunning by com.mlmvpn.scanner.MyVpnService.isRunningFlow.collectAsState()
     var isConnecting by remember { mutableStateOf(false) }
+
+    // WireGuard trial usage tracker — driven by the REAL VPN state at the app level, so the
+    // countdown / server tick / auto-stop-on-expiry run no matter which tab started the trial
+    // (Game tab or WireGuard tab) and no matter which tab is currently open. On first launch we
+    // also refresh status once so a trial obtained in a previous session is picked up.
+    val trialPhase by com.mlmvpn.scanner.MyVpnService.connectionPhaseFlow.collectAsState()
+    val trialNodeId by com.mlmvpn.scanner.MyVpnService.connectedNodeIdFlow.collectAsState()
+    val trialConnected = trialPhase == com.mlmvpn.scanner.MyVpnService.Phase.CONNECTED &&
+        trialNodeId == "game_uae_trial"
+    LaunchedEffect(Unit) { UaeTrialEngine.checkStatus(context) }
+    LaunchedEffect(trialConnected) {
+        if (trialConnected) UaeTrialEngine.startUsageTracker(context)
+        else UaeTrialEngine.stopUsageTracker(context)
+    }
     
     val defaultPrefs = remember { androidx.preference.PreferenceManager.getDefaultSharedPreferences(context) }
     var showRealtimeTraffic by remember { mutableStateOf(defaultPrefs.getBoolean("show_realtime_traffic", true)) }
     var enableWarpTab by remember { mutableStateOf(defaultPrefs.getBoolean("enable_warp_tab", false)) }
+    var enableWireguardTab by remember { mutableStateOf(defaultPrefs.getBoolean("enable_wireguard_tab", false)) }
     var enableGameTab by remember { mutableStateOf(defaultPrefs.getBoolean("enable_game_tab", false)) }
 
     LaunchedEffect(activeTab, activeModal) {
         if (activeModal == null) {
             showRealtimeTraffic = defaultPrefs.getBoolean("show_realtime_traffic", true)
             enableWarpTab = defaultPrefs.getBoolean("enable_warp_tab", false)
+            enableWireguardTab = defaultPrefs.getBoolean("enable_wireguard_tab", false)
             enableGameTab = defaultPrefs.getBoolean("enable_game_tab", false)
             if (!enableWarpTab && activeTab == "warp") {
+                activeTab = "nodes"
+            }
+            if (!enableWireguardTab && activeTab == "wireguard") {
                 activeTab = "nodes"
             }
             if (!enableGameTab && activeTab == "game") {
@@ -163,13 +195,14 @@ fun AppScreen() {
                 }
                 Divider(color = borderColor)
                 Spacer(modifier = Modifier.height(16.dp))
-                CustomDrawerItem(icon = Icons.Default.Settings, text = stringResource(R.string.drawer_settings), onClick = { scope.launch { drawerState.close() }; previousTab = activeTab; activeTab = "settings" })
-                CustomDrawerItem(icon = Icons.Default.DataUsage, text = stringResource(R.string.drawer_usage), onClick = { scope.launch { drawerState.close() }; previousTab = activeTab; activeTab = "usage" })
-                CustomDrawerItem(icon = Icons.Default.LocationOn, text = stringResource(R.string.drawer_fixed_ip), onClick = { scope.launch { drawerState.close() }; previousTab = activeTab; activeTab = "fixed_ip" })
-                CustomDrawerItem(icon = Icons.Default.Dns, text = stringResource(R.string.drawer_workers_list), onClick = { scope.launch { drawerState.close() }; previousTab = activeTab; activeTab = "workers_list" })
-                CustomDrawerItem(icon = Icons.Default.Link, text = stringResource(R.string.subgen_drawer_menu), onClick = { scope.launch { drawerState.close() }; previousTab = activeTab; activeTab = "sublink" })
-                CustomDrawerItem(icon = Icons.Default.Book, text = stringResource(R.string.drawer_tutorial), onClick = { scope.launch { drawerState.close() }; previousTab = activeTab; activeTab = "tutorial" })
-                CustomDrawerItem(icon = Icons.Default.Info, text = stringResource(R.string.drawer_about), onClick = { scope.launch { drawerState.close() }; previousTab = activeTab; activeTab = "about" })
+                CustomDrawerItem(icon = Icons.Default.Settings, text = stringResource(R.string.drawer_settings), onClick = { scope.launch { drawerState.close() }; openTab("settings") })
+                CustomDrawerItem(icon = Icons.Default.DataUsage, text = stringResource(R.string.drawer_usage), onClick = { scope.launch { drawerState.close() }; openTab("usage") })
+                CustomDrawerItem(icon = Icons.Default.LocationOn, text = stringResource(R.string.drawer_fixed_ip), onClick = { scope.launch { drawerState.close() }; openTab("fixed_ip") })
+                CustomDrawerItem(icon = Icons.Default.Dns, text = stringResource(R.string.drawer_workers_list), onClick = { scope.launch { drawerState.close() }; openTab("workers_list") })
+                CustomDrawerItem(icon = Icons.Default.Link, text = stringResource(R.string.subgen_drawer_menu), onClick = { scope.launch { drawerState.close() }; openTab("sublink") })
+                CustomDrawerItem(icon = Icons.Default.CloudUpload, text = "Deno Panel", onClick = { scope.launch { drawerState.close() }; openTab("deno") })
+                CustomDrawerItem(icon = Icons.Default.Book, text = stringResource(R.string.drawer_tutorial), onClick = { scope.launch { drawerState.close() }; openTab("tutorial") })
+                CustomDrawerItem(icon = Icons.Default.Info, text = stringResource(R.string.drawer_about), onClick = { scope.launch { drawerState.close() }; openTab("about") })
                 
                 Spacer(modifier = Modifier.weight(1f))
                 Divider(color = com.mlmvpn.scanner.emergency.EmergencyColors.GoogleRed.copy(alpha = 0.3f))
@@ -240,7 +273,7 @@ fun AppScreen() {
                 }
                 if (visitedTabs.contains("cloud")) {
                     Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "cloud") 0.dp else 10000.dp)) {
-                        CloudTab(onNavigateToScanner = { activeTab = "scanner" })
+                        CloudTab(onNavigateToScanner = { openTab("scanner") })
                     }
                 }
                 if (visitedTabs.contains("scanner")) {
@@ -253,53 +286,66 @@ fun AppScreen() {
                         WarpTab()
                     }
                 }
+                if (visitedTabs.contains("wireguard")) {
+                    Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "wireguard") 0.dp else 10000.dp)) {
+                        WireguardTab()
+                    }
+                }
                 if (visitedTabs.contains("sublink")) {
                     Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "sublink") 0.dp else 10000.dp)) {
                         com.mlmvpn.scanner.engines.subgenerator.SubLinkScreen(
                             cloudManager = androidx.compose.runtime.remember { com.mlmvpn.scanner.data.CloudManager(context) },
                             nodeManager = androidx.compose.runtime.remember { com.mlmvpn.scanner.data.NodeManager(context) },
-                            onNavigateToCloud = { activeTab = "cloud" }
+                            onNavigateToCloud = { switchTab("cloud") }
+                        )
+                    }
+                }
+                if (visitedTabs.contains("deno")) {
+                    Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "deno") 0.dp else 10000.dp)) {
+                        com.mlmvpn.scanner.engines.deno.DenoPanelScreen(
+                            nodeManager = androidx.compose.runtime.remember { com.mlmvpn.scanner.data.NodeManager(context) },
+                            onDismiss = { goBack() }
                         )
                     }
                 }
                 if (visitedTabs.contains("game")) {
                     Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "game") 0.dp else 10000.dp)) {
-                        GameTab()
+                        GameTab(onNavigateToCloud = { switchTab("cloud") })
                     }
                 }
                 if (visitedTabs.contains("settings")) {
                     Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "settings") 0.dp else 10000.dp)) {
-                        SettingsModal(onDismiss = { activeTab = previousTab }, onOpenVpnSettings = { previousTab = activeTab; activeTab = "vpn_settings" })
+                        SettingsModal(onDismiss = { goBack() }, onOpenVpnSettings = { openTab("vpn_settings") })
                     }
                 }
                 if (visitedTabs.contains("vpn_settings")) {
                     Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "vpn_settings") 0.dp else 10000.dp)) {
-                        VpnSettingsScreen(onDismiss = { activeTab = previousTab })
+                        VpnSettingsScreen(onDismiss = { goBack() })
                     }
                 }
                 if (visitedTabs.contains("usage")) {
                     Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "usage") 0.dp else 10000.dp)) {
-                        UsageModal(onDismiss = { activeTab = previousTab })
+                        UsageModal(onDismiss = { goBack() })
                     }
                 }
                 if (visitedTabs.contains("tutorial")) {
                     Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "tutorial") 0.dp else 10000.dp)) {
-                        HelpCenterScreen(onDismiss = { activeTab = previousTab })
+                        HelpCenterScreen(onDismiss = { goBack() })
                     }
                 }
                 if (visitedTabs.contains("about")) {
                     Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "about") 0.dp else 10000.dp)) {
-                        AboutScreen(onDismiss = { activeTab = previousTab })
+                        AboutScreen(onDismiss = { goBack() })
                     }
                 }
                 if (visitedTabs.contains("fixed_ip")) {
                     Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "fixed_ip") 0.dp else 10000.dp)) {
-                        FixedIpScreen(onDismiss = { activeTab = previousTab })
+                        FixedIpScreen(onDismiss = { goBack() })
                     }
                 }
                 if (visitedTabs.contains("workers_list")) {
                     Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "workers_list") 0.dp else 10000.dp)) {
-                        WorkersListModal(onDismiss = { activeTab = previousTab })
+                        WorkersListModal(onDismiss = { goBack() })
                     }
                 }
             }
@@ -327,14 +373,14 @@ fun AppScreen() {
                         icon = Icons.Default.Radar,
                         text = stringResource(R.string.nav_scanner),
                         isActive = activeTab == "scanner",
-                        onClick = { activeTab = "scanner" },
+                        onClick = { switchTab("scanner") },
                         activeColor = primaryColor
                     )
                     CustomNavItem(
                         icon = Icons.Default.Cloud,
                         text = stringResource(R.string.nav_cloud),
                         isActive = activeTab == "cloud",
-                        onClick = { activeTab = "cloud" },
+                        onClick = { switchTab("cloud") },
                         activeColor = primaryColor
                     )
                     if (enableWarpTab) {
@@ -342,8 +388,17 @@ fun AppScreen() {
                             icon = Icons.Default.Public,
                             text = stringResource(R.string.nav_warp),
                             isActive = activeTab == "warp",
-                            onClick = { activeTab = "warp" },
+                            onClick = { switchTab("warp") },
                             activeColor = Color(0xFF81C995)
+                        )
+                    }
+                    if (enableWireguardTab) {
+                        CustomNavItem(
+                            icon = Icons.Default.Security,
+                            text = stringResource(R.string.nav_wireguard),
+                            isActive = activeTab == "wireguard",
+                            onClick = { switchTab("wireguard") },
+                            activeColor = Color(0xFF00E676)
                         )
                     }
                     if (enableGameTab) {
@@ -351,7 +406,7 @@ fun AppScreen() {
                             icon = Icons.Default.VideogameAsset,
                             text = stringResource(R.string.nav_game),
                             isActive = activeTab == "game",
-                            onClick = { activeTab = "game" },
+                            onClick = { switchTab("game") },
                             activeColor = Color(0xFF00E676)
                         )
                     }
@@ -359,7 +414,7 @@ fun AppScreen() {
                         icon = Icons.Default.Shield,
                         text = stringResource(R.string.nav_nodes),
                         isActive = activeTab == "nodes",
-                        onClick = { activeTab = "nodes" },
+                        onClick = { switchTab("nodes") },
                         activeColor = primaryColor
                     )
                 }
@@ -395,6 +450,7 @@ fun SettingsModal(onDismiss: () -> Unit, onOpenVpnSettings: () -> Unit = {}) {
     var showRealtimeTraffic by remember { mutableStateOf(defaultPrefs.getBoolean("show_realtime_traffic", true)) }
     var enableUsageTracking by remember { mutableStateOf(defaultPrefs.getBoolean("enable_usage_tracking", true)) }
     var enableWarpTab by remember { mutableStateOf(defaultPrefs.getBoolean("enable_warp_tab", false)) }
+    var enableWireguardTab by remember { mutableStateOf(defaultPrefs.getBoolean("enable_wireguard_tab", false)) }
     var enableGameTab by remember { mutableStateOf(defaultPrefs.getBoolean("enable_game_tab", false)) }
 
     var screenOffTimeout by remember { mutableStateOf(defaultPrefs.getString("screen_off_timeout", "0") ?: "0") }
@@ -433,7 +489,11 @@ fun SettingsModal(onDismiss: () -> Unit, onOpenVpnSettings: () -> Unit = {}) {
         shape = RoundedCornerShape(0.dp),
         color = bgColor
     ) {
-        Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+        // bottom = 100.dp clears the floating bottom nav (≈78dp) so pinned buttons / the end of the
+        // scroll area never hide under it. Matches the app-wide 100dp nav-clearance convention; the
+        // root already handles the system nav bar via systemBarsPadding(), so this is a fixed,
+        // version-independent value that looks identical on Android <15 and 15/16.
+        Column(modifier = Modifier.fillMaxSize().padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 100.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 16.dp)) {
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = textColor)
@@ -518,6 +578,16 @@ fun SettingsModal(onDismiss: () -> Unit, onOpenVpnSettings: () -> Unit = {}) {
                         Text(stringResource(R.string.settings_warp_tab_desc), color = Color.Gray, fontSize = 11.sp)
                     }
                     Switch(checked = enableWarpTab, onCheckedChange = { enableWarpTab = it }, colors = switchColors)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.settings_enable_wireguard_tab), color = textColor, fontSize = 14.sp)
+                        Text(stringResource(R.string.settings_enable_wireguard_tab_desc), color = Color.Gray, fontSize = 11.sp)
+                    }
+                    Switch(checked = enableWireguardTab, onCheckedChange = { enableWireguardTab = it }, colors = switchColors)
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -627,6 +697,7 @@ fun SettingsModal(onDismiss: () -> Unit, onOpenVpnSettings: () -> Unit = {}) {
                             .putBoolean("show_realtime_traffic", showRealtimeTraffic)
                             .putBoolean("enable_usage_tracking", enableUsageTracking)
                             .putBoolean("enable_warp_tab", enableWarpTab)
+                            .putBoolean("enable_wireguard_tab", enableWireguardTab)
                             .putBoolean("enable_game_tab", enableGameTab)
                             .putString("screen_off_timeout", screenOffTimeout).apply()
                         
@@ -648,7 +719,6 @@ fun SettingsModal(onDismiss: () -> Unit, onOpenVpnSettings: () -> Unit = {}) {
                         Text(stringResource(R.string.common_save), color = primaryColor, fontWeight = FontWeight.Bold)
                     }
                 }
-                Spacer(modifier = Modifier.height(100.dp))
         }
     }
 }
@@ -743,7 +813,11 @@ fun UsageModal(onDismiss: () -> Unit) {
         shape = RoundedCornerShape(0.dp),
         color = bgColor
     ) {
-        Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+        // bottom = 100.dp clears the floating bottom nav (≈78dp) so pinned buttons / the end of the
+        // scroll area never hide under it. Matches the app-wide 100dp nav-clearance convention; the
+        // root already handles the system nav bar via systemBarsPadding(), so this is a fixed,
+        // version-independent value that looks identical on Android <15 and 15/16.
+        Column(modifier = Modifier.fillMaxSize().padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 100.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 16.dp)) {
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = textColor)

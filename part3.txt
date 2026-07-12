@@ -1,0 +1,50 @@
+﻿Created At: 2026-07-09T16:44:06Z
+Completed At: 2026-07-09T16:44:07Z
+File Path: `file:///g:/ip%20scanner/android/app/src/main/java/com/mlmvpn/scanner/utils/SingboxJsonGenerator.kt`
+Total Lines: 690
+Total Bytes: 22955
+Showing lines 650 to 690
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+650:             })
+651:         }
+652: 
+653:         if (gameSubnets.contains("0.0.0.0/0")) {
+654:             routeRules.put(JSONObject().apply {
+655:                 put("network", "tcp")
+656:                 put("outbound", "proxy")
+657:             })
+658:             routeRules.put(JSONObject().apply {
+659:                 put("network", "udp")
+660:                 put("outbound", "proxy")
+661:             })
+662:         } else if (gameSubnets.isNotEmpty()) {
+663:             val cidrArray = JSONArray()
+664:             gameSubnets.forEach { cidrArray.put(it) }
+665:             routeRules.put(JSONObject().apply {
+666:                 put("ip_cidr", cidrArray)
+667:                 put("outbound", "proxy")
+668:             })
+669:         }
+670: 
+671:         // Everything else direct
+672:         routeRules.put(JSONObject().apply {
+673:             put("network", "tcp")
+674:             put("outbound", "direct")
+675:         })
+676:         routeRules.put(JSONObject().apply {
+677:             put("network", "udp")
+678:             put("outbound", "direct")
+679:         })
+680: 
+681:         json.put("route", JSONObject().apply {
+682:             put("auto_detect_interface", true)
+683:             put("rules", routeRules)
+684:         })
+685: 
+686:         return json.toString()
+687:     }
+688: }
+689: 
+690: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+

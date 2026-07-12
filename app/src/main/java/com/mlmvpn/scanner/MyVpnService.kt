@@ -9,6 +9,11 @@ import kotlinx.coroutines.sync.withLock
 
 class MyVpnService : VpnService() {
 
+    // High-level connection phase for UI (esp. the WARP tab, which spends time auto-testing several
+    // transports before one connects). IDLE -> CONNECTING -> CONNECTED / FAILED. Nested directly in
+    // the class (not the companion) so it resolves as MyVpnService.Phase from callers.
+    enum class Phase { IDLE, CONNECTING, CONNECTED, FAILED }
+
     private var vpnInterface: ParcelFileDescriptor? = null
     private var currentEngine: com.mlmvpn.core.warp.IVpnEngine? = null
     private var wakeLock: android.os.PowerManager.WakeLock? = null
@@ -22,6 +27,7 @@ class MyVpnService : VpnService() {
     companion object {
         val isRunningFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
         val connectedNodeIdFlow = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+        val connectionPhaseFlow = kotlinx.coroutines.flow.MutableStateFlow(Phase.IDLE)
         val xrayMutex = kotlinx.coroutines.sync.Mutex()
         var isRunning: Boolean
             get() = isRunningFlow.value
@@ -37,17 +43,36 @@ class MyVpnService : VpnService() {
         instance = this
     }
 
+    /**
+     * WARP auto-connect failed (no transport worked on this network). Fully reset connection state so
+     * the header shield / main connect button don't stay stuck "green": isRunning was set true at
+     * start-of-connect, and the TUN interface may already be up from setupVpn(). Leaves the phase at
+     * FAILED (so the WARP tab can show its "no route found" message) then stops the service.
+     */
+    private fun failWarpConnection() {
+        connectionPhaseFlow.value = Phase.FAILED
+        isRunning = false
+        connectedNodeId = null
+        try { currentEngine?.stop() } catch (_: Exception) {}
+        currentEngine = null
+        try { vpnInterface?.close() } catch (_: Exception) {}
+        vpnInterface = null
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         if (action == "STOP") {
             connectedNodeId = null
             isRunning = false
+            connectionPhaseFlow.value = Phase.IDLE
             getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putBoolean("game_mode_active", false).apply()
             serviceScope.launch {
                 xrayMutex.withLock {
                     try { currentEngine?.stop() } catch (e: Exception) {}
                     currentEngine = null
+                    try { com.mlmvpn.core.warp.WarpEngineSelector.stopAll() } catch (e: Exception) {}
                     try { vpnInterface?.close() } catch (e: Exception) {}
                     vpnInterface = null
                 }
@@ -60,6 +85,7 @@ class MyVpnService : VpnService() {
         
         isRunning = true
         connectedNodeId = intent?.getStringExtra("NODE_ID")
+        connectionPhaseFlow.value = Phase.CONNECTING
         
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
@@ -91,32 +117,113 @@ class MyVpnService : VpnService() {
             Log.d("MyVpnService", "Game Mode activated for: $gamePackage")
         }
 
+        // Dedicated DNS (per-user ECS-steering worker) — passed by GameBoosterManager for game
+        // TUNNEL/HYBRID connects. Absent (null/empty) for every non-game connect, so the config
+        // generators fall back to their exact prior behaviour.
+        val dedicatedDnsUrl = intent.getStringExtra("DEDICATED_DNS_URL")?.takeIf { it.isNotEmpty() }
+        val dedicatedDnsDomains: List<String> = intent.getStringExtra("DEDICATED_DNS_DOMAINS")?.let { raw ->
+            try {
+                val arr = org.json.JSONArray(raw)
+                (0 until arr.length()).map { arr.getString(it) }
+            } catch (e: Exception) { emptyList() }
+        } ?: emptyList()
+
         val sharedPrefs = getSharedPreferences("app_settings", android.content.Context.MODE_PRIVATE)
         val backendDns = sharedPrefs.getString("backend_dns", "1.1.1.1") ?: "1.1.1.1"
         val allowLan = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this).getBoolean("allow_lan", false)
         val vpnPrefs = getSharedPreferences("vpn_routing_prefs", android.content.Context.MODE_PRIVATE)
-        val mtu = vpnPrefs.getInt("vpn_mtu", 1280)
+        val mtu = vpnPrefs.getInt("vpn_mtu", 1420)
 
         serviceScope.launch {
             xrayMutex.withLock {
                 // Clean up any existing connection before starting a new one
-                try { currentEngine?.stop() } catch (e: Exception) {}
-                currentEngine = null
                 try { vpnInterface?.close() } catch (e: Exception) {}
                 vpnInterface = null
 
+                kotlinx.coroutines.delay(300)
+
+                try { currentEngine?.stop() } catch (e: Exception) {}
+                currentEngine = null
+
                 val isRawJsonConfig = nodeUri.startsWith("{") && nodeUri.contains("\"inbounds\"") && nodeUri.contains("\"outbounds\"")
+                val isAmneziaWg = nodeUri.trim().startsWith("[Interface]")
                 var fd = 0
-                if (!isProxyMode) {
+                if (!isProxyMode && !isAmneziaWg) {
                     setupVpn(backendDns, mtu, isRawJsonConfig)
                     fd = vpnInterface?.fd ?: 0
+                }
+                // Surface the TUN state in the in-app GST log so we can tell whether the
+                // system VPN actually came up (fd>0 => VPN key icon; fd=0 => no TUN).
+                com.mlmvpn.scanner.engines.gst.GstLog.i(
+                    "MyVpnService",
+                    "connect: proxyMode=$isProxyMode, vpnFd=$fd " +
+                        (if (isProxyMode) "(proxy mode ON → no TUN by design)"
+                         else if (fd == 0) "(TUN establish FAILED → no VPN key icon; check VPN permission)"
+                         else "(TUN established OK → VPN key icon should appear)")
+                )
+
+                // Force Xray to initialize its outbounds (specifically Wireguard) by sending a dummy TCP packet.
+                // This prevents a known bug in xray-core where lazy-initializing the Wireguard outbound 
+                // during shutdown causes a fatal nil pointer panic.
+                if (fd > 0 && !isProxyMode && !isAmneziaWg) {
+                    serviceScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            kotlinx.coroutines.delay(1000) // wait for Xray to fully bind
+                            val url = java.net.URL("http://1.1.1.1") // Public IP ensures it routes to 'proxy' outbound
+                            val conn = url.openConnection() as java.net.HttpURLConnection
+                            conn.connectTimeout = 2000
+                            conn.readTimeout = 2000
+                            conn.responseCode // This will force traffic through the TUN into Xray
+                        } catch (e: Exception) {
+                            // We don't care if it fails, we just want the packet to hit the Xray outbound
+                        }
+                    }
                 }
 
                 try {
                     val isWarp = nodeUri.startsWith("{") && org.json.JSONObject(nodeUri).optString("type") == "warp"
                     val isGst = nodeUri.startsWith("{") && org.json.JSONObject(nodeUri).optString("type") == "gst"
+                    val isHybrid = nodeUri.startsWith("{") && org.json.JSONObject(nodeUri).optString("type") == "hybrid"
+                    val isMasque = nodeUri.startsWith("{") && org.json.JSONObject(nodeUri).optString("type") == "masque"
 
-                    if (isWarp) {
+                    if (isMasque) {
+                        // WARP (hidden): run the smart multi-engine selector. It tries each engine
+                        // (usque/MASQUE, warp-plus/scanned-WireGuard), verifies real data flows through
+                        // its local SOCKS with a live health-check, and returns whichever WORKS on this
+                        // network. Xray then just captures TUN and forwards to the winner's SOCKS port.
+                        connectionPhaseFlow.value = Phase.CONNECTING
+                        Log.d("MyVpnService", "WARP config detected -- selecting best engine (MASQUE/warp-plus)")
+                        val selection = com.mlmvpn.core.warp.WarpEngineSelector.selectBest(this@MyVpnService)
+                        if (selection == null) {
+                            Log.e("MyVpnService", "No WARP engine passed health-check on this network")
+                            com.mlmvpn.core.warp.WarpEngineSelector.stopAll()
+                            failWarpConnection()
+                        } else {
+                            Log.d("MyVpnService", "WARP engine selected: ${selection.engineId} on SOCKS ${selection.socksPort}")
+                            val masqueJson = org.json.JSONObject(nodeUri)
+                            val dedUrl = masqueJson.optString("dedicatedDnsUrl").takeIf { it.isNotEmpty() }
+                            val dedDomains = masqueJson.optJSONArray("dedicatedDnsDomains")?.let { arr ->
+                                (0 until arr.length()).map { arr.getString(it) }
+                            } ?: emptyList()
+                            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateMasqueConfig(
+                                localPort = localPort,
+                                socksPort = selection.socksPort,
+                                mtu = mtu,
+                                dedicatedDnsUrl = dedUrl,
+                                dedicatedDnsDomains = dedDomains
+                            )
+                            currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd)
+                            val success = currentEngine?.start(this@MyVpnService, jsonConfig, localPort) ?: false
+                            if (!success) {
+                                Log.e("MyVpnService", "Failed to start WARP Xray route")
+                                com.mlmvpn.core.warp.WarpEngineSelector.stopAll()
+                                failWarpConnection()
+                            } else {
+                                Log.d("MyVpnService", "WARP Engine Started Successfully (${selection.engineId})!")
+                                connectionPhaseFlow.value = Phase.CONNECTED
+                            }
+                        }
+                    } else if (isWarp) {
                         currentEngine = com.mlmvpn.core.warp.WarpXrayInjector(fd)
                         val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
                         if (!success) {
@@ -124,6 +231,7 @@ class MyVpnService : VpnService() {
                             stopSelf()
                         } else {
                             Log.d("MyVpnService", "WARP Engine Started Successfully!")
+                            connectionPhaseFlow.value = Phase.CONNECTED
                         }
                     } else if (isGst) {
                         currentEngine = com.mlmvpn.scanner.engines.gst.GstCompositeEngine(fd)
@@ -133,6 +241,59 @@ class MyVpnService : VpnService() {
                             stopSelf()
                         } else {
                             Log.d("MyVpnService", "GST Engine Started Successfully!")
+                            connectionPhaseFlow.value = Phase.CONNECTED
+                        }
+                    } else if (isHybrid) {
+                        // Hybrid Routing (Phase 6): TCP (login/API) via a VLESS/Trojan tunnel,
+                        // UDP (real gameplay) via WARP -- both baked into a single Xray config
+                        // with two outbounds, so one engine instance handles both.
+                        Log.d("MyVpnService", "Hybrid Routing config detected (TCP via tunnel, UDP via WARP)")
+                        try {
+                            val hybridJson = org.json.JSONObject(nodeUri)
+                            val tunnelUri = hybridJson.getString("tunnelUri")
+                            val warpParams = hybridJson.getJSONObject("warp")
+                            val tunnelConfig = com.mlmvpn.scanner.utils.VpnConfig.parseUri(tunnelUri)
+                            if (tunnelConfig == null) {
+                                Log.e("MyVpnService", "Hybrid: failed to parse tunnel URI")
+                                stopSelf()
+                            } else {
+                                val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(
+                                    config = tunnelConfig,
+                                    localPort = localPort,
+                                    backendDns = backendDns,
+                                    allowLan = allowLan,
+                                    includeTun = true,
+                                    mtu = mtu,
+                                    useFragment = false,
+                                    gameMode = true,
+                                    warpHybrid = warpParams,
+                                    dedicatedDnsUrl = dedicatedDnsUrl,
+                                    dedicatedDnsDomains = dedicatedDnsDomains
+                                )
+                                currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd)
+                                val success = currentEngine?.start(this@MyVpnService, jsonConfig, localPort) ?: false
+                                if (!success) {
+                                    Log.e("MyVpnService", "Failed to start Hybrid engine")
+                                    stopSelf()
+                                } else {
+                                    Log.d("MyVpnService", "Hybrid Engine Started Successfully!")
+                                    connectionPhaseFlow.value = Phase.CONNECTED
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("MyVpnService", "Failed to build Hybrid config", e)
+                            stopSelf()
+                        }
+                    } else if (isAmneziaWg) {
+                        Log.d("MyVpnService", "AmneziaWG Config detected")
+                        currentEngine = com.mlmvpn.core.warp.AmneziaWgInjector(fd)
+                        val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
+                        if (!success) {
+                            Log.e("MyVpnService", "Failed to start AmneziaWG engine")
+                            stopSelf()
+                        } else {
+                            Log.d("MyVpnService", "AmneziaWG Engine Started Successfully!")
+                            connectionPhaseFlow.value = Phase.CONNECTED
                         }
                     } else if (nodeUri.startsWith("{") && nodeUri.contains("\"inbounds\"") && nodeUri.contains("\"outbounds\"")) {
                         Log.d("MyVpnService", "Raw JSON Config detected (${nodeUri.length} chars)")
@@ -143,10 +304,11 @@ class MyVpnService : VpnService() {
                                 val jsonObj = org.json.JSONObject(nodeUri)
                                 val inbounds = jsonObj.getJSONArray("inbounds")
                                 
-                                // Check if tun inbound already exists
+                                // Check if tun inbound already exists (Xray uses protocol: tun, Singbox uses type: tun)
                                 var hasTun = false
                                 for (i in 0 until inbounds.length()) {
-                                    if (inbounds.getJSONObject(i).optString("protocol") == "tun") {
+                                    val ib = inbounds.getJSONObject(i)
+                                    if (ib.optString("protocol") == "tun" || ib.optString("type") == "tun") {
                                         hasTun = true
                                         break
                                     }
@@ -188,13 +350,16 @@ class MyVpnService : VpnService() {
                             nodeUri
                         }
                         
+                        
                         currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd)
+                        
                         val success = currentEngine?.start(this@MyVpnService, finalConfig, localPort) ?: false
                         if (!success) {
                             Log.e("MyVpnService", "Failed to start JSON engine")
                             stopSelf()
                         } else {
                             Log.d("MyVpnService", "JSON Engine Started Successfully!")
+                            connectionPhaseFlow.value = Phase.CONNECTED
                         }
                     } else {
                         val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(nodeUri)
@@ -228,14 +393,16 @@ class MyVpnService : VpnService() {
                         }
 
                         val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(
-                            config = config, 
-                            localPort = localPort, 
-                            backendDns = backendDns, 
-                            allowLan = allowLan, 
-                            includeTun = true, 
-                            mtu = mtu, 
+                            config = config,
+                            localPort = localPort,
+                            backendDns = backendDns,
+                            allowLan = allowLan,
+                            includeTun = true,
+                            mtu = mtu,
                             useFragment = false,
-                            gameMode = isGameMode
+                            gameMode = isGameMode,
+                            dedicatedDnsUrl = dedicatedDnsUrl,
+                            dedicatedDnsDomains = dedicatedDnsDomains
                         )
                         Log.d("MyVpnService", "Xray JSON config generated (${jsonConfig.length} chars)")
                         
@@ -246,6 +413,7 @@ class MyVpnService : VpnService() {
                             stopSelf()
                         } else {
                             Log.d("MyVpnService", "VLESS Engine Started Successfully!" + if (isSniConfig) " [via RSTA SNI Spoof]" else "")
+                            connectionPhaseFlow.value = Phase.CONNECTED
                         }
                     }
                 } catch (e: Exception) {
@@ -258,7 +426,7 @@ class MyVpnService : VpnService() {
         return START_STICKY
     }
 
-    private fun setupVpn(backendDns: String = "1.1.1.1", mtu: Int = 1280, isRawJsonConfig: Boolean = false) {
+    private fun setupVpn(backendDns: String = "1.1.1.1", mtu: Int = 1420, isRawJsonConfig: Boolean = false) {
         if (vpnInterface != null) return
 
         try {
@@ -352,6 +520,7 @@ class MyVpnService : VpnService() {
         connectedNodeId = null
         isRunningFlow.value = false
         connectedNodeIdFlow.value = null
+        if (connectionPhaseFlow.value != Phase.FAILED) connectionPhaseFlow.value = Phase.IDLE
         try {
             getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putBoolean("game_mode_active", false).apply()
@@ -360,13 +529,20 @@ class MyVpnService : VpnService() {
         serviceScope.launch {
             xrayMutex.withLock {
                 try {
-                    currentEngine?.stop()
-                } catch (e: Exception) {}
-                currentEngine = null
-                try {
+                    // Close TUN interface first to stop packet flow into Xray
                     vpnInterface?.close()
                 } catch (e: Exception) {}
                 vpnInterface = null
+
+                // Wait for Xray to drain its internal queues
+                kotlinx.coroutines.delay(300)
+
+                try {
+                    currentEngine?.stop()
+                } catch (e: Exception) {}
+                currentEngine = null
+                
+                try { com.mlmvpn.core.warp.WarpEngineSelector.stopAll() } catch (e: Exception) {}
             }
         }
         
@@ -374,9 +550,11 @@ class MyVpnService : VpnService() {
             screenReceiver?.let { unregisterReceiver(it) }
         } catch (e: Exception) {}
         screenReceiver = null
-        
+
         disconnectJob?.cancel()
         autoSwitchJob?.cancel()
+        trafficMonitorJob?.cancel()
+        stressTestJob?.cancel()
         
         try {
             if (wakeLock?.isHeld == true) {
@@ -397,8 +575,14 @@ class MyVpnService : VpnService() {
                 .putLong("session_tx", 0L)
                 .apply()
 
+            val isGameTrial = connectedNodeId == "game_uae_trial"
             var lastRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
             var lastTx = android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
+            
+            // Fallback for devices where UDP getUidRxBytes is broken (e.g., Xiaomi/MTK)
+            var lastTotalRx = android.net.TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
+            var lastTotalTx = android.net.TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+
             var sessionRx = 0L
             var sessionTx = 0L
 
@@ -408,9 +592,20 @@ class MyVpnService : VpnService() {
 
                     val currentRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
                     val currentTx = android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
+                    val currentTotalRx = android.net.TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
+                    val currentTotalTx = android.net.TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
 
-                    val rxDelta = if (currentRx > lastRx) currentRx - lastRx else 0L
-                    val txDelta = if (currentTx > lastTx) currentTx - lastTx else 0L
+                    var rxDelta = if (currentRx > lastRx) currentRx - lastRx else 0L
+                    var txDelta = if (currentTx > lastTx) currentTx - lastTx else 0L
+
+                    // If UID traffic is 0 (due to unconnected UDP sockets bug in xray-core WireGuard)
+                    // we fallback to device-wide traffic divided by 2 (since VPN double-counts TUN + Wi-Fi)
+                    if (isGameTrial && rxDelta == 0L && txDelta == 0L) {
+                        val totalRxDelta = if (currentTotalRx > lastTotalRx) currentTotalRx - lastTotalRx else 0L
+                        val totalTxDelta = if (currentTotalTx > lastTotalTx) currentTotalTx - lastTotalTx else 0L
+                        rxDelta = totalRxDelta / 2
+                        txDelta = totalTxDelta / 2
+                    }
 
                     sessionRx += rxDelta
                     sessionTx += txDelta
@@ -426,13 +621,26 @@ class MyVpnService : VpnService() {
 
                     lastRx = currentRx
                     lastTx = currentTx
+                    lastTotalRx = currentTotalRx
+                    lastTotalTx = currentTotalTx
                 }
             } finally {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                     val currentRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
                     val currentTx = android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
-                    val rxDelta = if (currentRx > lastRx) currentRx - lastRx else 0L
-                    val txDelta = if (currentTx > lastTx) currentTx - lastTx else 0L
+                    val currentTotalRx = android.net.TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
+                    val currentTotalTx = android.net.TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+                    
+                    var rxDelta = if (currentRx > lastRx) currentRx - lastRx else 0L
+                    var txDelta = if (currentTx > lastTx) currentTx - lastTx else 0L
+                    
+                    if (isGameTrial && rxDelta == 0L && txDelta == 0L) {
+                        val totalRxDelta = if (currentTotalRx > lastTotalRx) currentTotalRx - lastTotalRx else 0L
+                        val totalTxDelta = if (currentTotalTx > lastTotalTx) currentTotalTx - lastTotalTx else 0L
+                        rxDelta = totalRxDelta / 2
+                        txDelta = totalTxDelta / 2
+                    }
+                    
                     sessionRx += rxDelta
                     sessionTx += txDelta
                     sessionPrefs.edit()

@@ -27,7 +27,7 @@ class EmergencyInterceptor(private val context: Context) : Interceptor {
             val proxyUrl = "https://mlm-proxy.vercel.app/api?url=$encodedUrl".toHttpUrlOrNull()
 
             if (proxyUrl != null) {
-                android.util.Log.d("EmergencyInterceptor", "ðŸ”¥ PROXY ACTIVE: Redirecting ${request.method} $originalUrlString -> $proxyUrl")
+                android.util.Log.d("EmergencyInterceptor", "🔥 PROXY ACTIVE: Redirecting ${request.method} $originalUrlString -> $proxyUrl")
                 // Vercel edge proxy forwards methods, headers and body automatically
                 val newRequest = request.newBuilder()
                     .url(proxyUrl)
@@ -35,7 +35,7 @@ class EmergencyInterceptor(private val context: Context) : Interceptor {
                 return chain.proceed(newRequest)
             }
         } else if (isEmergency) {
-            android.util.Log.d("EmergencyInterceptor", "âš¡ PROXY BYPASS: Direct ${request.method} ${request.url}")
+            android.util.Log.d("EmergencyInterceptor", "⚡ PROXY BYPASS: Direct ${request.method} ${request.url}")
         }
 
         return chain.proceed(request)

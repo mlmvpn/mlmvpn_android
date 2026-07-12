@@ -269,12 +269,12 @@ fun getHelpArticlesFa(): List<HelpArticle> {
                 **حالت اول: برای یک کاربر خاص (مثلاً user1) - روش پیشنهادی**
                 ۱. در تب ابری، بخش تنظیمات NHN، به لیست کاربران بروید.
                 ۲. روی آیکون مداد ✏️ (ویرایش) کنار نام کاربر کلیک کنید.
-                ۳. آی‌پی کشور مورد نظر (مثلاً آمریکا) را در فیلد جدیدِ **«آی‌پی ثابت اختصاصی کاربر (Proxy IP)»** قرار دهید و ذخیره کنید.
+                ۳. آی‌پی کشور مورد نظر (مثلاً آمریکا) را در فیلد جدیدِ **«آی‌پی ثابت اختصاصی کاربر (Proxy IP)�** قرار دهید و ذخیره کنید.
                 *نتیجه:* با این کار، هم آدرس اولیه کانفیگ و هم تونل خروجی این کاربر روی آی‌پی آمریکا قفل می‌شود.
                 
                 **حالت دوم: برای کل پنل (همه کاربران به صورت پیش‌فرض)**
                 اگر می‌خواهید همه کاربران پنل آی‌پی ثابت آمریکا را داشته باشند:
-                ۱. در تنظیمات شبکه NHN، فیلد **«ریلی اختصاصی (Custom Relay)»** را با آی‌پی آمریکا پر کنید. (این فیلد لوکیشن خروجی وورکر را به اجبار به آمریکا می‌فرستد).
+                ۱. در تنظیمات شبکه NHN، فیلد **«ریلی اختصاصی (Custom Relay)�** را با آی‌پی آمریکا پر کنید. (این فیلد لوکیشن خروجی وورکر را به اجبار به آمریکا می‌فرستد).
                 ۲. فیلد **«آی‌پی ثابت کل پنل / فرگمنت»** را هم با همان آی‌پی پر کنید. (این فیلد آدرسِ خامِ کانفیگی که دریافت می‌کنید را آمریکا می‌کند).
                 
                 **⚠️ قدم بسیار مهم (استقرار مجدد):**
@@ -518,12 +518,12 @@ fun getHelpArticlesFa(): List<HelpArticle> {
                 
                 اگر به دنبال دور زدن فیلترینگ با بالاترین سرعت و پایداری ممکن هستید، سیستم SNI یکی از بهترین روش‌هاست. برای استفاده از این قابلیت، مراحل ساده‌ی زیر را به ترتیب انجام دهید:
                 
-                ۱. **ورود به بخش اضطراری:** از منوی اصلی اپلیکیشن، گزینه «اضطراری سوم (SNI)» را انتخاب کنید.
+                ۱. **ورود به بخش اضطراری:** از منوی اصلی اپلیکیشن، گزینه «اضطراری سوم (SNI)� را انتخاب کنید.
                 ۲. **اسکن و اتصال اولیه:** در بالای صفحه روی آیکون وای‌فای (اسکن/پینگ) کلیک کنید تا بهترین مسیرها بررسی شوند. سپس دکمه بزرگ «اتصال» را لمس کنید تا موتور ضد فیلتر در پس‌زمینه فعال شود.
                 ۳. **بازگشت به تب اتصال:** از این صفحه خارج شده و به تب اصلی نرم‌افزار (تب اتصال) برگردید.
-                ۴. **افزودن کانفیگ‌های SNI:** در بالای صفحه، روی دکمه «افزودن (+ )» کلیک کرده و گزینه «افزودن کانفیگ SNI» را انتخاب کنید.
+                ۴. **افزودن کانفیگ‌های SNI:** در بالای صفحه، روی دکمه «افزودن (+ )� کلیک کرده و گزینه «افزودن کانفیگ SNI� را انتخاب کنید.
                 ۵. **تعیین تعداد:** در پنجره باز شده، تعداد کانفیگ‌هایی که می‌خواهید بسازید را انتخاب کنید (توصیه می‌کنیم روی حداکثر مقدار تنظیم کنید) و دکمه افزودن را بزنید.
-                ۶. **تست و اتصال نهایی:** حالا به تب «نودها» بروید و **حتماً فقط از دکمه «تست دیلی (Delay)» استفاده کنید**. در این بخش فرقی نمی‌کند چه عدد دیلی به شما بدهد، این تست صرفاً برای تشخیص متصل بودن کانفیگ‌هاست. اما پیشنهاد می‌شود موردی که عدد کمتری دارد را انتخاب کنید (بی‌تاثیر نیست). پس از سبز شدن دیلی، به آن متصل شوید.
+                ۶. **تست و اتصال نهایی:** حالا به تب «نودها» بروید و **حتماً فقط از دکمه «تست دیلی (Delay)� استفاده کنید**. در این بخش فرقی نمی‌کند چه عدد دیلی به شما بدهد، این تست صرفاً برای تشخیص متصل بودن کانفیگ‌هاست. اما پیشنهاد می‌شود موردی که عدد کمتری دارد را انتخاب کنید (بی‌تاثیر نیست). پس از سبز شدن دیلی، به آن متصل شوید.
                 
                 ✅ **تبریک می‌گوییم! اینترنت شما فضایی شد 😍**
             """.trimIndent()
@@ -540,7 +540,7 @@ fun getHelpArticlesFa(): List<HelpArticle> {
                 **مراحل ساخت لینک ساب:**
                 ۱. ابتدا از منوی کشویی سمت راست (همبرگری)، گزینه **«ساخت لینک ساب»** را انتخاب کنید.
                 ۲. اگر حساب کلادفلر متصل نباشد، باید آن را در تب ابری متصل کنید.
-                ۳. در اولین ورود، روی دکمه **«راه‌اندازی سیستم (Deploy)»** کلیک کنید. سیستم به صورت خودکار یک وورکر فوق‌سریع برای شما در کلادفلر می‌سازد و فضای ذخیره‌سازی ابری (KV) را تنظیم می‌کند.
+                ۳. در اولین ورود، روی دکمه **«راه‌اندازی سیستم (Deploy)�** کلیک کنید. سیستم به صورت خودکار یک وورکر فوق‌سریع برای شما در کلادفلر می‌سازد و فضای ذخیره‌سازی ابری (KV) را تنظیم می‌کند.
                 ۴. پس از آماده‌سازی، روی دکمه (+) کلیک کنید تا یک لینک جدید بسازید.
                 ۵. در صفحه جدید، نام لینک، یک عبارت دلخواه کوتاه (Slug) برای آدرس، و گروهی از کانفیگ‌هایتان (مثلاً BPB یا VLESS) که می‌خواهید در این لینک قرار گیرند را انتخاب کنید.
                 ۶. می‌توانید برای لینک **تاریخ انقضا (به روز)** تعیین کنید. اگر این فیلد را پر کنید، پس از گذشت آن زمان، لینک از کار می‌افتد و کاربر به جای کانفیگ، یک پیام «منقضی شده است» دریافت می‌کند.
@@ -548,7 +548,34 @@ fun getHelpArticlesFa(): List<HelpArticle> {
                 
                 **قابلیت آپدیت خودکار و آمارگیری:**
                 - هر زمان که کانفیگ‌های آن گروه در اپلیکیشن شما تغییر کنند (مثلاً اسکن جدید بزنید)، لینک ساب به صورت **خودکار در پس‌زمینه** آپدیت می‌شود و دوستان شما با زدن دکمه آپدیت در V2rayNG، کانفیگ‌های جدید را دریافت می‌کنند.
-                - با کلیک روی دکمه **«آمار (📊)»** در کنار هر لینک، می‌توانید ببینید تا الان چند بار آن لینک توسط دیگران آپدیت و دانلود شده است!
+                - با کلیک روی دکمه **«آمار (📊)�** در کنار هر لینک، می‌توانید ببینید تا الان چند بار آن لینک توسط دیگران آپدیت و دانلود شده است!
+            """.trimIndent()
+        ),
+        HelpArticle(
+            id = "dedicated_dns",
+            title = "۱۶. DNS اختصاصی برای کاهش پینگ بازی",
+            icon = Icons.Default.Dns,
+            content = """
+                **DNS اختصاصی چیست؟**
+                یک سرور DNS کاملاً شخصی که روی حساب Cloudflare **خودتان** (نه حساب مشترک) مستقر می‌شود و فقط مال شماست. کاملاً رایگان و بدون نیاز به کارت بانکی جهانی.
+
+                **چرا به حساب Cloudflare نیاز دارد؟**
+                این DNS باید روی زیرساخت شخصی خودتان اجرا شود تا هیچ‌کس دیگری از آن استفاده نکند و ترافیک/محدودیت آن فقط برای شما باشد � دقیقاً مثل پنل‌های EDG یا نهان که قبلاً مستقر کرده‌اید. برای همین ابتدا باید یک حساب Cloudflare را در **تب کلاد** وصل کنید.
+
+                **تفاوتش با DNS معمولی چیست؟**
+                یک DNS معمولی (مثل 1.1.1.1) فقط آدرس سرور بازی را برمی‌گرداند. اما این DNS اختصاصی با تکنیکی به نام **ECS (EDNS Client Subnet)** به سرور بالادست می‌گوید «انگار از منطقه X پرسیده می‌شود» تا نزدیک‌ترین و کم‌تاخیرترین سرور بازیِ آن منطقه را تحویل بگیرد. این یعنی بسته‌های بازی مسیر کوتاه‌تری طی می‌کنند و پینگ پایین می‌آید.
+
+                **حالت خودکار (Auto):**
+                برنامه چند منطقه را همزمان امتحان می‌کند، به سرورهای برگشتی واقعاً پینگ می‌زند، بهترین منطقه را انتخاب می‌کند و برای **هر بازی به‌صورت جداگانه** به خاطر می‌سپارد.
+
+                **حالت دستی (Manual):**
+                خودتان یک منطقه ثابت (مثلاً امارات یا ترکیه) را همیشه انتخاب می‌کنید.
+
+                **چرا امارات پیش‌فرض است؟**
+                معمولاً نزدیک‌ترین و کم‌تاخیرترین منطقه به کاربران ایرانی برای اکثر سرورهای بازی است؛ اگر مسیر بهتری پیدا نشود، امارات انتخاب می‌شود.
+
+                **نکته مهم:**
+                این قابلیت روی **همه‌ی حالت‌های بوست** (مستقیم، تونل، وارپ و هیبرید) و **همه‌ی بازی‌های موجود در لیست** به‌صورت خودکار اعمال می‌شود و نیازی به تنظیم جداگانه برای هر بازی ندارید. کافی است یک‌بار روی دکمه «فعال‌سازی DNS اختصاصی» در تب گیمینگ بزنید.
             """.trimIndent()
         )
     )
@@ -868,6 +895,33 @@ fun getHelpArticlesEn(): List<HelpArticle> {
                 - Whenever the configs in that group change (e.g. you run a new scan), the sub link will be updated **automatically in the background**. Your friends just need to tap Update in V2rayNG to get the new configs.
                 - By tapping the **"Stats (📊)"** button next to each link, you can see how many times that link has been updated and downloaded by others!
             """.trimIndent()
+        ),
+        HelpArticle(
+            id = "dedicated_dns",
+            title = "16. Dedicated DNS for Lower Game Ping",
+            icon = Icons.Default.Dns,
+            content = """
+                **What is Dedicated DNS?**
+                A fully private DNS resolver deployed on **your own** Cloudflare account (not a shared one), dedicated to you alone. Completely free, no international bank card required.
+
+                **Why does it need a Cloudflare account?**
+                It must run on your own infrastructure so no one else shares it and its traffic/quota is yours only � exactly like the EDG or Nahan panels you may have deployed before. So first connect a Cloudflare account in the **Cloud tab**.
+
+                **How is it different from a normal DNS?**
+                A normal DNS (like 1.1.1.1) just returns the game server address. This dedicated DNS uses a technique called **ECS (EDNS Client Subnet)** to tell the upstream resolver "answer as if I'm in region X," so it returns the closest, lowest-latency game server for that region. That means game packets travel a shorter path and ping drops.
+
+                **Auto mode:**
+                The app races several regions in parallel, actually pings the returned servers, picks the fastest region, and remembers it **separately for each game**.
+
+                **Manual mode:**
+                You pick one fixed region yourself (e.g. UAE or Turkey) and it's always used.
+
+                **Why is UAE the default?**
+                It's usually the closest, lowest-latency region to Iran-based players for most game servers; if no better route is found, UAE is chosen.
+
+                **Important:**
+                This applies automatically across **all boost modes** (Direct, Tunnel, WARP, Hybrid) and **every game in the list**, with no per-game setup. Just tap "Deploy Dedicated DNS" once in the Gaming tab.
+            """.trimIndent()
         )
     )
 }
@@ -981,7 +1035,20 @@ fun getFaqsFa(): List<FaqItem> = listOf(
     FaqItem("چرا در بخش NHN وقتی کاربر با حجم و زمان مشخص میسازم، کانفیگ خروجی کار نمیکند؟", "در آپدیت جدید 1.0.5 این مشکل حل شده."),
     FaqItem("ارور \"Invalid API Token\" یا کد ۹۱۰۳ برای چیست؟", "این ارور مربوط به اشتباه بودن یا منقضی شدن توکن کلودفلر شماست. حتماً توکن را مطابق آموزش ویدیوها مجدداً ساخته و در برنامه وارد کنید."),
     FaqItem("آیا امکان استفاده از قابلیت \"Per-app setting\" (انتخاب برنامه‌های خاص برای عبور از VPN) وجود دارد؟", "این قابلیت در برنامه وجود دارد به تنظیمات برنامه، تنظیمات vpn مراجعه بفرمایید."),
-    FaqItem("چرا در تلگرام یا اینستاگرام با وجود وصل بودن، لود شدن ویدیوها یا ربات‌ها کند است؟", "این موضوع معمولاً به دلیل تنظیمات DNS یا MTU است. در نسخه‌های جدید تلاش شده این مورد بهبود یابد، اما تعویض پروتکل (مثلاً از BPB به Edge یا برعکس) میتواند کمک کند.")
+    FaqItem("چرا در تلگرام یا اینستاگرام با وجود وصل بودن، لود شدن ویدیوها یا ربات‌ها کند است؟", "این موضوع معمولاً به دلیل تنظیمات DNS یا MTU است. در نسخه‌های جدید تلاش شده این مورد بهبود یابد، اما تعویض پروتکل (مثلاً از BPB به Edge یا برعکس) میتواند کمک کند."),
+
+    FaqItem("دکمه‌ی اتصال سریع در پنل بالای گوشی چطور کار می‌کند؟", "می‌توانید دکمه‌ی �mlmvpn� را از پنل تنظیمات سریع گوشی اضافه کنید (از بالای صفحه به پایین بکشید ← ویرایش/افزودن دکمه‌ها). با یک لمس، VPN روشن یا خاموش می‌شود؛ هنگام روشن‌شدن، تأخیر (delay) چند سرور اخیر شما گرفته شده و به سریع‌ترین وصل می‌شوید. تعداد سرورهایی که تست می‌شوند (پیش‌فرض ۲۰) را می‌توانید در تنظیمات ← تنظیمات VPN تغییر دهید. نکته: بار اول باید یک‌بار از داخل برنامه VPN را وصل کنید تا مجوز اتصال داده شود."),
+
+    // --- پنل Deno ---
+    FaqItem("پنل Deno چیست و چه فرقی با کلودفلر دارد؟", "Deno Deploy یک سرویس میزبانی رایگان است که برخلاف بعضی سرویس‌ها نیازی به کارت اعتباری ندارد. با پنل Deno کاملاً خودکار یک سرور اختصاصی برای خودتان می‌سازید. سرور هم VLESS و هم Trojan را روی دو بستر WebSocket و xHTTP پشتیبانی می‌کند. توجه مهم: Deno برای مصرف سنگین و دائمی مناسب نیست (به بخش «چرا سرور Deno سریع معلق می‌شود» مراجعه کنید)؛ بهترین کاربرد آن به‌عنوان گزینه‌ی سبک یا پشتیبان است و برای مصرف اصلی از پنل‌های Cloudflare (BPB/Edge/NHN) استفاده کنید."),
+    FaqItem("چطور توکن Deno بسازم؟ چرا توکن من نامعتبر است؟", "توکن باید حتماً از نوع Organization Access Token باشد و با ddo_ شروع شود. آن را از console.deno.com بخش Settings ← Organization tokens بسازید. توکن‌های شخصی که با ddp_ شروع می‌شوند کار نمی‌کنند. داخل پنل هم دکمه‌ای برای باز کردن مستقیم سایت گذاشته شده است. هشدار: این توکن به کل سازمان دسترسی دارد، آن را جایی منتشر نکنید."),
+    FaqItem("در پنل Deno خطای «مسدود / ۴۰۳» می‌گیرم. چرا؟", "سرور api.deno.com در ایران مسدود است. برنامه هم خودش را از تونل مستثنی می‌کند، پس قبل از ساختن سرور یا دیدن آمار باید ابتدا یک کانفیگ سالم دیگر (BPB/Edge/NHN یا یک سرور Deno قبلی که کار می‌کند) را وصل کنید تا درخواست از تونل عبور کند، سپس دوباره امتحان کنید."),
+    FaqItem("سرور Deno اول کار کند است یا وصل نمی‌شود.", "سرورهای رایگان Deno وقتی بی‌استفاده می‌مانند به خواب می‌روند (Cold Start) و سرورهای تازه‌ساخت هم چند دقیقه طول می‌کشد تا گواهی امنیتی‌شان آماده شود. به تست پینگ/تأخیر اکتفا نکنید؛ مستقیم Connect بزنید و چند ثانیه (برای سرور نو، چند دقیقه) صبر کنید."),
+    FaqItem("چرا سرور Deno خیلی سریع معلق می‌شود (Memory Time / Usage Exceeded)؟", "مهم‌ترین محدودیت Deno این است: هزینه بر اساس «مدت‌زمان باز ماندن اتصال» حساب می‌شود، نه حجم دیتا. چون VPN اتصال را ساعت‌ها باز نگه می‌دارد (حتی وقتی بیکار است)، این سقف خیلی زود پر می‌شود؛ حتی با چند صد مگابایت. توجه: کانفیگ xHTTP هم این مشکل را حل نمی‌کند (طبق تست، حتی کمی بدتر است). راهکارها: ۱) برنامه به‌طور خودکار اتصال بیکار را می‌بندد تا مصرف کم شود، پس وقتی نیاز ندارید VPN را خاموش کنید. ۲) چند اکانت Deno بسازید و بین آن‌ها جابجا شوید؛ این محدودیت برای هر اکانت جداست و هر ماه ریست می‌شود. ۳) مصرف سنگین را روی پنل‌های Cloudflare انجام دهید."),
+    FaqItem("تفاوت کانفیگ WS و xHTTP در پنل Deno چیست؟ کدام کم‌مصرف‌تر است؟", "هر دو از نظر محدودیت Memory Time تقریباً یکسان‌اند و هیچ‌کدام معجزه نمی‌کند (تست‌های ما نشان داد xHTTP کم‌مصرف‌تر نیست). تفاوت اصلی در سازگاری است: بعضی هسته‌ها/نسخه‌ها با WS بهتر کار می‌کنند و بعضی با xHTTP. هرکدام وصل شد و پایدارتر بود را استفاده کنید. دکمه‌ی «دریافت کانفیگ xHTTP� دو کانفیگ (یک VLESS و یک Trojan) روی پورت 443 می‌سازد."),
+    FaqItem("چرا آمار مصرف اکانت Deno با تأخیر است یا کمی با داشبورد فرق دارد؟", "آمار از سیستم Analytics رسمی خود Deno خوانده می‌شود که بین همه‌ی سرورها درست جمع می‌زند، اما چند دقیقه تأخیر دارد و ممکن است کمی کمتر از عدد داشبورد باشد (آمار تقریبی است، نه مبنای دقیق صورتحساب). اگر صفر دیدید: مطمئن شوید یک کانفیگ سالم وصل است (چون api.deno.com در ایران بسته است) و دکمه Refresh را بزنید. آمار همه‌ی سرورهای آن اکانت را نشان می‌دهد."),
+    FaqItem("آیا می‌توانم چند اکانت Deno اضافه کنم؟", "بله و شدیداً توصیه می‌شود. چون محدودیت مصرف برای هر اکانت جداست و ماهانه ریست می‌شود، با چند اکانت چند برابر ظرفیت می‌گیرید. در پنل چند اکانت با نام دلخواه اضافه کنید و بین آن‌ها جابجا شوید؛ آمار و سرورهای هر اکانت جداگانه است."),
+    FaqItem("کانفیگ Deno چه محدودیت‌های فنی دارد؟", "۱) فقط پورت 443 (TLS) پشتیبانی می‌شود. ۲) فقط ترافیک TCP (برای مرور وب و اکثر برنامه‌ها کافی است)؛ UDP/QUIC هنوز نه. ۳) تکنیک «آی‌پی تمیز» روی Deno جواب نمی‌دهد چون Deno روی شبکه‌ی اختصاصی کوچک خودش است (نه یک CDN بزرگ)؛ فقط از آدرس دامنه‌ی مستقیم استفاده کنید.")
 )
 
 fun getFaqsEn(): List<FaqItem> = listOf(
@@ -993,5 +1060,18 @@ fun getFaqsEn(): List<FaqItem> = listOf(
     FaqItem("Why doesn't the output config work when I create a user with specific volume/time in the NHN panel?", "This issue has been resolved in the new 1.0.5 update."),
     FaqItem("What does the \"Invalid API Token\" or code 9103 error mean?", "This error means your Cloudflare token is either incorrect or expired. Please recreate the token following the video tutorials and enter it again in the app."),
     FaqItem("Is there a \"Per-app proxy\" feature to select specific apps to bypass the VPN?", "Yes, this feature is available. Please go to App Settings > VPN Settings."),
-    FaqItem("Why is loading videos or bots slow in Telegram or Instagram even though I'm connected?", "This is usually due to DNS or MTU settings. We've tried to improve this in newer versions, but changing the protocol (e.g., from BPB to Edge or vice versa) can help.")
+    FaqItem("Why is loading videos or bots slow in Telegram or Instagram even though I'm connected?", "This is usually due to DNS or MTU settings. We've tried to improve this in newer versions, but changing the protocol (e.g., from BPB to Edge or vice versa) can help."),
+
+    FaqItem("How does the Quick Settings VPN tile work?", "You can add the 'mlmvpn' tile from your phone's Quick Settings panel (swipe down from the top → edit/add tiles). One tap toggles the VPN; when turning on, it delay-tests your most recent servers and connects to the fastest. You can change how many servers are tested (default 20) in Settings → VPN Settings. Note: the first time, connect once from inside the app to grant VPN permission."),
+
+    // --- Deno Panel ---
+    FaqItem("What is the Deno panel and how is it different from Cloudflare?", "Deno Deploy is a free hosting service that, unlike some providers, needs no credit card. The panel auto-creates your own dedicated server, which supports both VLESS and Trojan over WebSocket and xHTTP. Important: Deno is NOT suited for heavy, always-on use (see 'Why does my Deno server get suspended so fast'); it's best as a light/backup option � use the Cloudflare panels (BPB/Edge/NHN) for your main traffic."),
+    FaqItem("How do I create a Deno token? Why is my token invalid?", "The token must be an Organization Access Token and start with ddo_. Create it at console.deno.com under Settings → Organization tokens. Personal tokens (ddp_) will NOT work. The panel has a button that opens the site directly. Warning: this token grants access to your whole organization � never share it."),
+    FaqItem("I get a 'Forbidden / 403' error in the Deno panel. Why?", "api.deno.com is blocked in Iran, and the app excludes itself from the tunnel, so before creating a server or viewing stats you must first connect another working config (BPB/Edge/NHN or an existing working Deno server) so the request goes through the tunnel, then try again."),
+    FaqItem("My Deno server is slow at first or won't connect.", "Free Deno servers sleep when idle (cold start), and a brand-new server takes a few minutes for its TLS certificate to be issued. Don't rely on the ping/latency test � connect directly and wait a few seconds (a few minutes for a new server)."),
+    FaqItem("Why does my Deno server get suspended so fast (Memory Time / Usage Exceeded)?", "Deno's key limit: billing is based on how LONG a connection stays open, not on data volume. Since a VPN holds the connection open for hours (even while idle), this limit fills up very fast � even with a few hundred MB. Note: the xHTTP config does NOT fix this (our tests showed it's slightly worse). Solutions: 1) The app auto-closes idle connections to save usage, so turn the VPN off when not needed. 2) Create several Deno accounts and switch between them � the limit is per-account and resets monthly. 3) Do heavy traffic on the Cloudflare panels."),
+    FaqItem("WS vs xHTTP Deno config � which uses less?", "Both are about equal for the Memory Time limit and neither is a magic fix (our tests showed xHTTP is not lighter). The real difference is compatibility: some cores/versions work better with WS, others with xHTTP. Use whichever connects and is more stable. The 'Get xHTTP config' button creates two configs (one VLESS, one Trojan) on port 443."),
+    FaqItem("Why is my Deno usage delayed or slightly different from the dashboard?", "Usage is read from Deno's official Analytics API, which aggregates correctly across all servers but is delayed by a few minutes and may be a bit lower than the dashboard (it's approximate, not exact billing data). If you see zero, make sure a working config is connected (api.deno.com is blocked in Iran) and tap Refresh. It covers all servers on that account."),
+    FaqItem("Can I add multiple Deno accounts?", "Yes, and it's strongly recommended. Because the usage limit is per-account and resets monthly, several accounts give you several times the capacity. Add accounts with custom names in the panel and switch between them; usage and servers are separate per account."),
+    FaqItem("What are the technical limits of a Deno config?", "1) Only port 443 (TLS). 2) TCP traffic only (fine for web and most apps); UDP/QUIC not yet. 3) The 'clean IP' technique does NOT work on Deno because Deno runs on its own small dedicated network (not a big CDN) � just use the direct domain address.")
 )

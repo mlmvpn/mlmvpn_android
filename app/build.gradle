@@ -12,7 +12,7 @@ android {
         applicationId "com.mlmvpn.scanner"
         minSdk 24
         targetSdk 34
-        versionCode 54
+        versionCode 56
         versionName "1.0.8"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
@@ -32,7 +32,9 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
+            // R8: shrink unused library code (keeps all app code + native core).
+            // shrinkResources left off — res is tiny and dynamic lookups exist.
+            minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
@@ -44,6 +46,9 @@ android {
 
     kotlinOptions {
         jvmTarget = '17'
+        // libv2ray.aar (new) bundles okhttp compiled with a newer Kotlin metadata (2.2)
+        // than our compiler (1.9). This lets 1.9 read those classes instead of erroring.
+        freeCompilerArgs += ["-Xskip-metadata-version-check"]
     }
 
     buildFeatures {
@@ -59,6 +64,27 @@ android {
 dependencies {
 
     implementation 'com.google.code.gson:gson:2.10.1'
+    
+    constraints {
+        implementation("androidx.core:core-ktx") {
+            version { strictly("1.13.1") }
+            because("prevent amneziawg from pulling 1.17.0 which requires compileSdk 36")
+        }
+        implementation("androidx.core:core") {
+            version { strictly("1.13.1") }
+            because("prevent amneziawg from pulling 1.17.0 which requires compileSdk 36")
+        }
+        implementation("org.jetbrains.kotlin:kotlin-stdlib") {
+            version { strictly("1.9.22") }
+        }
+        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8") {
+            version { strictly("1.9.22") }
+        }
+        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7") {
+            version { strictly("1.9.22") }
+        }
+    }
+    
     // Core Android
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
@@ -89,6 +115,9 @@ dependencies {
     // Networking (OkHttp for Cloudflare API)
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
+    // Google Sign-In + OAuth token (for Apps Script REST API auto-deploy)
+    implementation 'com.google.android.gms:play-services-auth:21.2.0'
+
     // JSON parsing
     implementation 'org.json:json:20231013'
 
@@ -108,4 +137,8 @@ dependencies {
 
     // Xray/V2ray Core
     implementation files('libs/libv2ray.aar')
+    
+    // AmneziaWG Core
+    implementation 'com.zaneschepke:amneziawg-android:2.1.13'
+
 }

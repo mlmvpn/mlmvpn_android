@@ -31,7 +31,7 @@ import kotlinx.coroutines.withContext
 import java.util.UUID
 
 // ============================================================================
-// NahanSettingsScreen â€” Full-screen Dialog for Nahan Worker Configuration
+// NahanSettingsScreen — Full-screen Dialog for Nahan Worker Configuration
 // ============================================================================
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -106,7 +106,7 @@ fun NahanSettingsScreen(
             .fillMaxSize()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-                // â”€â”€ Header â”€â”€
+                // ── Header ──
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -154,7 +154,7 @@ fun NahanSettingsScreen(
 
                 Divider(color = BorderDark)
 
-                // â”€â”€ Content â”€â”€
+                // ── Content ──
                 if (isLoading) {
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -204,7 +204,7 @@ fun NahanSettingsScreen(
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(20.dp)
                     ) {
-                        // â”€â”€ Section 1: Basic Settings â”€â”€
+                        // ── Section 1: Basic Settings ──
                         Column(modifier = Modifier.fillMaxWidth().background(SurfaceDark, RoundedCornerShape(12.dp)).border(1.dp, BorderDark, RoundedCornerShape(12.dp)).padding(16.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Settings, contentDescription = null, tint = Primary, modifier = Modifier.size(20.dp))
@@ -279,7 +279,7 @@ fun NahanSettingsScreen(
 
                         Divider(color = BorderDark)
 
-                        // â”€â”€ Section 2: Network & Camouflage â”€â”€
+                        // ── Section 2: Network & Camouflage ──
                         NahanSectionHeader(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_network_camouflage), Icons.Default.Security)
 
                         // TLS Ports
@@ -387,7 +387,7 @@ fun NahanSettingsScreen(
 
                         Divider(color = BorderDark)
 
-                        // â”€â”€ Section 3: Multi-User Management â”€â”€
+                        // ── Section 3: Multi-User Management ──
                         NahanSectionHeader(androidx.compose.ui.res.stringResource(com.mlmvpn.scanner.R.string.nhn_user_management), Icons.Default.People)
 
                         Row(
@@ -509,7 +509,7 @@ fun NahanSettingsScreen(
                         Spacer(modifier = Modifier.height(100.dp))
                     }
 
-                    // â”€â”€ Save Button â”€â”€
+                    // ── Save Button ──
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -613,7 +613,7 @@ fun NahanSettingsScreen(
             }
         }
 
-    // â”€â”€ Add User Dialog â”€â”€
+    // ── Add User Dialog ──
     if (showAddUserDialog) {
         AddNahanUserDialog(
             onDismiss = { showAddUserDialog = false },
