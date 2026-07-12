@@ -180,7 +180,10 @@ object UaeTrialEngine {
 
             Result.success(trialConfig)
         } catch (e: Exception) {
-            _error.value = "خطا در اتصال به سرور: ${e.message}"
+            // SECURITY: never surface e.message here -- for a ConnectException it embeds the server
+            // IP:port ("Failed to connect to /1.2.3.4:3000"), which must never be shown to the user.
+            android.util.Log.d("UaeTrial", "createTrial network error (${e.javaClass.simpleName})")
+            _error.value = "اتصال به سرور برقرار نشد. اینترنت خود را بررسی کنید و دوباره تلاش کنید."
             _state.value = TrialState.ERROR
             Result.failure(e)
         }
