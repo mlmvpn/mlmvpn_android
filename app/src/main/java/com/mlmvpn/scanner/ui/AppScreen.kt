@@ -228,7 +228,9 @@ fun AppScreen() {
         drawerContent = {
             ModalDrawerSheet(
                 drawerContainerColor = surfaceColor,
-                modifier = Modifier.width(280.dp)
+                modifier = Modifier
+                    .width(280.dp)
+                    .verticalScroll(rememberScrollState())
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -254,7 +256,7 @@ fun AppScreen() {
                 CustomDrawerItem(icon = Icons.Default.Book, text = stringResource(R.string.drawer_tutorial), onClick = { scope.launch { drawerState.close() }; openTab("tutorial") })
                 CustomDrawerItem(icon = Icons.Default.Info, text = stringResource(R.string.drawer_about), onClick = { scope.launch { drawerState.close() }; openTab("about") })
                 
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.height(16.dp))
                 Divider(color = com.mlmvpn.scanner.emergency.EmergencyColors.GoogleRed.copy(alpha = 0.3f))
                 Spacer(modifier = Modifier.height(8.dp))
                 EmergencyDrawerItem(stringResource(R.string.drawer_emergency_1), Icons.Default.Warning, onClick = { scope.launch { drawerState.close() }; activeModal = "emergency_vercel" })
