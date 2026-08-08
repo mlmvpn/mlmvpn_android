@@ -43,42 +43,43 @@ class MyVpnService : VpnService() {
         instance = this
     }
 
-    /**
-     * WARP auto-connect failed (no transport worked on this network). Fully reset connection state so
-     * the header shield / main connect button don't stay stuck "green": isRunning was set true at
-     * start-of-connect, and the TUN interface may already be up from setupVpn(). Leaves the phase at
-     * FAILED (so the WARP tab can show its "no route found" message) then stops the service.
-     */
-    private fun failWarpConnection() {
-        connectionPhaseFlow.value = Phase.FAILED
-        isRunning = false
-        connectedNodeId = null
-        try { currentEngine?.stop() } catch (_: Exception) {}
-        currentEngine = null
-        try { vpnInterface?.close() } catch (_: Exception) {}
-        vpnInterface = null
-        stopSelf()
-    }
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         if (action == "STOP") {
             connectedNodeId = null
             isRunning = false
             connectionPhaseFlow.value = Phase.IDLE
+            // Aether's connect can sit waiting on a gateway scan for a minute or more while
+            // holding xrayMutex, so the teardown below would queue behind it. Signal it
+            // here, before contending for the lock, so the button responds immediately.
+            com.mlmvpn.core.aether.AetherTunEngine.requestAbort()
             getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putBoolean("game_mode_active", false).apply()
             serviceScope.launch {
                 xrayMutex.withLock {
                     try { currentEngine?.stop() } catch (e: Exception) {}
                     currentEngine = null
-                    try { com.mlmvpn.core.warp.WarpEngineSelector.stopAll() } catch (e: Exception) {}
                     try { vpnInterface?.close() } catch (e: Exception) {}
                     vpnInterface = null
                 }
                 trafficMonitorJob?.cancel()
                 stressTestJob?.cancel()
-                stopSelf()
+                // stopSelf(startId), NOT bare stopSelf().
+                //
+                // The teardown above runs behind xrayMutex and can take seconds (Aether kills
+                // an OS process and joins tun2proxy). A user who taps disconnect and then
+                // reconnects lands a new connect intent on THIS SAME service instance while
+                // we are still unwinding. Bare stopSelf() ignores that and destroys the
+                // service anyway; onDestroy() then takes the mutex the new connect just
+                // released and tears down the brand-new engine ~300ms after it started.
+                // Killing tun2proxy that soon after its native init races it and takes the
+                // whole process down (observed: "Zygote: Process ... exited cleanly (255)",
+                // no Java exception, no tombstone), which is what read as "connected, then
+                // the app crashed".
+                //
+                // stopSelf(startId) is the API for exactly this: it is a no-op if a newer
+                // start command has arrived, so a reconnect keeps the service alive.
+                stopSelf(startId)
             }
             return START_NOT_STICKY
         }
@@ -147,8 +148,23 @@ class MyVpnService : VpnService() {
 
                 val isRawJsonConfig = nodeUri.startsWith("{") && nodeUri.contains("\"inbounds\"") && nodeUri.contains("\"outbounds\"")
                 val isAmneziaWg = nodeUri.trim().startsWith("[Interface]")
+                // Aether establishes its TUN late, from inside AetherTunEngine, once the
+                // engine is actually carrying traffic — see the openTun callback there.
+                // Bringing the interface up here instead would blackhole the whole device
+                // for the duration of the gateway scan.
+                val isAetherCfg = nodeUri.startsWith("{") &&
+                    org.json.JSONObject(nodeUri).optString("type") ==
+                        com.mlmvpn.core.aether.AetherTunEngine.CONFIG_TYPE
+                // VPN Gate (OpenVPN): the openvpn3 core brings up its own VpnService, in its
+                // own :openvpn process. Establishing a TUN here as well would revoke the one
+                // it creates. Same arrangement as AmneziaWG above.
+                val isVpnGate = nodeUri.startsWith(
+                    com.mlmvpn.scanner.engines.vpngate.VpnGateEngine.URI_SCHEME)
+                // SoftEther's own SSL-VPN. Same arrangement: the vendored client owns the TUN.
+                val isSoftEther = nodeUri.startsWith(
+                    com.mlmvpn.scanner.engines.vpngate.SoftEtherEngine.URI_SCHEME)
                 var fd = 0
-                if (!isProxyMode && !isAmneziaWg) {
+                if (!isProxyMode && !isAmneziaWg && !isAetherCfg && !isVpnGate && !isSoftEther) {
                     setupVpn(backendDns, mtu, isRawJsonConfig)
                     fd = vpnInterface?.fd ?: 0
                 }
@@ -181,67 +197,92 @@ class MyVpnService : VpnService() {
                 }
 
                 try {
-                    val isWarp = nodeUri.startsWith("{") && org.json.JSONObject(nodeUri).optString("type") == "warp"
                     val isGst = nodeUri.startsWith("{") && org.json.JSONObject(nodeUri).optString("type") == "gst"
                     val isHybrid = nodeUri.startsWith("{") && org.json.JSONObject(nodeUri).optString("type") == "hybrid"
-                    val isMasque = nodeUri.startsWith("{") && org.json.JSONObject(nodeUri).optString("type") == "masque"
-
-                    if (isMasque) {
-                        // WARP (hidden): run the smart multi-engine selector. It tries each engine
-                        // (usque/MASQUE, warp-plus/scanned-WireGuard), verifies real data flows through
-                        // its local SOCKS with a live health-check, and returns whichever WORKS on this
-                        // network. Xray then just captures TUN and forwards to the winner's SOCKS port.
-                        connectionPhaseFlow.value = Phase.CONNECTING
-                        Log.d("MyVpnService", "WARP config detected -- selecting best engine (MASQUE/warp-plus)")
-                        val selection = com.mlmvpn.core.warp.WarpEngineSelector.selectBest(this@MyVpnService)
-                        if (selection == null) {
-                            Log.e("MyVpnService", "No WARP engine passed health-check on this network")
-                            com.mlmvpn.core.warp.WarpEngineSelector.stopAll()
-                            failWarpConnection()
-                        } else {
-                            Log.d("MyVpnService", "WARP engine selected: ${selection.engineId} on SOCKS ${selection.socksPort}")
-                            val masqueJson = org.json.JSONObject(nodeUri)
-                            val dedUrl = masqueJson.optString("dedicatedDnsUrl").takeIf { it.isNotEmpty() }
-                            val dedDomains = masqueJson.optJSONArray("dedicatedDnsDomains")?.let { arr ->
-                                (0 until arr.length()).map { arr.getString(it) }
-                            } ?: emptyList()
-                            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateMasqueConfig(
-                                localPort = localPort,
-                                socksPort = selection.socksPort,
-                                mtu = mtu,
-                                dedicatedDnsUrl = dedUrl,
-                                dedicatedDnsDomains = dedDomains
-                            )
-                            currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd)
-                            val success = currentEngine?.start(this@MyVpnService, jsonConfig, localPort) ?: false
-                            if (!success) {
-                                Log.e("MyVpnService", "Failed to start WARP Xray route")
-                                com.mlmvpn.core.warp.WarpEngineSelector.stopAll()
-                                failWarpConnection()
-                            } else {
-                                Log.d("MyVpnService", "WARP Engine Started Successfully (${selection.engineId})!")
-                                connectionPhaseFlow.value = Phase.CONNECTED
-                            }
-                        }
-                    } else if (isWarp) {
-                        currentEngine = com.mlmvpn.core.warp.WarpXrayInjector(fd)
+                    if (isAetherCfg) {
+                        // Full-device Aether tunnel: TUN → tun2proxy → the Aether process's
+                        // SOCKS5. Same shape as the GST branch below. No Xray in the path.
+                        //
+                        // Unlike every other branch here, the TUN is NOT up yet: the engine
+                        // opens it through this callback only after it has a working gateway,
+                        // so the device keeps normal connectivity throughout the scan.
+                        //
+                        // There is deliberately no proxy-mode branch: AetherScanService
+                        // already covers "just publish a SOCKS5 listener". This path exists
+                        // for the case the user actually asked for — the whole device routed
+                        // without a second app.
+                        currentEngine = com.mlmvpn.core.aether.AetherTunEngine(
+                            openTun = {
+                                setupVpn(backendDns, mtu, false)
+                                // Hand tun2proxy the RAW detached fd and drop our
+                                // ParcelFileDescriptor so the generic vpnInterface?.close()
+                                // cleanup paths don't double-close a fd tun2proxy now owns.
+                                val raw = try { vpnInterface?.detachFd() ?: 0 } catch (e: Exception) { 0 }
+                                vpnInterface = null
+                                com.mlmvpn.scanner.engines.gst.GstLog.i(
+                                    "MyVpnService", "Aether: TUN established late, fd=$raw")
+                                raw
+                            },
+                            mtu = mtu,
+                        )
                         val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
                         if (!success) {
-                            Log.e("MyVpnService", "Failed to start WARP engine")
+                            Log.e("MyVpnService", "Failed to start Aether engine (VPN mode)")
+                            try { currentEngine?.stop() } catch (_: Exception) {}
+                            currentEngine = null
+                            // Publish the terminal state explicitly. Without this the flow
+                            // stayed on CONNECTING and isRunning stayed true, so the UI sat
+                            // on "در حال اتصال…" forever — the reason a failed connect
+                            // appeared to say nothing at all. AetherTunEngine has already
+                            // put a specific reason on AetherEngine.state for the Aether
+                            // screen to show.
+                            connectionPhaseFlow.value = Phase.FAILED
+                            isRunning = false
+                            connectedNodeId = null
                             stopSelf()
                         } else {
-                            Log.d("MyVpnService", "WARP Engine Started Successfully!")
+                            Log.d("MyVpnService", "Aether Engine (full tunnel) started")
                             connectionPhaseFlow.value = Phase.CONNECTED
                         }
                     } else if (isGst) {
-                        currentEngine = com.mlmvpn.scanner.engines.gst.GstCompositeEngine(fd)
-                        val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
-                        if (!success) {
-                            Log.e("MyVpnService", "Failed to start GST engine")
+                        // Full-device GST tunnel, exactly like the reference mhrv-rs app:
+                        //   Proxy Mode  → GST core only (127.0.0.1 SOCKS5/HTTP listeners, no TUN).
+                        //   VPN Mode    → VpnService TUN → native tun2proxy → GST core SOCKS5.
+                        // No Xray in either path.
+                        if (isProxyMode) {
+                            Log.d("MyVpnService", "GST proxy-mode: SOCKS5/HTTP listeners only (no TUN)")
+                            currentEngine = com.mlmvpn.scanner.engines.gst.GstEngine()
+                            val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
+                            if (!success) {
+                                Log.e("MyVpnService", "Failed to start GST engine (proxy mode)")
+                                try { currentEngine?.stop() } catch (_: Exception) {}
+                                currentEngine = null
+                                stopSelf()
+                            } else {
+                                Log.d("MyVpnService", "GST Engine (proxy mode) started")
+                                connectionPhaseFlow.value = Phase.CONNECTED
+                            }
+                        } else if (fd <= 0) {
+                            Log.e("MyVpnService", "GST VPN-mode start aborted: no TUN fd (VPN permission?)")
                             stopSelf()
                         } else {
-                            Log.d("MyVpnService", "GST Engine Started Successfully!")
-                            connectionPhaseFlow.value = Phase.CONNECTED
+                            // Hand tun2proxy the RAW detached fd and relinquish our
+                            // ParcelFileDescriptor so the generic vpnInterface?.close()
+                            // cleanup paths don't double-close a fd tun2proxy now owns
+                            // (--close-fd-on-drop true).
+                            val rawFd = try { vpnInterface?.detachFd() ?: fd } catch (e: Exception) { fd }
+                            vpnInterface = null
+                            currentEngine = com.mlmvpn.scanner.engines.gst.GstTunEngine(rawFd, mtu)
+                            val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
+                            if (!success) {
+                                Log.e("MyVpnService", "Failed to start GST engine (VPN mode)")
+                                try { currentEngine?.stop() } catch (_: Exception) {}
+                                currentEngine = null
+                                stopSelf()
+                            } else {
+                                Log.d("MyVpnService", "GST Engine (full tunnel) started")
+                                connectionPhaseFlow.value = Phase.CONNECTED
+                            }
                         }
                     } else if (isHybrid) {
                         // Hybrid Routing (Phase 6): TCP (login/API) via a VLESS/Trojan tunnel,
@@ -284,12 +325,61 @@ class MyVpnService : VpnService() {
                             Log.e("MyVpnService", "Failed to build Hybrid config", e)
                             stopSelf()
                         }
+                    } else if (isSoftEther) {
+                        Log.d("MyVpnService", "SoftEther config detected")
+                        CrashReporter.note("engine start: SoftEther")
+                        autoSwitchJob?.cancel()
+                        currentEngine = com.mlmvpn.scanner.engines.vpngate.SoftEtherEngine()
+                        val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
+                        if (!success) {
+                            Log.e("MyVpnService", "Failed to start SoftEther engine")
+                            try { currentEngine?.stop() } catch (_: Exception) {}
+                            currentEngine = null
+                            connectionPhaseFlow.value = Phase.FAILED
+                            isRunning = false
+                            connectedNodeId = null
+                            stopSelf()
+                        } else {
+                            Log.d("MyVpnService", "SoftEther Engine Started Successfully!")
+                            connectionPhaseFlow.value = Phase.CONNECTED
+                        }
+                    } else if (isVpnGate) {
+                        Log.d("MyVpnService", "VPN Gate (OpenVPN) config detected")
+                        // Auto-switch re-dials whatever URI is stored for the node as a VLESS
+                        // config; it cannot do anything with a vpngate:// sentinel, so keep it
+                        // out of this session entirely.
+                        autoSwitchJob?.cancel()
+                        // openvpn3 driven directly, in this process, on this service's own TUN.
+                        // The AAR's own service wrapper is only a shell around the same core
+                        // and silently discards every diagnostic it produces.
+                        currentEngine = com.mlmvpn.scanner.engines.vpngate.Ovpn3Engine()
+                        val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
+                        if (!success) {
+                            Log.e("MyVpnService", "Failed to start VPN Gate engine")
+                            try { currentEngine?.stop() } catch (_: Exception) {}
+                            currentEngine = null
+                            connectionPhaseFlow.value = Phase.FAILED
+                            isRunning = false
+                            connectedNodeId = null
+                            stopSelf()
+                        } else {
+                            Log.d("MyVpnService", "VPN Gate Engine Started Successfully!")
+                            connectionPhaseFlow.value = Phase.CONNECTED
+                        }
                     } else if (isAmneziaWg) {
                         Log.d("MyVpnService", "AmneziaWG Config detected")
                         currentEngine = com.mlmvpn.core.warp.AmneziaWgInjector(fd)
                         val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
                         if (!success) {
                             Log.e("MyVpnService", "Failed to start AmneziaWG engine")
+                            // Defense in depth: don't leave a failed engine sitting in
+                            // currentEngine. stopSelf() below doesn't tear the service down
+                            // synchronously -- if the user retries before onDestroy() runs,
+                            // the next onStartCommand's cleanup would call stop() on this same
+                            // (already-failed) instance. AmneziaWgInjector now defends against
+                            // that itself, but clearing here too keeps every engine type safe.
+                            try { currentEngine?.stop() } catch (_: Exception) {}
+                            currentEngine = null
                             stopSelf()
                         } else {
                             Log.d("MyVpnService", "AmneziaWG Engine Started Successfully!")
@@ -297,6 +387,11 @@ class MyVpnService : VpnService() {
                         }
                     } else if (nodeUri.startsWith("{") && nodeUri.contains("\"inbounds\"") && nodeUri.contains("\"outbounds\"")) {
                         Log.d("MyVpnService", "Raw JSON Config detected (${nodeUri.length} chars)")
+                        val jsonRemarks = try { org.json.JSONObject(nodeUri).optString("remarks") } catch (_: Exception) { "" }
+                        com.mlmvpn.scanner.engines.gst.GstLog.i(
+                            "MyVpnService",
+                            "connecting JSON config (node=$connectedNodeId${if (jsonRemarks.isNotBlank()) ", remarks=$jsonRemarks" else ""}, proxyMode=$isProxyMode)"
+                        )
                         
                         // Inject tun inbound for VPN mode so Xray can capture tun traffic
                         val finalConfig = if (!isProxyMode && fd != 0) {
@@ -340,7 +435,34 @@ class MyVpnService : VpnService() {
                                     jsonObj.put("inbounds", newInbounds)
                                     Log.d("MyVpnService", "Injected tun inbound into JSON config for VPN mode")
                                 }
-                                
+
+                                // The app's connectivity/real-IP probe expects a local HTTP proxy on
+                                // localPort+10000 (default 20808). Raw JSON default configs only ship a
+                                // mixed inbound on 10808, so the probe hammered 127.0.0.1:20808 every
+                                // couple of seconds with an 8s-timeout ECONNREFUSED (visible in logcat as
+                                // "Failed to connect to /127.0.0.1:20808"). Inject the missing HTTP
+                                // inbound so the probe works and the spam stops.
+                                run {
+                                    val probePort = localPort + 10000
+                                    val cur = jsonObj.getJSONArray("inbounds")
+                                    var hasProbe = false
+                                    for (i in 0 until cur.length()) {
+                                        if (cur.getJSONObject(i).optInt("port") == probePort) { hasProbe = true; break }
+                                    }
+                                    if (!hasProbe) {
+                                        cur.put(org.json.JSONObject().apply {
+                                            put("tag", "http-probe-in")
+                                            put("port", probePort)
+                                            put("protocol", "http")
+                                            put("listen", "127.0.0.1")
+                                            put("settings", org.json.JSONObject())
+                                        })
+                                        com.mlmvpn.scanner.engines.gst.GstLog.i(
+                                            "MyVpnService", "Injected HTTP probe inbound on 127.0.0.1:$probePort"
+                                        )
+                                    }
+                                }
+
                                 jsonObj.toString()
                             } catch (e: Exception) {
                                 Log.e("MyVpnService", "Failed to inject tun inbound, using raw config", e)
@@ -355,9 +477,11 @@ class MyVpnService : VpnService() {
                         
                         val success = currentEngine?.start(this@MyVpnService, finalConfig, localPort) ?: false
                         if (!success) {
+                            com.mlmvpn.scanner.engines.gst.GstLog.e("MyVpnService", "JSON engine failed to start")
                             Log.e("MyVpnService", "Failed to start JSON engine")
                             stopSelf()
                         } else {
+                            com.mlmvpn.scanner.engines.gst.GstLog.i("MyVpnService", "JSON engine started — CONNECTED")
                             Log.d("MyVpnService", "JSON Engine Started Successfully!")
                             connectionPhaseFlow.value = Phase.CONNECTED
                         }
@@ -515,7 +639,13 @@ class MyVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        instance = null
+        // Teardown is where the native engines have historically aborted (double-closed fds,
+        // locks taken on destroyed objects), so mark both ends of it.
+        CrashReporter.note("MyVpnService.onDestroy begin engine=${currentEngine?.javaClass?.simpleName}")
+        // Only clear the static handle if it still points at us. Android can construct the
+        // next MyVpnService before the previous one's onDestroy() runs; an unconditional
+        // null here would blank out the LIVE instance and leave callers holding nothing.
+        if (instance === this) instance = null
         isRunning = false
         connectedNodeId = null
         isRunningFlow.value = false
@@ -541,8 +671,6 @@ class MyVpnService : VpnService() {
                     currentEngine?.stop()
                 } catch (e: Exception) {}
                 currentEngine = null
-                
-                try { com.mlmvpn.core.warp.WarpEngineSelector.stopAll() } catch (e: Exception) {}
             }
         }
         
@@ -574,6 +702,18 @@ class MyVpnService : VpnService() {
                 .putLong("session_rx", 0L)
                 .putLong("session_tx", 0L)
                 .apply()
+
+            // Don't start counting until the tunnel is actually up.
+            //
+            // The counters below are per-UID, and everything this app does runs under that
+            // UID — including the Aether engine's gateway scan, which probes up to ~2000
+            // endpoints before a tunnel exists. Sampling from service start made the
+            // on-screen up/down meter tick during the scan, showing "traffic" on a
+            // connection the user could plainly see was not established yet.
+            while (connectionPhaseFlow.value == Phase.CONNECTING) {
+                kotlinx.coroutines.delay(500)
+            }
+            if (connectionPhaseFlow.value != Phase.CONNECTED) return@launch
 
             val isGameTrial = connectedNodeId == "game_uae_trial"
             var lastRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()).coerceAtLeast(0L)

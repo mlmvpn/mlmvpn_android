@@ -15,11 +15,28 @@
 -keep class go.** { *; }
 -keep class libv2ray.** { *; }
 
+# --- OpenVPN core (VPN Gate feature) ----------------------------------------
+# net.openvpn.ovpn3.* is SWIG-generated: libovpn3.so instantiates these classes
+# and invokes their methods by name from C++, so R8 must not rename or drop any
+# of it. com.tim.** carries the service/config/Parcelable layer, plus
+# DefaultVpnServiceNotification which is constructed reflectively from the class
+# name string VpnGateEngine passes across to the :openvpn process.
+-keep class net.openvpn.ovpn3.** { *; }
+-keep class com.tim.** { *; }
+-dontwarn com.tim.**
+
 # --- JNI native methods -----------------------------------------------------
 -keepclasseswithmembernames class * { native <methods>; }
 
+# --- SoftEther SSL-VPN client (vendored kittoku.mvc, Apache-2.0) ------------
+# Kept unobfuscated so its stack traces stay readable: this is protocol code where the only
+# practical diagnosis is the exact class and line an exception came from, and R8's renaming
+# turned those into "h2.b.a(SourceFile:640)".
+-keep class kittoku.** { *; }
+
 # --- Reflection-friendly attributes (Gson, coroutines, generics) ------------
--keepattributes Signature, *Annotation*, InnerClasses, EnclosingMethod, Exceptions
+# SourceFile + LineNumberTable keep release stack traces usable.
+-keepattributes Signature, *Annotation*, InnerClasses, EnclosingMethod, Exceptions, SourceFile, LineNumberTable
 
 # --- Enums (valueOf / values used reflectively) -----------------------------
 -keepclassmembers enum * {

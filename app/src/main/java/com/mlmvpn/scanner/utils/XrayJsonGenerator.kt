@@ -21,7 +21,10 @@ object XrayJsonGenerator {
         
         // Log
         val log = JSONObject()
-        log.put("loglevel", "warning")
+        // "info" surfaces per-connection dialing / connection-opened / RTT lines in GoLog
+        // (needed to diagnose MLM/xhttp lag); "warning" hid them. Drop back to "warning"
+        // once diagnosis is done if the extra log volume is a concern.
+        log.put("loglevel", "info")
         json.put("log", log)
 
         // Inbounds
@@ -59,6 +62,17 @@ object XrayJsonGenerator {
             inbounds.put(tunInbound)
         }
         inbounds.put(socksInbound)
+        // HTTP inbound at localPort+10000 so the app's status probe (RealIpCheck) and the
+        // connected-country flag fetch have a proxy to reach the internet THROUGH the tunnel.
+        // Without it those requests hit a refused 127.0.0.1:<port+10000> (log spam) and the
+        // country flag above the connect button never appears -- the regression being fixed here.
+        val httpInbound = JSONObject().apply {
+            put("port", localPort + 10000)
+            put("listen", "127.0.0.1")
+            put("protocol", "http")
+            put("tag", "http")
+        }
+        inbounds.put(httpInbound)
         json.put("inbounds", inbounds)
 
         // Outbounds
@@ -115,7 +129,25 @@ object XrayJsonGenerator {
             wsSettings.put("headers", headers)
             streamSettings.put("wsSettings", wsSettings)
         }
-        
+
+        if (config.network == "xhttp") {
+            val xhttpSettings = JSONObject()
+            xhttpSettings.put("host", if (config.xhttpHost.isNotEmpty()) config.xhttpHost else config.wsHost)
+            xhttpSettings.put("path", if (config.xhttpPath.isNotEmpty()) config.xhttpPath else "/")
+            // Apply the packet-up tuning carried in the URI's ?extra={...}. The app previously
+            // dropped this entirely, so packet-up ran with conservative defaults. On xray 26.x the
+            // tuning object lives under the "extra" key of xhttpSettings, so pass it through as-is.
+            if (config.xhttpExtra.isNotEmpty()) {
+                try { xhttpSettings.put("extra", JSONObject(config.xhttpExtra)) } catch (e: Exception) { }
+            }
+            // Cloudflare buffers request bodies, so stream-up/stream-one hang (TLS handshake
+            // timeout to the destination). packet-up is the only reliable mode on CF Workers.
+            // Force it after the extra-merge so an "auto"/"mode" carried in extra can't override.
+            val mode = if (config.xhttpMode.isNotEmpty() && config.xhttpMode != "auto") config.xhttpMode else "packet-up"
+            xhttpSettings.put("mode", mode)
+            streamSettings.put("xhttpSettings", xhttpSettings)
+        }
+
         mainOutbound.put("streamSettings", streamSettings)
         mainOutbound.put("tag", "proxy")
         outbounds.put(mainOutbound)
@@ -132,17 +164,32 @@ object XrayJsonGenerator {
         // FakeDNS Configuration
         val dns = JSONObject()
         val servers = JSONArray()
-        
+        val isXhttp = config.network == "xhttp"
+
+        // For xhttp (MLM / CF-worker) configs, resolve everything EXCEPT the worker's own host
+        // through an encrypted DoH server that egresses via the proxy (see the remote-dns routing
+        // rule below). This closes the DNS leak where real-domain lookups previously went out over
+        // the user's real IP as plaintext UDP:53. Only xhttp is changed; ws/others are untouched.
+        if (isXhttp) {
+            servers.put(JSONObject().apply {
+                put("address", "https://8.8.8.8/dns-query")
+                put("tag", "remote-dns")
+            })
+        }
+
         val directDns = JSONObject()
         directDns.put("address", backendDns)
         val directDomains = JSONArray()
         val hosts = setOf(config.address, config.wsHost, config.sni).filter { it.isNotEmpty() }
         hosts.forEach { directDomains.put(it) }
         directDns.put("domains", directDomains)
+        // Restrict the direct resolver to the worker host only so it can't serve (and leak)
+        // general domains as a fallback — those must go through the DoH/proxy path.
+        if (isXhttp) directDns.put("skipFallback", true)
         servers.put(directDns)
-        
+
         servers.put("fakedns")
-        
+
         dns.put("servers", servers)
         json.put("dns", dns)
         
@@ -163,7 +210,19 @@ object XrayJsonGenerator {
             put("port", 53)
             put("outboundTag", "dns-out")
         })
-        // Route Xray's internal DNS queries to direct to avoid UDP drops over proxy
+        // xhttp only: send the DoH resolver's own traffic through the proxy so real-domain
+        // lookups are encrypted and tunneled (no DNS leak). DoH is HTTPS/443, so it never
+        // matches the port-53 direct rule below.
+        if (isXhttp) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("inboundTag", JSONArray().put("remote-dns"))
+                put("outboundTag", "proxy")
+            })
+        }
+        // Route Xray's internal DNS queries to direct to avoid UDP drops over proxy.
+        // (For xhttp this now only matches the worker-host bootstrap resolver; the general
+        // DoH resolver above is on 443 and goes through the proxy instead.)
         rules.put(JSONObject().apply {
             put("type", "field")
             put("port", 53)
@@ -178,6 +237,124 @@ object XrayJsonGenerator {
             put("tag", "dns-out")
         }
         outbounds.put(dnsOutbound)
+
+        return json.toString()
+    }
+
+    /**
+     * Anti-sanction split tunnel: ONLY [sanctionedDomains] egress through [config] (the user's
+     * Cloudflare VLESS worker → clean CF IP → sanction bypassed); every other domain goes
+     * `direct`. Uses plain SNI sniffing (NOT fakedns) so the direct leg resolves and connects
+     * to real destinations normally — the whole point of a split tunnel.
+     *
+     * MyVpnService injects the `tun` inbound for VPN mode; here we ship the socks + http-probe
+     * inbounds it expects. [sanctionedDomains] entries should be xray domain matchers
+     * (e.g. "domain:openai.com").
+     */
+    fun generateAntiSanctionConfig(
+        config: VpnConfig,
+        localPort: Int,
+        sanctionedDomains: List<String>,
+        backendDns: String = "1.1.1.1",
+        mtu: Int = 1280
+    ): String {
+        val json = JSONObject()
+        json.put("log", JSONObject().put("loglevel", "warning"))
+
+        // Inbounds (tun injected later by MyVpnService). Sniffing recovers the SNI/host so
+        // routing can match by domain.
+        val inbounds = JSONArray()
+        inbounds.put(JSONObject().apply {
+            put("port", localPort)
+            put("listen", "127.0.0.1")
+            put("protocol", "socks")
+            put("tag", "socks")
+            put("settings", JSONObject().apply { put("auth", "noauth"); put("udp", true) })
+            put("sniffing", JSONObject().apply {
+                put("enabled", true)
+                put("destOverride", JSONArray().put("http").put("tls").put("quic"))
+                put("routeOnly", false)
+            })
+        })
+        inbounds.put(JSONObject().apply {
+            put("port", localPort + 10000)
+            put("listen", "127.0.0.1")
+            put("protocol", "http")
+            put("tag", "http")
+        })
+        json.put("inbounds", inbounds)
+
+        // Outbounds: proxy (worker), direct (freedom w/ built-in DNS resolution), dns.
+        val outbounds = JSONArray()
+        val proxy = JSONObject()
+        proxy.put("protocol", "vless")
+        proxy.put("settings", JSONObject().put("vnext", JSONArray().put(JSONObject().apply {
+            put("address", config.address)
+            put("port", config.port)
+            put("users", JSONArray().put(JSONObject().apply {
+                put("id", config.uuid); put("encryption", "none")
+            }))
+        })))
+        val stream = JSONObject()
+        stream.put("network", config.network)
+        if (config.tls.isNotEmpty() && config.tls != "none") {
+            stream.put("security", config.tls)
+            stream.put("tlsSettings", JSONObject().apply {
+                put("serverName", if (config.sni.isNotEmpty()) config.sni else config.wsHost)
+                put("fingerprint", "chrome")
+                if (config.alpn.isNotEmpty()) put("alpn", JSONArray().apply { config.alpn.split(",").forEach { put(it) } })
+            })
+        }
+        if (config.network == "ws") {
+            stream.put("wsSettings", JSONObject().apply {
+                put("path", if (config.wsPath.isNotEmpty()) config.wsPath else "/")
+                val headers = JSONObject()
+                if (config.wsHost.isNotEmpty()) { put("host", config.wsHost); headers.put("Host", config.wsHost) }
+                headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                put("headers", headers)
+            })
+        }
+        proxy.put("streamSettings", stream)
+        proxy.put("tag", "proxy")
+        outbounds.put(proxy)
+        outbounds.put(JSONObject().apply {
+            put("protocol", "freedom")
+            put("tag", "direct")
+            put("settings", JSONObject().put("domainStrategy", "UseIP"))
+        })
+        outbounds.put(JSONObject().apply { put("protocol", "dns"); put("tag", "dns-out") })
+        json.put("outbounds", outbounds)
+
+        // Real DNS (no fakedns): resolve the worker host + everything else via backendDns.
+        json.put("dns", JSONObject().put("servers", JSONArray().put(backendDns)))
+
+        // Routing: DNS → dns-out; sanctioned domains → proxy; everything else → direct.
+        val rules = JSONArray()
+        rules.put(JSONObject().apply {
+            put("type", "field"); put("port", 53); put("outboundTag", "dns-out")
+        })
+        // The worker host itself must always be reached directly (never via itself).
+        val workerHosts = setOf(config.address, config.wsHost, config.sni).filter { it.isNotEmpty() }
+        if (workerHosts.isNotEmpty()) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("domain", JSONArray().apply { workerHosts.forEach { put("full:$it") } })
+                put("outboundTag", "direct")
+            })
+        }
+        if (sanctionedDomains.isNotEmpty()) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("domain", JSONArray().apply { sanctionedDomains.forEach { put(it) } })
+                put("outboundTag", "proxy")
+            })
+        }
+        rules.put(JSONObject().apply {
+            put("type", "field"); put("network", "tcp,udp"); put("outboundTag", "direct")
+        })
+        json.put("routing", JSONObject().apply {
+            put("domainStrategy", "AsIs"); put("rules", rules)
+        })
 
         return json.toString()
     }
@@ -408,75 +585,6 @@ object XrayJsonGenerator {
 
     // Cloudflare WARP well-known peer public key.
     private const val WARP_PUBLIC_KEY = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuMdxHkJfChtBg="
-
-    /**
-     * MASQUE / WARP-forward config: a tun + socks inbound whose traffic is
-     * forwarded to an already-running upstream SOCKS proxy (e.g. usque / warp-plus)
-     * listening on 127.0.0.1:socksPort.
-     */
-    fun generateMasqueConfig(
-        localPort: Int,
-        socksPort: Int,
-        mtu: Int = 1280,
-        dedicatedDnsUrl: String? = null,
-        dedicatedDnsDomains: List<String> = emptyList()
-    ): String {
-        val json = JSONObject()
-        json.put("log", JSONObject().put("loglevel", "warning"))
-
-        val inbounds = JSONArray()
-        inbounds.put(JSONObject().apply {
-            put("protocol", "tun")
-            put("tag", "tun2socks")
-            put("settings", JSONObject().apply {
-                put("mtu", mtu)
-                put("autoRoute", false)
-                put("strictRoute", false)
-                put("endpoint", "10.0.0.2")
-                put("stack", "system")
-            })
-            put("sniffing", JSONObject().apply {
-                put("enabled", true)
-                put("destOverride", JSONArray().put("http").put("tls").put("fakedns"))
-            })
-        })
-        inbounds.put(JSONObject().apply {
-            put("port", localPort)
-            put("listen", "127.0.0.1")
-            put("protocol", "socks")
-            put("tag", "socks")
-            put("settings", JSONObject().apply {
-                put("auth", "noauth")
-                put("udp", true)
-            })
-        })
-        json.put("inbounds", inbounds)
-
-        val outbounds = JSONArray()
-        outbounds.put(JSONObject().apply {
-            put("protocol", "socks")
-            put("tag", "proxy")
-            put("settings", JSONObject().put("servers", JSONArray().put(JSONObject().apply {
-                put("address", "127.0.0.1")
-                put("port", socksPort)
-            })))
-        })
-        outbounds.put(JSONObject().apply { put("protocol", "freedom"); put("tag", "direct") })
-        outbounds.put(JSONObject().apply { put("protocol", "dns"); put("tag", "dns-out") })
-        json.put("outbounds", outbounds)
-
-        val rules = JSONArray()
-        rules.put(JSONObject().apply {
-            put("type", "field")
-            put("port", 53)
-            put("outboundTag", "dns-out")
-        })
-        json.put("routing", JSONObject().apply {
-            put("domainStrategy", "AsIs")
-            put("rules", rules)
-        })
-        return json.toString()
-    }
 
     /**
      * One Xray config that tests many WARP endpoints in parallel: for each endpoint

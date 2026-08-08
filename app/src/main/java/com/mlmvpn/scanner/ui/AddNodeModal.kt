@@ -236,20 +236,28 @@ fun AddNodeModal(
                             }
                         }
                     } else if (form == AddNodeFormType.DEFAULT_SNI) {
-                        DefaultSniConfigForm(
-                            maxCount = DEFAULT_SNI_CONFIGS.size,
-                            onSubmit = { count ->
-                                val selectedConfigs = DEFAULT_SNI_CONFIGS.shuffled().take(count)
-                                val nodesToAdd = selectedConfigs.mapNotNull {
-                                    if (isValidUri(it)) {
-                                        val node = createNodeFromUri(it)
-                                        node.groupTitle = selectedManualGroup
-                                        node
-                                    } else null
+                        BuildSniForm(
+                            onSubmit = { sourceNodes ->
+                                // Convert the selected configs into SNI-spoof configs
+                                // (127.0.0.1:40443 + allowInsecure=1). Originals stay untouched;
+                                // brand-new converted nodes land in a dedicated "کانفیگ های sni"
+                                // group in the Manual tab.
+                                val converted = sourceNodes.mapNotNull { node ->
+                                    val spoofed = spoofToSni(node.uri) ?: return@mapNotNull null
+                                    VpnNode(
+                                        id = UUID.randomUUID().toString(),
+                                        name = node.name,
+                                        uri = spoofed,
+                                        type = node.type,
+                                        engineType = "Manual",
+                                        groupTitle = SNI_GROUP_NAME
+                                    )
                                 }
-                                if (nodesToAdd.isNotEmpty()) {
-                                    onNodesAdded(nodesToAdd)
-                                    Toast.makeText(context, "Added ${nodesToAdd.size} configs!", Toast.LENGTH_SHORT).show()
+                                if (converted.isNotEmpty()) {
+                                    onNodesAdded(converted)
+                                    Toast.makeText(context, "ساخت ${converted.size} کانفیگ SNI انجام شد", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "کانفیگ قابل‌تبدیلی یافت نشد", Toast.LENGTH_SHORT).show()
                                 }
                                 onDismiss()
                             }
@@ -516,32 +524,128 @@ fun createNodeFromUri(uri: String): VpnNode {
     )
 }
 
+const val SNI_GROUP_NAME = "کانفیگ های sni"
+
+/**
+ * Convert a VLESS / Trojan / VMESS URI to its SNI-spoof form: point it at the local
+ * RSTA spoof proxy (127.0.0.1:40443) and force allowInsecure. Mirrors the reference
+ * spoofconfig.html script. Returns null for anything that isn't a vless/trojan/vmess link.
+ */
+fun spoofToSni(uri: String): String? {
+    val trimmed = uri.trim()
+    val lower = trimmed.lowercase()
+    return try {
+        when {
+            lower.startsWith("vmess://") -> {
+                val b64 = trimmed.substring(8)
+                val jsonStr = String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT))
+                val obj = JSONObject(jsonStr)
+                obj.put("add", "127.0.0.1")
+                obj.put("port", "40443")
+                obj.put("skip-cert-verify", true)
+                "vmess://" + android.util.Base64.encodeToString(obj.toString().toByteArray(), android.util.Base64.NO_WRAP)
+            }
+            lower.startsWith("vless://") || lower.startsWith("trojan://") -> {
+                val hashIdx = trimmed.indexOf('#')
+                val name = if (hashIdx >= 0) trimmed.substring(hashIdx) else ""
+                val noHash = if (hashIdx >= 0) trimmed.substring(0, hashIdx) else trimmed
+                val qIdx = noHash.indexOf('?')
+                val base = if (qIdx >= 0) noHash.substring(0, qIdx) else noHash
+                var query = if (qIdx >= 0) noHash.substring(qIdx + 1) else ""
+                val atIdx = base.lastIndexOf('@')
+                if (atIdx < 0) return null
+                val newBase = base.substring(0, atIdx + 1) + "127.0.0.1:40443"
+                query = when {
+                    Regex("allowInsecure=[^&]*").containsMatchIn(query) ->
+                        query.replace(Regex("allowInsecure=[^&]*"), "allowInsecure=1")
+                    query.isEmpty() -> "allowInsecure=1"
+                    else -> "$query&allowInsecure=1"
+                }
+                "$newBase?$query$name"
+            }
+            else -> null
+        }
+    } catch (e: Exception) { null }
+}
+
+private data class SniBucket(val label: String, val nodes: List<VpnNode>)
+
 @Composable
-fun DefaultSniConfigForm(maxCount: Int, onSubmit: (Int) -> Unit) {
-    var count by remember { mutableStateOf(if (maxCount > 0) 1 else 0) }
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text(stringResource(R.string.add_node_default_sni_count), color = TextPrimary, fontSize = 16.sp)
-        
-        Text(stringResource(R.string.add_node_config_unit, count), color = Primary, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.CenterHorizontally))
-        
-        Slider(
-            value = count.toFloat(),
-            onValueChange = { count = it.toInt() },
-            valueRange = 1f..maxCount.toFloat(),
-            steps = if (maxCount > 2) maxCount - 2 else 0,
-            colors = SliderDefaults.colors(thumbColor = Primary, activeTrackColor = Primary)
+fun BuildSniForm(onSubmit: (List<VpnNode>) -> Unit) {
+    val context = LocalContext.current
+    val buckets = remember {
+        // Source = exactly what the connection tab shows (NodeManager.nodes), grouped by folder.
+        // This covers everything the user can actually connect to — manual entries, fetched panel
+        // configs (BPB/Edge/Nahan/MLM) and combined "config × clean-IP" groups all live here (with
+        // varied engineTypes like EDG/BPB/NHN, NOT just "Manual"). We only skip the protected Iran
+        // defaults (non-convertible) and the SNI group itself (avoid re-converting).
+        val nm = com.mlmvpn.scanner.data.NodeManager(context)
+        val source = synchronized(nm.nodes) { nm.nodes.toList() }
+            .filter {
+                !com.mlmvpn.scanner.data.NodeManager.isProtected(it) &&
+                    it.groupTitle != SNI_GROUP_NAME
+            }
+        source.groupBy { it.groupTitle }
+            .map { (g, ns) -> SniBucket(g ?: "پیش‌فرض", ns) }
+            .toMutableList()
+    }
+    val allNodes = remember { buckets.flatMap { it.nodes } }
+    // -1 => همه ; otherwise the bucket index
+    var selectedIdx by remember { mutableStateOf(-1) }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("کدام کانفیگ‌ها به SNI تبدیل شوند؟", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "کانفیگ‌های اصلی دست‌نخورده می‌مانند؛ نسخهٔ تبدیل‌شده در گروه «$SNI_GROUP_NAME» ساخته می‌شود. (کانفیگ‌های پیش‌فرض قابل تبدیل نیستند.)",
+            color = TextMuted, fontSize = 12.sp
         )
-        
-        Spacer(modifier = Modifier.weight(1f))
-        
+        Spacer(modifier = Modifier.height(4.dp))
+
+        if (buckets.isEmpty()) {
+            Text("کانفیگی برای تبدیل پیدا نشد. اول از پنل‌ها کانفیگ دریافت کنید.", color = TextMuted, fontSize = 13.sp)
+            Spacer(modifier = Modifier.weight(1f))
+        } else {
+            androidx.compose.foundation.lazy.LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
+                item {
+                    SniTargetRow("همه (${allNodes.size})", selectedIdx == -1) { selectedIdx = -1 }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    buckets.forEachIndexed { i, b ->
+                        SniTargetRow("${b.label} (${b.nodes.size})", selectedIdx == i) { selectedIdx = i }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+        }
+
         Button(
-            onClick = { onSubmit(count) },
+            onClick = {
+                val src = if (selectedIdx == -1) allNodes else buckets.getOrNull(selectedIdx)?.nodes ?: emptyList()
+                onSubmit(src)
+            },
+            enabled = buckets.isNotEmpty(),
             modifier = Modifier.fillMaxWidth().height(48.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = BgDark),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Text(stringResource(R.string.add_node_add_btn), fontWeight = FontWeight.Bold)
+            Text("ساخت و افزودن", fontWeight = FontWeight.Bold)
         }
+    }
+}
+
+@Composable
+private fun SniTargetRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) Primary.copy(alpha = 0.15f) else SurfaceDark)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onClick, colors = RadioButtonDefaults.colors(selectedColor = Primary))
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(label, color = TextPrimary, fontSize = 14.sp)
     }
 }
 

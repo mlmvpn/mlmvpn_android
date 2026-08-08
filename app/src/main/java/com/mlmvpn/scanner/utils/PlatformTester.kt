@@ -9,16 +9,16 @@ import java.net.Proxy
 import javax.net.ssl.SSLSocketFactory
 
 enum class Platform(val displayName: String, val testUrl: String) {
-    INSTAGRAM("Ø§ÛŒÙ†Ø³ØªØ§Ú¯Ø±Ø§Ù…", "https://graph.instagram.com"),
-    YOUTUBE("ÛŒÙˆØªÛŒÙˆØ¨", "https://googlevideo.com"),
-    TIKTOK("ØªÛŒÚ©â€ŒØªØ§Ú©", "https://api.tiktokv.com"),
-    TWITTER("Ø§ÛŒÚ©Ø³", "https://api.twitter.com"),
-    WHATSAPP("ÙˆØ§ØªØ³â€ŒØ§Ù¾", "https://g.whatsapp.net"),
-    GEMINI("Ø¬Ù…Ù†Ø§ÛŒ", "https://generativelanguage.googleapis.com"),
-    ANTIGRAVITY("Ø¢Ù†ØªÛŒâ€ŒÚ¯Ø±Ø§ÙˆÛŒØªÛŒ", "https://api.antigravity.google"),
-    CLAUDE("Ú©Ù„Ø§Ø¯", "https://api.anthropic.com"),
-    TRAE("ØªÙØ±ÙÛŒ", "https://api.trae.ai"),
-    CAPCUT("Ú©Ù¾â€ŒÚ©Ø§Øª", "https://api.capcut.com")
+    INSTAGRAM("اینستاگرام", "https://graph.instagram.com"),
+    YOUTUBE("یوتیوب", "https://googlevideo.com"),
+    TIKTOK("تیک‌تاک", "https://api.tiktokv.com"),
+    TWITTER("ایکس", "https://api.twitter.com"),
+    WHATSAPP("واتس‌اپ", "https://g.whatsapp.net"),
+    GEMINI("جمنای", "https://generativelanguage.googleapis.com"),
+    ANTIGRAVITY("آنتی‌گراویتی", "https://api.antigravity.google"),
+    CLAUDE("کلاد", "https://api.anthropic.com"),
+    TRAE("تری", "https://api.trae.ai"),
+    CAPCUT("کپ‌کات", "https://api.capcut.com")
 }
 
 object PlatformTester {

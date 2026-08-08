@@ -130,7 +130,7 @@ class GstEngine : IVpnEngine {
             front_domain = "$sni"
             listen_host = "127.0.0.1"
             socks5_port = $localPort
-            listen_port = 0
+            listen_port = ${localPort + 10000}
             verify_ssl = true
 
             [logging]
@@ -146,9 +146,29 @@ class GstEngine : IVpnEngine {
 
     override fun stop() {
         Log.d("GstEngine", "Stopping GST Engine...")
+        // Idempotency: a racing second stop() (STOP path vs onDestroy) must not call
+        // Native.stopProxy on an already-freed handle.
+        if (!isRunning && engineHandle == 0L) {
+            Log.d("GstEngine", "GST Engine already stopped — skipping.")
+            return
+        }
         isRunning = false
-        logJob?.cancel()
-        
+
+        // Stop the log-drain loop and WAIT for its current native drainLogs() call to return
+        // before freeing the runtime. Cancelling the job only requests cancellation; if a
+        // drainLogs() is in flight it keeps reading native state that stopProxy is about to
+        // free → use-after-free crash (surfaces later as a native SIGABRT with nothing in the
+        // app's own logcat). runBlocking-join is bounded and cheap here.
+        logJob?.let { job ->
+            job.cancel()
+            try {
+                kotlinx.coroutines.runBlocking {
+                    kotlinx.coroutines.withTimeoutOrNull(1000) { job.join() }
+                }
+            } catch (_: Exception) {}
+        }
+        logJob = null
+
         if (engineHandle != 0L) {
             val stopped = Native.stopProxy(engineHandle)
             Log.d("GstEngine", "GST Engine JNI stopProxy returned: $stopped")

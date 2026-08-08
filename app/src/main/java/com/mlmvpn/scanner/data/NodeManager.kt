@@ -18,6 +18,12 @@ class NodeManager private constructor(context: Context) {
                 instance ?: NodeManager(context.applicationContext).also { instance = it }
             }
         }
+
+        /** Group the built-in Iran default configs live in. */
+        const val IRAN_GROUP = "کانفیگ‌های ایران"
+
+        /** Built-in configs that must never be deletable by any UI path. */
+        fun isProtected(node: VpnNode): Boolean = node.id.startsWith("default_mlmvpn_")
     }
     private val prefs: SharedPreferences = context.getSharedPreferences("vpn_nodes_prefs", Context.MODE_PRIVATE)
     
@@ -72,7 +78,14 @@ class NodeManager private constructor(context: Context) {
 
     fun saveNodes() {
         val arr = JSONArray()
-        val snapshot = synchronized(nodes) { nodes.toList() }
+        // Bulletproof protection: the built-in Iran configs must survive every deletion
+        // path (delete-all button, per-node delete, group delete). No matter what a caller
+        // removed from `nodes`, re-inject them here so they are always persisted and always
+        // re-emitted on nodesFlow.
+        val snapshot = synchronized(nodes) {
+            injectDefaultConfigs()
+            nodes.toList()
+        }
         for (node in snapshot) {
             val obj = JSONObject().apply {
                 put("id", node.id)
@@ -95,7 +108,7 @@ class NodeManager private constructor(context: Context) {
 
     fun removeNodesByGroup(groupId: String) {
         synchronized(nodes) {
-            nodes.removeAll { it.engineType == "Manual" && it.groupTitle == groupId }
+            nodes.removeAll { it.engineType == "Manual" && it.groupTitle == groupId && !isProtected(it) }
         }
         saveNodes()
     }
@@ -152,57 +165,51 @@ class NodeManager private constructor(context: Context) {
 
     // Caller must hold `synchronized(nodes)` already; not synchronized internally to avoid re-entrant lock churn.
     private fun injectDefaultConfigs() {
-        val default1 = """{"remarks":"Serverless-v44-low_delay","version":{"min":"26.6.1"},"log":{"loglevel":"debug","dnsLog":true,"access":""},"policy":{"levels":{"0":{"uplinkOnly":0,"downlinkOnly":0},"1":{"uplinkOnly":0,"downlinkOnly":0,"connIdle":12}}},"dns":{"hosts":{"cloudflare-dns.com":"challenges.cloudflare.com"},"servers":[{"address":"fakedns","domains":["domain:com","domain:net","domain:org","domain:co","domain:io","domain:tv","domain:info","domain:xyz","geosite:geolocation-!cn","geosite:telegram"]},{"tag":"no-filter-dns","address":"tcp://8.8.8.8","timeoutMs":12000,"finalQuery":true},{"address":"8.8.8.8","domains":["domain:ir","geosite:category-ir"],"finalQuery":true}],"queryStrategy":"UseSystem","useSystemHosts":true,"serveStale":true},"inbounds":[{"tag":"mixed-in","port":10808,"protocol":"mixed","sniffing":{"enabled":true,"destOverride":["fakedns","tls","http","quic"],"routeOnly":false},"settings":{"udp":true,"ip":"127.0.0.1"},"streamSettings":{"sockopt":{"tcpKeepAliveInterval":1,"tcpKeepAliveIdle":11}}}],"outbounds":[{"tag":"block","protocol":"block"},{"tag":"tcp-direct","protocol":"direct","streamSettings":{"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-direct","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"}},{"tag":"dns-out","protocol":"dns","settings":{"userLevel":1}},{"tag":"tcp-fragment","protocol":"direct","streamSettings":{"finalmask":{"tcp":[{"type":"fragment","settings":{"packets":"1-3","length":"1-5","delay":"10","maxSplit":"163"}}]},"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-noises","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"},"streamSettings":{"finalmask":{"udp":[{"type":"noise","settings":{"reset":"28","noise":[{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"}]}}]}}}],"routing":{"domainStrategy":"IPOnDemand","rules":[{"outboundTag":"tcp-fragment","inboundTag":["no-filter-dns"]},{"outboundTag":"dns-out","port":53},{"outboundTag":"tcp-direct","network":"tcp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"udp-direct","network":"udp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"tcp-direct","network":"tcp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-direct","network":"udp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-noises","network":"udp","protocol":["quic"],"domain":["geosite:youtube","domain:youtube.com","domain:googlevideo.com","domain:googleapis.com","domain:tiktokv.eu","domain:tiktok.com","domain:tiktokcdn.com"]},{"outboundTag":"block","network":"udp","protocol":["quic"]},{"outboundTag":"udp-direct","network":"udp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","protocol":["tls","http"],"ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","port":"443,80,5222,5228,8080","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"block","port":"0-65535"}]}}"""
-        val default2 = """{"remarks":"Serverless-v44-low_delay","version":{"min":"26.6.1"},"log":{"loglevel":"debug","dnsLog":true,"access":""},"policy":{"levels":{"0":{"uplinkOnly":0,"downlinkOnly":0},"1":{"uplinkOnly":0,"downlinkOnly":0,"connIdle":12}}},"dns":{"hosts":{"cloudflare-dns.com":"challenges.cloudflare.com"},"servers":[{"address":"fakedns","domains":["domain:com","domain:net","domain:org","domain:co","domain:io","domain:tv","domain:info","domain:xyz","geosite:geolocation-!cn","geosite:telegram"]},{"tag":"no-filter-dns","address":"tcp://8.8.8.8","timeoutMs":12000,"finalQuery":true},{"address":"8.8.8.8","domains":["domain:ir","geosite:category-ir"],"finalQuery":true}],"queryStrategy":"UseSystem","useSystemHosts":true,"serveStale":true},"inbounds":[{"tag":"mixed-in","port":10808,"protocol":"mixed","sniffing":{"enabled":true,"destOverride":["fakedns","tls","http","quic"],"routeOnly":false},"settings":{"udp":true,"ip":"127.0.0.1"},"streamSettings":{"sockopt":{"tcpKeepAliveInterval":1,"tcpKeepAliveIdle":11}}}],"outbounds":[{"tag":"block","protocol":"block"},{"tag":"tcp-direct","protocol":"direct","streamSettings":{"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-direct","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"}},{"tag":"dns-out","protocol":"dns","settings":{"userLevel":1}},{"tag":"tcp-fragment","protocol":"direct","streamSettings":{"finalmask":{"tcp":[{"type":"fragment","settings":{"packets":"1-3","length":"1-5","delay":"10","maxSplit":"163"}}]},"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-noises","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"},"streamSettings":{"finalmask":{"udp":[{"type":"noise","settings":{"reset":"28","noise":[{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"}]}}]}}}],"routing":{"domainStrategy":"IPOnDemand","rules":[{"outboundTag":"tcp-fragment","inboundTag":["no-filter-dns"]},{"outboundTag":"dns-out","port":53},{"outboundTag":"tcp-direct","network":"tcp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"udp-direct","network":"udp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"tcp-direct","network":"tcp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-direct","network":"udp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-noises","network":"udp","protocol":["quic"],"domain":["geosite:youtube","domain:youtube.com","domain:googlevideo.com","domain:googleapis.com","domain:tiktokv.eu","domain:tiktok.com","domain:tiktokcdn.com"]},{"outboundTag":"block","network":"udp","protocol":["quic"]},{"outboundTag":"udp-direct","network":"udp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","protocol":["tls","http"],"ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","port":"443,80,5222,5228,8080","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"block","port":"0-65535"}]}}"""
+        val default1 = """{"remarks":"Serverless-v44-low_delay","version":{"min":"26.6.1"},"log":{"loglevel":"debug","dnsLog":true,"access":""},"policy":{"levels":{"0":{"uplinkOnly":0,"downlinkOnly":0},"1":{"uplinkOnly":0,"downlinkOnly":0,"connIdle":12}}},"dns":{"hosts":{"cloudflare-dns.com":"challenges.cloudflare.com"},"servers":[{"address":"fakedns","domains":["domain:com","domain:net","domain:org","domain:co","domain:io","domain:tv","domain:info","domain:xyz","geosite:geolocation-!cn","geosite:telegram"]},{"tag":"no-filter-dns","address":"https://8.8.8.8/dns-query","timeoutMs":12000,"finalQuery":true},{"address":"8.8.8.8","domains":["domain:ir","geosite:category-ir"],"finalQuery":true}],"queryStrategy":"UseSystem","useSystemHosts":true,"serveStale":true},"inbounds":[{"tag":"mixed-in","port":10808,"protocol":"mixed","sniffing":{"enabled":true,"destOverride":["fakedns","tls","http","quic"],"routeOnly":false},"settings":{"udp":true,"ip":"127.0.0.1"},"streamSettings":{"sockopt":{"tcpKeepAliveInterval":1,"tcpKeepAliveIdle":11}}}],"outbounds":[{"tag":"block","protocol":"block"},{"tag":"tcp-direct","protocol":"direct","streamSettings":{"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-direct","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"}},{"tag":"dns-out","protocol":"dns","settings":{"userLevel":1}},{"tag":"tcp-fragment","protocol":"direct","streamSettings":{"finalmask":{"tcp":[{"type":"fragment","settings":{"packets":"1-3","length":"1-5","delay":"10","maxSplit":"163"}}]},"sockopt":{"domainStrategy":"ForceIP"}}},{"tag":"udp-noises","protocol":"direct","settings":{"targetStrategy":"ForceIPv4"},"streamSettings":{"finalmask":{"udp":[{"type":"noise","settings":{"reset":"28","noise":[{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"},{"rand":"1200-1230","delay":"10"}]}}]}}}],"routing":{"domainStrategy":"IPOnDemand","rules":[{"outboundTag":"tcp-fragment","inboundTag":["no-filter-dns"]},{"outboundTag":"dns-out","port":53},{"outboundTag":"tcp-direct","network":"tcp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"udp-direct","network":"udp","domain":["domain:ir","geosite:category-ir"]},{"outboundTag":"tcp-direct","network":"tcp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-direct","network":"udp","ip":["geoip:private","geoip:ir"]},{"outboundTag":"udp-noises","network":"udp","protocol":["quic"],"domain":["geosite:youtube","domain:youtube.com","domain:googlevideo.com","domain:googleapis.com","domain:tiktokv.eu","domain:tiktok.com","domain:tiktokcdn.com"]},{"outboundTag":"block","network":"udp","protocol":["quic"]},{"outboundTag":"udp-direct","network":"udp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","protocol":["tls","http"],"ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","port":"443,80,5222,5228,8080","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"tcp-fragment","network":"tcp","ip":["0.0.0.0/0","::/0"]},{"outboundTag":"block","port":"0-65535"}]}}"""
+        // Config #1 is the untouched baseline (`default1`). The other 5 are derived from the
+        // same base but each uses a DIFFERENT DPI-evasion strategy, so if one operator's DPI
+        // (Hamrah-e-Aval / Irancell / Shatel / …) blocks a given fingerprint, another config
+        // still connects. Two knobs are varied per profile:
+        //   - DNS resolver/method (Google DoH / Cloudflare DoH / Google DoT)
+        //   - TCP fragment profile: how the TLS ClientHello is chopped (packets/length/delay)
+        // `remarks` is set per profile so the active strategy shows up in the connection log.
+        data class IranProfile(
+            val remarks: String,
+            val name: String,
+            val dns: String,
+            val fragPackets: String,
+            val fragLength: String,
+            val fragDelay: String
+        )
+        // #1 mirrors the current baseline exactly (Google DoH, frag 1-3/1-5/delay 10).
+        val profiles = listOf(
+            IranProfile("Serverless-v44-low_delay",       "کانفیگ ایران ۱ — پیش‌فرض (Google DoH)",   "https://8.8.8.8/dns-query", "1-3", "1-5",   "10"),
+            IranProfile("iran2-google-doh-aggressive",     "کانفیگ ایران ۲ — تهاجمی ریز (Google DoH)", "https://8.8.8.8/dns-query", "1-5", "1-3",   "5"),
+            IranProfile("iran3-google-doh-light",          "کانفیگ ایران ۳ — سبک/سریع (Google DoH)",   "https://8.8.8.8/dns-query", "1-1", "40-80", "2"),
+            IranProfile("iran4-cloudflare-doh",            "کانفیگ ایران ۴ — Cloudflare DoH",          "https://1.1.1.1/dns-query", "1-3", "1-5",   "10"),
+            IranProfile("iran5-google-dot",                "کانفیگ ایران ۵ — Google DoT",              "tls://8.8.8.8:853",         "1-3", "2-8",   "8"),
+            IranProfile("iran6-cloudflare-aggressive",     "کانفیگ ایران ۶ — Cloudflare تهاجمی",       "https://1.1.1.1/dns-query", "1-5", "1-2",   "4")
+        )
+
         nodes.removeAll { it.id.startsWith("default_mlmvpn_") }
-        
-        nodes.add(0, VpnNode(
-            id = "default_mlmvpn_6",
-            name = "کانفیگ پیش‌فرض mlmvpn 6",
-            uri = default2,
-            type = "JSON",
-            engineType = "Manual",
-            groupTitle = null
-        ))
-        nodes.add(0, VpnNode(
-            id = "default_mlmvpn_5",
-            name = "کانفیگ پیش‌فرض mlmvpn 5",
-            uri = default1,
-            type = "JSON",
-            engineType = "Manual",
-            groupTitle = null
-        ))
-        nodes.add(0, VpnNode(
-            id = "default_mlmvpn_4",
-            name = "کانفیگ پیش‌فرض mlmvpn 4",
-            uri = default2,
-            type = "JSON",
-            engineType = "Manual",
-            groupTitle = null
-        ))
-        nodes.add(0, VpnNode(
-            id = "default_mlmvpn_3",
-            name = "کانفیگ پیش‌فرض mlmvpn 3",
-            uri = default1,
-            type = "JSON",
-            engineType = "Manual",
-            groupTitle = null
-        ))
-        nodes.add(0, VpnNode(
-            id = "default_mlmvpn_2",
-            name = "کانفیگ پیش‌فرض mlmvpn 2",
-            uri = default2,
-            type = "JSON",
-            engineType = "Manual",
-            groupTitle = null
-        ))
-        nodes.add(0, VpnNode(
-            id = "default_mlmvpn_1",
-            name = "کانفیگ پیش‌فرض mlmvpn 1",
-            uri = default1,
-            type = "JSON",
-            engineType = "Manual",
-            groupTitle = null
-        ))
+
+        // Insert at index idx so the list ends up ordered 1..6 from the top.
+        profiles.forEachIndexed { idx, p ->
+            val uri = default1
+                .replace("\"remarks\":\"Serverless-v44-low_delay\"", "\"remarks\":\"${p.remarks}\"")
+                .replace("\"address\":\"https://8.8.8.8/dns-query\"", "\"address\":\"${p.dns}\"")
+                .replace(
+                    "\"packets\":\"1-3\",\"length\":\"1-5\",\"delay\":\"10\"",
+                    "\"packets\":\"${p.fragPackets}\",\"length\":\"${p.fragLength}\",\"delay\":\"${p.fragDelay}\""
+                )
+            nodes.add(idx, VpnNode(
+                id = "default_mlmvpn_${idx + 1}",
+                name = p.name,
+                uri = uri,
+                type = "JSON",
+                engineType = "Manual",
+                groupTitle = IRAN_GROUP
+            ))
+        }
     }
 }

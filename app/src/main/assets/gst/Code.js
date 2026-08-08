@@ -1,4 +1,4 @@
-﻿/**
+/**
  * DomainFront Relay — Google Apps Script
  *
  * TWO modes:

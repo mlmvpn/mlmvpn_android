@@ -12,8 +12,8 @@ android {
         applicationId "com.mlmvpn.scanner"
         minSdk 24
         targetSdk 34
-        versionCode 56
-        versionName "1.0.8"
+        versionCode 59
+        versionName "1.2.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
@@ -74,6 +74,25 @@ dependencies {
             version { strictly("1.13.1") }
             because("prevent amneziawg from pulling 1.17.0 which requires compileSdk 36")
         }
+        // io.github.tim06:openvpn asks for lifecycle 2.8.2. Left alone that one bump
+        // cascades across the whole app: lifecycle 2.7.0 -> 2.8.2 drags compose-runtime
+        // 1.5.4 -> 1.6.5 (past our compose compiler extension 1.5.10) and lifecycle-process
+        // -> emoji2 1.4.0 -> appcompat 1.7.1 -> material 1.12.0. The VPN Gate feature only
+        // needs LifecycleService, which 2.7.0 already has, so pin the whole atomic group and
+        // leave every other engine's dependency graph exactly as it was.
+        [
+            "lifecycle-runtime", "lifecycle-runtime-ktx", "lifecycle-runtime-compose",
+            "lifecycle-common", "lifecycle-common-java8", "lifecycle-process",
+            "lifecycle-livedata", "lifecycle-livedata-core", "lifecycle-livedata-core-ktx",
+            "lifecycle-livedata-ktx", "lifecycle-service",
+            "lifecycle-viewmodel", "lifecycle-viewmodel-ktx", "lifecycle-viewmodel-savedstate",
+        ].each { artifact ->
+            implementation("androidx.lifecycle:$artifact") {
+                version { strictly("2.7.0") }
+                because("prevent io.github.tim06:openvpn from bumping the androidx.lifecycle " +
+                        "group to 2.8.2, which cascades into compose-runtime/appcompat/material")
+            }
+        }
         implementation("org.jetbrains.kotlin:kotlin-stdlib") {
             version { strictly("1.9.22") }
         }
@@ -98,6 +117,7 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0'
     implementation 'androidx.lifecycle:lifecycle-livedata-ktx:2.7.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.7.0'
 
     // Jetpack Compose
     def compose_bom = platform('androidx.compose:compose-bom:2023.10.01')
@@ -140,5 +160,11 @@ dependencies {
     
     // AmneziaWG Core
     implementation 'com.zaneschepke:amneziawg-android:2.1.13'
+
+    // OpenVPN Core (openvpn3 via JNI) — used only by the VPN Gate feature.
+    // Runs OpenVPNService in its own ":openvpn" process, so it cannot disturb
+    // MyVpnService or any other engine.
+    implementation 'io.github.tim06:openvpn:1.1.3'
+    implementation 'io.github.tim06:vpnprotocolsnotification:1.1.0'
 
 }

@@ -124,7 +124,7 @@ fun NetworkPausedBanner(message: String) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.WifiOff, contentDescription = null, tint = YellowWarn, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Ø§ØªØµØ§Ù„ Ø§ÛŒÙ†ØªØ±Ù†Øª Ù‚Ø·Ø¹ Ø´Ø¯Ù‡", color = YellowWarn, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("اتصال اینترنت قطع شده", color = YellowWarn, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
             Text(message, color = TextMuted, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
         }
@@ -269,26 +269,39 @@ fun ScannerTab() {
         return false
     }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "radarPulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = if (scanning) 2f else 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "pulseScale"
-    )
-
-    val radarRotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "radarRotation"
-    )
+    // Run the radar pulse/rotation ONLY while scanning. An infiniteRepeatable never stops on its
+    // own and keeps requesting a frame every vsync as long as it's composed — and this tab stays
+    // composed (offset off-screen) even when another tab is active, so an unconditional transition
+    // burned frames 24/7 in the background. That relentless RenderThread load contributes to the
+    // GPU swapBuffers crash (SIGABRT) seen on some devices. Gating it behind `scanning` removes the
+    // animation from composition when idle, so it stops requesting frames. radarRotation is only
+    // used while scanning anyway, and a static pulseScale=1f is the correct idle appearance.
+    val pulseScale: Float
+    val radarRotation: Float
+    if (scanning) {
+        val infiniteTransition = rememberInfiniteTransition(label = "radarPulse")
+        pulseScale = infiniteTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 2f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "pulseScale"
+        ).value
+        radarRotation = infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "radarRotation"
+        ).value
+    } else {
+        pulseScale = 1f
+        radarRotation = 0f
+    }
 
     var viewingGroup by remember { mutableStateOf<com.mlmvpn.scanner.data.ScannerGroup?>(null) }
 
@@ -637,15 +650,15 @@ fun ScannerTab() {
                                                                             )
                                                                             val success = api.updateUser(acc, mlmUsername, req)
                                                                             if (success) {
-                                                                                android.widget.Toast.makeText(context, "Ø³Ø§Ø¨â€ŒØ§Ø³Ú©Ø±ÛŒÙ¾Ø´Ù† Ú©Ø§Ø±Ø¨Ø± Ø¨Ø§ IP Ù‡Ø§ÛŒ Ø³Ø§Ù„Ù… Ø¨Ø±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ Ø´Ø¯", android.widget.Toast.LENGTH_LONG).show()
+                                                                                android.widget.Toast.makeText(context, "ساب‌اسکریپشن کاربر با IP های سالم بروزرسانی شد", android.widget.Toast.LENGTH_LONG).show()
                                                                             } else {
-                                                                                android.widget.Toast.makeText(context, "Ø®Ø·Ø§ Ø¯Ø± Ø¨Ø±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ Ø³Ø§Ø¨â€ŒØ§Ø³Ú©Ø±ÛŒÙ¾Ø´Ù†", android.widget.Toast.LENGTH_LONG).show()
+                                                                                android.widget.Toast.makeText(context, "خطا در بروزرسانی ساب‌اسکریپشن", android.widget.Toast.LENGTH_LONG).show()
                                                                             }
                                                                         } else {
-                                                                            android.widget.Toast.makeText(context, "Ú©Ø§Ø±Ø¨Ø± ÛŒØ§ÙØª Ù†Ø´Ø¯!", android.widget.Toast.LENGTH_SHORT).show()
+                                                                            android.widget.Toast.makeText(context, "کاربر یافت نشد!", android.widget.Toast.LENGTH_SHORT).show()
                                                                         }
                                                                     } else {
-                                                                        android.widget.Toast.makeText(context, "Ø§Ú©Ø§Ù†Øª MLM ÛŒØ§ÙØª Ù†Ø´Ø¯!", android.widget.Toast.LENGTH_SHORT).show()
+                                                                        android.widget.Toast.makeText(context, "اکانت MLM یافت نشد!", android.widget.Toast.LENGTH_SHORT).show()
                                                                     }
                                                                     isUpdatingSub = false
                                                                 }
@@ -657,7 +670,7 @@ fun ScannerTab() {
                                                             if (isUpdatingSub) {
                                                                 CircularProgressIndicator(modifier = Modifier.size(24.dp), color = BgDark, strokeWidth = 2.dp)
                                                             } else {
-                                                                Text("Ø¨Ø±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ Ø³Ø§Ø¨ (${healthyNodes.size})", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                                Text("بروزرسانی ساب (${healthyNodes.size})", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                                                 Spacer(modifier = Modifier.width(4.dp))
                                                                 Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
                                                             }

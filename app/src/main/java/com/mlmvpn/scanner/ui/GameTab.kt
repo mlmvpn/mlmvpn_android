@@ -41,8 +41,6 @@ import androidx.core.graphics.drawable.toBitmap
 import com.mlmvpn.scanner.MyVpnService
 import com.mlmvpn.scanner.R
 import com.mlmvpn.scanner.engines.game.*
-import com.mlmvpn.scanner.ui.UaeTrialEngine
-import com.mlmvpn.scanner.utils.AmneziaWgConfigGenerator
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -128,15 +126,6 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
     var showEngineConflict by remember { mutableStateOf(false) }
     var conflictEngineName by remember { mutableStateOf("") }
 
-    val trialState by UaeTrialEngine.state.collectAsState()
-    val trialConfig by UaeTrialEngine.config.collectAsState()
-    val trialRemainingSeconds by UaeTrialEngine.remainingSeconds.collectAsState()
-
-    // Sync trial state
-    LaunchedEffect(Unit) {
-        UaeTrialEngine.checkStatus(context)
-    }
-
     // Resume after an engine-conflict restart: pre-select the mode the user was trying and prompt
     // them to tap Start (now that the process is clean and the old engine is gone).
     LaunchedEffect(Unit) {
@@ -174,7 +163,6 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                 // Direct DNS Boost (nodeUri != null) also runs a local VPN with its own SOCKS
                 // inbound; the plain "already clean" Direct case has no VPN at all.
                 val isVpnBackedMode = bestResult?.mode == BoostMode.TUNNEL ||
-                    bestResult?.mode == BoostMode.WARP ||
                     ((bestResult?.mode == BoostMode.DIRECT ||
                         bestResult?.mode == BoostMode.DEDICATED_DNS ||
                         bestResult?.mode == BoostMode.UAE_DNS) && bestResult?.nodeUri != null)
@@ -211,37 +199,12 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
         }
     }
 
-    // AUTO can pick WireGuard purely from its RTT estimate, in which case the result has no
-    // nodeUri yet. Materialize the real AmneziaWG config from the live trial here (same as the
-    // manual WireGuard button). Returns the connect-ready result, or null if the user first needs
-    // to obtain/renew the 1-hour trial (a Toast explains what to do).
-    fun resolveForConnect(result: BoostResult): BoostResult? {
-        if (result.mode != BoostMode.WIREGUARD || result.nodeUri != null) return result
-        val cfg = trialConfig
-        if (cfg == null || trialState == UaeTrialEngine.TrialState.IDLE) {
-            Toast.makeText(context, "برای اتصال وایرگارد ابتدا از تب «وایرگارد» تست ۱ ساعته را دریافت کنید.", Toast.LENGTH_LONG).show()
-            return null
-        }
-        if (trialState == UaeTrialEngine.TrialState.EXPIRED) {
-            Toast.makeText(context, "زمان تست ۱ ساعته شما به پایان رسیده است.", Toast.LENGTH_LONG).show()
-            return null
-        }
-        val jsonConfig = com.mlmvpn.scanner.utils.AmneziaWgConfigGenerator.generateAmneziaWgConfig(
-            privateKey = cfg.privateKey,
-            address = cfg.address,
-            serverPubkey = cfg.serverPubkey,
-            endpoint = cfg.endpoint,
-            mtu = cfg.mtu,
-            dns = cfg.dns,
-            gameSubnets = cfg.gameSubnets,
-            // MUST pass the server's obfuscation params (like the WireGuard tab does) -- otherwise
-            // the generator's 17/22 defaults mismatch the server and the handshake never completes.
-            jc = cfg.awg.jc, jmin = cfg.awg.jmin, jmax = cfg.awg.jmax,
-            s1 = cfg.awg.s1, s2 = cfg.awg.s2,
-            h1 = cfg.awg.h1, h2 = cfg.awg.h2, h3 = cfg.awg.h3, h4 = cfg.awg.h4
-        )
-        return result.copy(nodeUri = jsonConfig)
-    }
+    // Historically AUTO could pick WireGuard purely from an RTT estimate with no nodeUri yet, and
+    // this materialized the real AmneziaWG config from the live 1-hour UAE trial. Aether needs no
+    // such trial/account step -- GameBoosterManager.measureAetherReachability already attaches a
+    // ready-to-use Aether config to every AETHER result it produces -- so this is now a passthrough.
+    // Kept as a named seam in case a future mode needs the same "resolve before connect" shape.
+    fun resolveForConnect(result: BoostResult): BoostResult? = result
 
     fun startBoost(result: BoostResult) {
         // Direct mode only needs the VPN permission dialog when it's actually going to start a
@@ -384,15 +347,16 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                 // Game tab exposes exactly these modes now (DIRECT/TUNNEL retired -- no real ping
                 // reduction). AUTO races the DNS + WireGuard candidates by real ping.
                 // Game tab exposes exactly these modes now (DIRECT/TUNNEL retired -- no real ping
-                // reduction). AUTO races the DNS + WireGuard candidates by real ping. UAE_DNS talks
-                // to our own pinned resolver (uae-dns.service); Cloudflare DNS needs the user's own
-                // deployed worker.
+                // reduction). AUTO races the DNS + Aether candidates by real (or estimated) ping.
+                // UAE_DNS talks to our own pinned resolver (uae-dns.service); Cloudflare DNS needs
+                // the user's own deployed worker. AETHER replaces the old two hardcoded UAE trial
+                // servers ("سرور اول"/"سرور دوم") with the Aether engine, which picks its own
+                // healthy endpoint from Cloudflare's WARP pool instead of one fixed host.
                 val modes = buildList {
                     add(BoostMode.AUTO to stringResource(R.string.game_mode_auto))
                     if (hasDnsWorker && dnsEnabled) add(BoostMode.DEDICATED_DNS to "DNS کلادفلر")
                     add(BoostMode.UAE_DNS to "DNS امارات")
-                    add(BoostMode.WIREGUARD to "وایرگارد (امارات)")
-                    add(BoostMode.WARP to "WARP")
+                    add(BoostMode.AETHER to "Aether")
                 }
                 modes.forEach { (mode, label) ->
                     FilterChip(
@@ -498,13 +462,10 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
             )
         }
 
-        // ── WARP Status Card (only when WARP mode is explicitly selected) ──
-        if (selectedMode == BoostMode.WARP) {
-            item { WarpStatusCard() }
-        }
-        
-        // ── Wireguard Status Card ──
-        if (selectedMode == BoostMode.WIREGUARD) {
+        // ── Aether Status Card ──
+        // No trial/account step needed here (unlike the old WireGuard-tab UAE trial) -- Aether
+        // self-enrolls and picks a healthy endpoint from Cloudflare's WARP pool on first connect.
+        if (selectedMode == BoostMode.AETHER) {
             item {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = GameColors.SurfaceDark),
@@ -517,25 +478,9 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                             .padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        if (trialState == UaeTrialEngine.TrialState.IDLE) {
-                            Icon(Icons.Rounded.SportsEsports, contentDescription = null, tint = GameColors.GameGreen, modifier = Modifier.size(36.dp))
-                            Spacer(Modifier.height(8.dp))
-                            Text("ابتدا باید تست رایگان ۱ ساعته را دریافت کنید.", color = GameColors.TextMuted, fontSize = 13.sp)
-                        } else if (trialState == UaeTrialEngine.TrialState.ACTIVE) {
-                            val h = (trialRemainingSeconds / 3600).toInt()
-                            val m = ((trialRemainingSeconds % 3600) / 60).toInt()
-                            val s = (trialRemainingSeconds % 60).toInt()
-                            val timeStr = if (h > 0) String.format("%02d:%02d:%02d", h, m, s) else String.format("%02d:%02d", m, s)
-                            
-                            Icon(Icons.Rounded.Timer, contentDescription = null, tint = GameColors.GameGreen, modifier = Modifier.size(36.dp))
-                            Spacer(Modifier.height(8.dp))
-                            Text(timeStr, color = GameColors.TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                            Text("زمان باقیمانده (تست امارات)", color = GameColors.TextMuted, fontSize = 12.sp)
-                        } else if (trialState == UaeTrialEngine.TrialState.EXPIRED) {
-                            Text("⏰", fontSize = 36.sp)
-                            Spacer(Modifier.height(8.dp))
-                            Text("زمان تست به پایان رسیده", color = GameColors.PingTerrible, fontSize = 14.sp)
-                        }
+                        Icon(Icons.Rounded.SportsEsports, contentDescription = null, tint = GameColors.GameGreen, modifier = Modifier.size(36.dp))
+                        Spacer(Modifier.height(8.dp))
+                        Text("موتور Aether — تونل کامل دستگاه، بدون سرور ثابت. برای اتصال روی «شروع» بزنید.", color = GameColors.TextMuted, fontSize = 13.sp, textAlign = TextAlign.Center)
                     }
                 }
             }
@@ -559,15 +504,12 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                         return@BoostButton
                     }
 
-                    // Engine-conflict guard: WireGuard (libam-go) and Xray (libgojni) each spin up a
-                    // gomobile Go runtime, and two Go runtimes cannot coexist in one process -- the
-                    // second start crashes (SIGSEGV in InitCoreEnv). So if a different engine family is
-                    // already running, warn and require a clean restart before the boost. The only
-                    // same-family case is WireGuard trial already up + WIREGUARD mode (just reconnect).
+                    // Engine-conflict guard: Aether (separate process, owns its own TUN) and Xray
+                    // (libgojni, spins up a gomobile Go runtime) cannot both be up at once without
+                    // one fighting the other for the TUN/VpnService. So if a different engine family
+                    // is already running, warn and require a clean restart before the boost.
                     val activeEngine = activeEngineLabelFa()
-                    val wgTrialAndWgMode = selectedMode == BoostMode.WIREGUARD &&
-                        com.mlmvpn.scanner.MyVpnService.connectedNodeId == "game_uae_trial"
-                    if (activeEngine != null && !wgTrialAndWgMode) {
+                    if (activeEngine != null) {
                         // commit() (synchronous): the confirm path kills the process, so an async
                         // apply() could be lost before the restart and the resume would never fire.
                         context.getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE).edit()
@@ -580,42 +522,24 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                         return@BoostButton
                     }
 
-                    if (selectedMode == BoostMode.WIREGUARD) {
-                        if (trialConfig == null || trialState == UaeTrialEngine.TrialState.IDLE) {
-                            Toast.makeText(context, "لطفاً ابتدا از تب «وایرگارد» تست ۱ ساعته را دریافت کنید.", Toast.LENGTH_LONG).show()
-                            return@BoostButton
-                        }
-                        if (trialState == UaeTrialEngine.TrialState.EXPIRED) {
-                            Toast.makeText(context, "زمان تست ۱ ساعته شما به پایان رسیده است.", Toast.LENGTH_LONG).show()
-                            return@BoostButton
-                        }
-                        
-                        // Fake BoostResult for Wireguard
-                        val jsonConfig = com.mlmvpn.scanner.utils.AmneziaWgConfigGenerator.generateAmneziaWgConfig(
-                            privateKey = trialConfig!!.privateKey,
-                            address = trialConfig!!.address,
-                            serverPubkey = trialConfig!!.serverPubkey,
-                            endpoint = trialConfig!!.endpoint,
-                            mtu = trialConfig!!.mtu,
-                            dns = trialConfig!!.dns,
-                            gameSubnets = trialConfig!!.gameSubnets,
-                            // Server's obfuscation params (same as the WireGuard tab) -- without these
-                            // the 17/22 defaults mismatch the server and the handshake never completes.
-                            jc = trialConfig!!.awg.jc, jmin = trialConfig!!.awg.jmin, jmax = trialConfig!!.awg.jmax,
-                            s1 = trialConfig!!.awg.s1, s2 = trialConfig!!.awg.s2,
-                            h1 = trialConfig!!.awg.h1, h2 = trialConfig!!.awg.h2, h3 = trialConfig!!.awg.h3, h4 = trialConfig!!.awg.h4
-                        )
-                        
-                        val wgResult = BoostResult(
-                            mode = BoostMode.WIREGUARD,
-                            pingMs = 1L, // placeholder
+                    if (selectedMode == BoostMode.AETHER) {
+                        // Aether needs no trial/account step -- it self-enrolls and picks a healthy
+                        // endpoint from Cloudflare's WARP pool on its own the first time it connects.
+                        val aetherResult = BoostResult(
+                            mode = BoostMode.AETHER,
+                            pingMs = 1L, // placeholder -- real ping only known once connected
                             jitterMs = 0L,
-                            nodeId = "game_uae_trial",
-                            nodeName = "UAE Game Trial",
-                            nodeUri = jsonConfig,
-                            details = "سرور اختصاصی امارات (1 ساعت تست)"
+                            nodeId = "game_aether",
+                            nodeName = "Aether",
+                            nodeUri = com.mlmvpn.core.aether.AetherTunEngine.buildConfig(
+                                com.mlmvpn.core.aether.AetherOptions(
+                                    protocol = com.mlmvpn.core.aether.AetherProtocol.MASQUE,
+                                    scan = com.mlmvpn.core.aether.AetherScan.TURBO,
+                                )
+                            ),
+                            details = "موتور Aether"
                         )
-                        startBoost(wgResult)
+                        startBoost(aetherResult)
                     } else {
                         testJob = scope.launch {
                             val result = boosterManager.runBoostTest(game, selectedRegion, selectedMode)
@@ -697,9 +621,9 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = if (isWorker) {
-                                    "⚠️ سرور متصل شده از نوع Cloudflare Worker است که از پروتکل UDP پشتیبانی نمی‌کند. پینگ داخل بازی کاهش نخواهد یافت. برای بهترین نتیجه از حالت WARP استفاده کنید."
+                                    "⚠️ سرور متصل شده از نوع Cloudflare Worker است که از پروتکل UDP پشتیبانی نمی‌کند. پینگ داخل بازی کاهش نخواهد یافت. برای بهترین نتیجه از «Aether» استفاده کنید."
                                 } else {
-                                    "⚠️ نود تونل فعلی روی CDN (TCP-only) است و ترافیک UDP بازی رو پشتیبانی نمی‌کنه. برای کاهش پینگ بازی از حالت WARP استفاده کنید."
+                                    "⚠️ نود تونل فعلی روی CDN (TCP-only) است و ترافیک UDP بازی رو پشتیبانی نمی‌کنه. برای کاهش پینگ بازی از «Aether» استفاده کنید."
                                 },
                                 color = GameColors.PingTerrible,
                                 fontSize = 11.sp,
@@ -947,7 +871,7 @@ private fun ResultCard(
         BoostMode.DEDICATED_DNS -> Icons.Default.Dns
         BoostMode.UAE_DNS -> Icons.Default.Dns
         BoostMode.AUTO -> Icons.Default.AutoAwesome
-        BoostMode.WIREGUARD -> Icons.Default.VpnLock
+        BoostMode.AETHER -> Icons.Default.VpnLock
     }
     val modeLabel = when (result.mode) {
         BoostMode.DIRECT -> "Direct"
@@ -956,7 +880,7 @@ private fun ResultCard(
         BoostMode.DEDICATED_DNS -> "DNS اختصاصی"
         BoostMode.UAE_DNS -> "DNS امارات"
         BoostMode.AUTO -> "Auto"
-        BoostMode.WIREGUARD -> "Wireguard (UAE)"
+        BoostMode.AETHER -> "Aether"
     }
     val borderColor = if (isBest) GameColors.Gold else GameColors.BorderDark
 
@@ -1068,7 +992,7 @@ private fun LivePingCard(ping: Long, bestResult: BoostResult?) {
                         BoostMode.DEDICATED_DNS -> "DNS اختصاصی"
                         BoostMode.UAE_DNS -> "DNS امارات"
                         BoostMode.AUTO -> "Auto"
-                        BoostMode.WIREGUARD -> "Wireguard (UAE)"
+                        BoostMode.AETHER -> "Aether"
                     }
                     Text(modeLabel, color = GameColors.TextMuted, fontSize = 11.sp)
                 }
@@ -1467,43 +1391,6 @@ private fun DedicatedDnsCard(
                         )
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun WarpStatusCard() {
-    Surface(
-        color = GameColors.GameGreen.copy(alpha = 0.08f),
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, GameColors.GameGreen.copy(alpha = 0.3f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.Speed,
-                contentDescription = null,
-                tint = GameColors.GameGreen,
-                modifier = Modifier.size(22.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "WARP خودکار",
-                    color = GameColors.GameGreen,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "بهترین مسیر هنگام اتصال به‌صورت خودکار انتخاب می‌شود (بدون نیاز به اسکن). اولین اتصال ممکن است تا یک دقیقه طول بکشد.",
-                    color = GameColors.TextMuted,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp
-                )
             }
         }
     }

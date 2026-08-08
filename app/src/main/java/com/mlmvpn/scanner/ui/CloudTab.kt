@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -53,6 +54,21 @@ fun CloudTab(onNavigateToScanner: () -> Unit = {}) {
     var bpbInitialSettings by remember { mutableStateOf<JSONObject?>(null) }
     var showEdgSettingsFor by remember { mutableStateOf<CloudAccount?>(null) }
     var accountToDelete by remember { mutableStateOf<com.mlmvpn.scanner.models.CloudAccount?>(null) }
+
+    // Physical back closes whichever settings/add sheet is open, instead of falling through to
+    // the app-level handler (which would leave the Cloud tab entirely).
+    val anySheetOpen = showAddModal || showNahanSettingsFor != null || showMlmUsersFor != null ||
+        showMlmSettingsFor != null || showBpbSettingsFor != null || showEdgSettingsFor != null ||
+        accountToDelete != null
+    androidx.activity.compose.BackHandler(enabled = anySheetOpen) {
+        showAddModal = false
+        showNahanSettingsFor = null
+        showMlmUsersFor = null
+        showMlmSettingsFor = null
+        showBpbSettingsFor = null
+        showEdgSettingsFor = null
+        accountToDelete = null
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -417,7 +433,13 @@ fun AccountGroupCard(
             Column(modifier = Modifier
                 .fillMaxWidth()
                 .background(BgDark.copy(alpha = 0.5f))
-                .then(if (!isEmailVerified || !hasSubdomain) Modifier.blur(8.dp) else Modifier)
+                // NOTE: was Modifier.blur(8.dp). Android's hardware blur (RenderEffect)
+                // crashes the native RenderThread on some GPUs — notably Samsung — with
+                // "pthread_mutex_lock called on a destroyed mutex" (SIGABRT) when the
+                // blurred surface is torn down as this panel toggles on Cloudflare
+                // account/subdomain state changes. A plain alpha dim gives the same
+                // "locked/disabled" cue with zero native-blur risk.
+                .then(if (!isEmailVerified || !hasSubdomain) Modifier.alpha(0.35f) else Modifier)
             ) {
             // --- ROW 1: BPB Engine ---
             Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {

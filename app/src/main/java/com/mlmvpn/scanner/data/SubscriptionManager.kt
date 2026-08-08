@@ -31,6 +31,9 @@ class SubscriptionManager private constructor(val context: Context) {
 
     private val prefs = context.getSharedPreferences("subscription_manager_prefs", Context.MODE_PRIVATE)
     private val client = OkHttpClient.Builder()
+        // Route sub/config fetches through the Vercel emergency proxy when the user has enabled
+        // Emergency-1, so "fetching configs" still works when workers.dev is blocked in Iran.
+        .addInterceptor(com.mlmvpn.scanner.emergency.EmergencyInterceptor(context))
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .build()

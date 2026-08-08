@@ -26,11 +26,13 @@ class GameBoosterManager(private val context: Context) {
         private const val PING_DEGRADED_MS = 250L
         private const val PING_FAIL_THRESHOLD = 3
 
-        // UAE WireGuard server. WG listens on UDP :443; an isolated TCP responder (rtt-probe.service)
-        // listens on TCP :443 purely so the client can measure real RTT to this host for the AUTO
-        // race, without bringing the tunnel up. Keep in sync with the trial endpoint.
-        private const val UAE_WG_HOST = "194.50.233.133"
-        private const val UAE_RTT_PROBE_PORT = 443
+        // AETHER RTT signal for the AUTO race: a plain TCP probe to Cloudflare's anycast edge.
+        // Aether itself has no fixed host -- it discovers a healthy WARP-pool endpoint at connect
+        // time -- so there is nothing meaningful to "connect and measure" the way the old UAE
+        // WireGuard trial did. This is only a coarse "is Cloudflare reachable at all" signal to
+        // let AETHER compete in AUTO without paying for a real (tens-of-seconds) gateway scan.
+        private const val CF_PROBE_HOST = "1.1.1.1"
+        private const val CF_PROBE_PORT = 443
     }
 
     val boosterState = MutableStateFlow(BoosterState.IDLE)
@@ -132,9 +134,10 @@ class GameBoosterManager(private val context: Context) {
             Log.d("GameBoosterManager", "Baseline ping: ${originalPing.value}ms")
 
             // AUTO now races only the three modes the Game tab exposes -- Cloudflare Dedicated DNS,
-            // UAE DNS, and WireGuard -- by REAL ping. DIRECT and TUNNEL are retired (they gave no
-            // measurable ping reduction and are gone from the UI), so they no longer compete here;
-            // the retired-mode helpers are kept only for the explicit DIRECT/TUNNEL when-branches.
+            // UAE DNS, and Aether -- by REAL (or, for Aether, estimated) ping. DIRECT and TUNNEL
+            // are retired (they gave no measurable ping reduction and are gone from the UI), so
+            // they no longer compete here; the retired-mode helpers are kept only for the explicit
+            // DIRECT/TUNNEL when-branches.
 
             // --- Candidate 1: Cloudflare Dedicated DNS (region-steered worker) ---
             if (mode == BoostMode.AUTO) {
@@ -166,19 +169,22 @@ class GameBoosterManager(private val context: Context) {
                 }
             }
 
-            // --- Candidate 3: WireGuard UAE (temporary connect + real ping through the tunnel) ---
-            // Per the user's decision, AUTO briefly connects the WireGuard trial (~10-15s, consuming
-            // a little trial time) to measure its real in-tunnel ping so it competes fairly.
+            // --- Candidate 3: Aether (coarse Cloudflare-reachability RTT, no real gateway scan) ---
+            // Aether has no fixed host to connect-and-measure the way the old UAE WireGuard trial
+            // did -- it picks a healthy WARP-pool endpoint itself, and doing that for real (tens
+            // of seconds) is too slow for the AUTO race. Instead this is a coarse reachability
+            // signal so AETHER can still compete; the actual in-tunnel latency is only known once
+            // the user connects.
             if (mode == BoostMode.AUTO) {
-                Log.d("GameBoosterManager", "--- AUTO: Measuring WireGuard UAE (temporary connect) ---")
+                Log.d("GameBoosterManager", "--- AUTO: Measuring Aether (Cloudflare reachability RTT) ---")
                 coroutineContext.ensureActive()
-                val wgResult = measureWireguardByConnect(server)
-                if (wgResult != null) {
-                    results.add(wgResult)
+                val aetherResult = measureAetherReachability(server)
+                if (aetherResult != null) {
+                    results.add(aetherResult)
                     allResults.value = results.sortedBy { it.pingMs }
-                    Log.d("GameBoosterManager", "AUTO WireGuard: ping=${wgResult.pingMs}ms (${wgResult.details})")
+                    Log.d("GameBoosterManager", "AUTO Aether: ping=${aetherResult.pingMs}ms (${aetherResult.details})")
                 } else {
-                    Log.d("GameBoosterManager", "AUTO WireGuard: trial unavailable / measure failed -- skipped.")
+                    Log.d("GameBoosterManager", "AUTO Aether: Cloudflare unreachable -- skipped.")
                 }
             }
 
@@ -204,20 +210,6 @@ class GameBoosterManager(private val context: Context) {
                 allResults.value = results.sortedBy { it.pingMs }
             }
 
-            // WARP is explicit-only: it connects through the automatic multi-engine system, which
-            // self-selects a transport at connect time and can't be pre-ping-compared, so it doesn't
-            // compete in AUTO's ping race -- the user picks WARP deliberately when they want it.
-            if (mode == BoostMode.WARP) {
-                Log.d("GameBoosterManager", "--- Preparing WARP (auto multi-engine) ---")
-                coroutineContext.ensureActive()
-                val warpResult = testWarpBoost(server)
-                if (warpResult != null) {
-                    results.add(warpResult)
-                    allResults.value = results.sortedBy { it.pingMs }
-                } else {
-                    Log.d("GameBoosterManager", "WARP engines not available.")
-                }
-            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             Log.d("GameBoosterManager", "Boost Test Cancelled.")
             boosterState.value = BoosterState.IDLE
@@ -413,9 +405,9 @@ class GameBoosterManager(private val context: Context) {
             pingMs = if (avgPing > 0) avgPing else 0L,
             jitterMs = if (avgPing > 0) jitter else 0L,
             nodeId = "dedicated_dns_only",
-            nodeName = "DNS Ø§Ø®ØªØµØ§ØµÛŒ",
+            nodeName = "DNS اختصاصی",
             nodeUri = cfg,
-            details = "DNS Ø§Ø®ØªØµØ§ØµÛŒ ($regionName)"
+            details = "DNS اختصاصی ($regionName)"
         )
     }
 
@@ -464,39 +456,54 @@ class GameBoosterManager(private val context: Context) {
     }
 
     /**
-     * WireGuard latency signal for the AUTO race. Rather than bring the trial tunnel up during a
-     * comparison (two Go runtimes = SIGABRT risk, plus it would burn trial time on every AUTO run),
-     * we measure the REAL network RTT to the UAE WireGuard server via a lightweight isolated TCP
-     * responder running on the server's TCP :443 (WG itself is UDP :443). That RTT is the dominant,
-     * unavoidable component the WireGuard path adds, so it's a safe, fast, honest way to let
-     * WireGuard compete in AUTO without any tunnel bring-up or trial consumption.
+     * Aether latency signal for the AUTO race. Unlike the old UAE WireGuard trial, Aether has no
+     * single fixed host to probe -- it picks a healthy endpoint from Cloudflare's WARP pool itself,
+     * dynamically, at connect time (see [com.mlmvpn.core.aether.AetherEngine]). Running a real scan
+     * here to measure it would take 10s of seconds (even the "turbo" budget is 45s) and is far too
+     * slow for a race that also tests DNS candidates in milliseconds.
      *
-     * Returns a WIREGUARD result WITHOUT a nodeUri: the real AmneziaWG config is built from the live
-     * trial (UaeTrialEngine, UI layer) only if the user actually picks/keeps WireGuard -- see the
-     * WIREGUARD handling in GameTab's boost flow.
+     * So this only measures a coarse "is Cloudflare's anycast edge reachable at all" RTT and returns
+     * an AETHER result with the real config already attached ([buildAetherConfig]) -- Aether needs
+     * no trial/account provisioning up front (it self-enrolls on first run), so unlike the old
+     * WireGuard path there is nothing left to assemble later at connect time.
      */
-    private suspend fun measureWireguardByConnect(server: GameServer): BoostResult? {
+    private suspend fun measureAetherReachability(server: GameServer): BoostResult? {
         coroutineContext.ensureActive()
         val (rtt, jitter) = GamePingTester.averagePing(
-            endpoints = listOf(UAE_WG_HOST),
-            port = UAE_RTT_PROBE_PORT,
+            endpoints = listOf(CF_PROBE_HOST),
+            port = CF_PROBE_PORT,
             proxyPort = null
         )
         if (rtt <= 0) {
-            Log.d("GameBoosterManager", "measureWireguardByConnect: UAE server unreachable -- skipping WireGuard in AUTO")
+            Log.d("GameBoosterManager", "measureAetherReachability: Cloudflare unreachable -- skipping Aether in AUTO")
             return null
         }
-        Log.d("GameBoosterManager", "WireGuard RTT estimate to UAE server: ${rtt}ms (jitter ${jitter}ms)")
+        Log.d("GameBoosterManager", "Aether RTT estimate (Cloudflare edge): ${rtt}ms (jitter ${jitter}ms)")
         return BoostResult(
-            mode = BoostMode.WIREGUARD,
+            mode = BoostMode.AETHER,
             pingMs = rtt,
             jitterMs = jitter,
-            nodeId = "game_uae_trial",
-            nodeName = "UAE Game Trial",
-            nodeUri = null, // real WG config is assembled from the live trial at connect time
-            details = "سرور اختصاصی امارات (تخمین RTT)"
+            nodeId = "game_aether",
+            nodeName = "Aether",
+            nodeUri = buildAetherConfig(),
+            details = "موتور Aether (تخمین RTT تا کلادفلر)"
         )
     }
+
+    /**
+     * Builds the JSON config MyVpnService dispatches on to start a full-device Aether tunnel
+     * (see [com.mlmvpn.core.aether.AetherTunEngine], routed by MyVpnService whenever
+     * `type == "aether"`). MASQUE/TURBO mirrors the app's default Aether settings: MASQUE is the
+     * only protocol that reliably carries traffic today, and TURBO connects to the first healthy
+     * endpoint instead of holding out for the best one, which is the right trade-off for a boost
+     * button the user expects to react in seconds, not minutes.
+     */
+    private fun buildAetherConfig(): String = com.mlmvpn.core.aether.AetherTunEngine.buildConfig(
+        com.mlmvpn.core.aether.AetherOptions(
+            protocol = com.mlmvpn.core.aether.AetherProtocol.MASQUE,
+            scan = com.mlmvpn.core.aether.AetherScan.TURBO,
+        )
+    )
 
     private suspend fun testDirectBoost(server: GameServer): BoostResult? {
         // Highest priority: the user's own Dedicated DNS worker (ECS region-steered). If it
@@ -529,7 +536,7 @@ class GameBoosterManager(private val context: Context) {
                         nodeId = "dedicated_dns_boost",
                         nodeName = "Dedicated DNS",
                         nodeUri = cfg,
-                        details = "Direct (DNS Ø§Ø®ØªØµØ§ØµÛŒ - $regionName)"
+                        details = "Direct (DNS اختصاصی - $regionName)"
                     )
                 }
                 Log.w("GameBoosterManager", "Dedicated DNS resolved ${ips.size} IPs but none pingable -- falling through")
@@ -551,7 +558,7 @@ class GameBoosterManager(private val context: Context) {
             // Ù¾ÛŒÙ†Ú¯ Ù‡Ù…Ù‡â€ŒÛŒ Ú©Ø§Ù†Ø¯ÛŒØ¯Ù‡Ø§ Ø±Ùˆ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù† -- Ø§Ú¯Ù‡ ÛŒÚ©ÛŒ ÙˆØµÙ„ Ø´Ø¯ Ù†ÛŒØ§Ø²ÛŒ Ø¨Ù‡ Ø¨Ù‚ÛŒÙ‡â€ŒÛŒ Ø±ÙˆØ´â€ŒÙ‡Ø§ Ù†ÛŒØ³Øª
             val (avgPing, jitter) = GamePingTester.averagePing(udpIps, server.port, proxyPort = null)
             if (avgPing > 0) {
-                return BoostResult(mode = BoostMode.DIRECT, pingMs = avgPing, jitterMs = jitter, details = "Direct (DNS Ø¨Ù‡ÛŒÙ†Ù‡)")
+                return BoostResult(mode = BoostMode.DIRECT, pingMs = avgPing, jitterMs = jitter, details = "Direct (DNS بهینه)")
             }
             Log.w("GameBoosterManager", "Ù‡ÛŒÚ†â€ŒÚ©Ø¯ÙˆÙ… Ø§Ø² ${udpIps.size} IP resolve Ø´Ø¯Ù‡ Ø¨Ø§ UDP ÙˆØµÙ„ Ù†Ø´Ø¯Ù† -- ØªÙ„Ø§Ø´ Ø¨Ø§ DNS-over-HTTPS")
         } else {
@@ -687,36 +694,6 @@ class GameBoosterManager(private val context: Context) {
         return@withContext results.sortedBy { it.pingMs }.take(5)
     }
 
-    private fun testWarpBoost(server: GameServer): BoostResult? {
-        // WARP now connects through the automatic multi-engine system (usque/warp-plus): it
-        // self-selects a working transport at connect time, so there's nothing to pre-scan or ping.
-        val available = com.mlmvpn.core.warp.MasqueManager.isAvailable(context) ||
-            com.mlmvpn.core.warp.WarpPlusManager.isAvailable(context)
-        if (!available) {
-            Log.d("GameBoosterManager", "No WARP engine binary bundled -- WARP mode unavailable.")
-            return null
-        }
-
-        val warpJson = JSONObject().apply {
-            put("type", "masque")
-            applyDedicatedDns(this)
-        }.toString()
-
-        // The real ping is only known after the (slow) auto-selection connects. Use the direct
-        // baseline as a placeholder so this candidate is counted; in WARP mode it's the only one.
-        val placeholderPing = originalPing.value.takeIf { it > 0 } ?: 1L
-
-        return BoostResult(
-            mode = BoostMode.WARP,
-            pingMs = placeholderPing,
-            jitterMs = 0L,
-            nodeId = "warp_auto",
-            nodeName = "WARP Ø®ÙˆØ¯Ú©Ø§Ø±",
-            nodeUri = warpJson,
-            details = "Ø§Ù†ØªØ®Ø§Ø¨ Ø®ÙˆØ¯Ú©Ø§Ø± Ø¨Ù‡ØªØ±ÛŒÙ† Ù…Ø³ÛŒØ± Ù‡Ù†Ú¯Ø§Ù… Ø§ØªØµØ§Ù„"
-        )
-    }
-
     fun connectWithBestResult(result: BoostResult, gamePackage: String) {
         // Debounce: ignore connects that arrive within 2s of the previous one. This kills the
         // "play button storm" (rapid taps queued 15 MyVpnService starts in a few seconds and crashed
@@ -762,7 +739,7 @@ class GameBoosterManager(private val context: Context) {
                 }
                 boosterState.value = BoosterState.BOOSTED
             }
-            BoostMode.TUNNEL, BoostMode.WARP -> {
+            BoostMode.TUNNEL -> {
                 Log.d("GameBoosterManager", "${result.mode} mode selected. Node: ${result.nodeName}. Starting VPN in Game Mode.")
                 val prefs = context.getSharedPreferences("game_booster_prefs", Context.MODE_PRIVATE)
                 prefs.edit()
@@ -785,16 +762,20 @@ class GameBoosterManager(private val context: Context) {
                 antiDpiRotationJob?.cancel()
                 antiDpiRotationJob = null
             }
-            BoostMode.AUTO -> {}
-            BoostMode.WIREGUARD -> {
-                // Start EXACTLY like the WireGuard tab's startGameVpn: only NODE_URI + NODE_ID.
-                // Do NOT set GAME_MODE / game_mode_active or attach dedicated-DNS extras here --
-                // those turn on MyVpnService's game-mode routing + monitors, which fight the
-                // AmneziaWG tunnel (it runs its own VpnService/TUN) and cause the crash / fake
-                // "connected" state seen when starting WireGuard from the Game tab after a restart.
-                // Game-only vs full-tunnel routing is decided server-side via the config's AllowedIPs
-                // (gameSubnets), not by Android per-app routing.
-                Log.d("GameBoosterManager", "WIREGUARD mode selected. Node: ${result.nodeName}. Starting trial tunnel (WireGuard-tab parity).")
+            // AUTO never reaches connect with its own mode; WARP is retired from the Game tab
+            // (removed from the UI + AUTO race) — kept in the enum only so old persisted
+            // selections and exhaustive when-branches don't break. Both are no-ops here.
+            BoostMode.AUTO, BoostMode.WARP -> {}
+            BoostMode.AETHER -> {
+                // Aether is a full-device tunnel (TUN -> tun2proxy -> the Aether process's local
+                // SOCKS5, routed by MyVpnService whenever the config's "type" is "aether" -- see
+                // AetherTunEngine). Only NODE_URI + NODE_ID needed; no GAME_MODE / dedicated-DNS
+                // extras -- those turn on MyVpnService's game-mode routing + monitors, which fight
+                // a tunnel that owns its own TUN, the same reason the old WireGuard trial path
+                // avoided them. result.nodeUri is always set by this point ([buildAetherConfig]
+                // in the AUTO race, or built directly in GameTab for the explicit AETHER mode) --
+                // unlike the old WireGuard trial, Aether needs no separately-issued trial config.
+                Log.d("GameBoosterManager", "AETHER mode selected. Starting full-device Aether tunnel.")
                 val intent = Intent(context, MyVpnService::class.java).apply {
                     putExtra("NODE_URI", result.nodeUri)
                     putExtra("NODE_ID", result.nodeId)
@@ -866,14 +847,15 @@ class GameBoosterManager(private val context: Context) {
             current.mode == BoostMode.UAE_DNS) return false
         excludedFromSwitch.add(resultKey(current))
 
-        // NEVER auto-switch across the WireGuard(libam-go) ↔ Xray(libgojni) runtime boundary: starting
-        // the other Go runtime in the same process crashes (SIGSEGV/SIGABRT). Only consider fallbacks
-        // in the SAME engine family as the current connection.
-        val curIsWg = current.mode == BoostMode.WIREGUARD
+        // NEVER auto-switch across the Aether (separate process, owns its own TUN) ↔ Xray(libgojni)
+        // engine boundary: starting one while the other is mid-teardown races two engines fighting
+        // over the same TUN/VpnService. Only consider fallbacks in the SAME engine family as the
+        // current connection.
+        val curIsAether = current.mode == BoostMode.AETHER
         val next = allResults.value
             .filter {
                 it.pingMs > 0 && resultKey(it) !in excludedFromSwitch &&
-                    (it.mode == BoostMode.WIREGUARD) == curIsWg
+                    (it.mode == BoostMode.AETHER) == curIsAether
             }
             .sortedBy { it.pingMs }
             .firstOrNull()
@@ -903,8 +885,7 @@ class GameBoosterManager(private val context: Context) {
         prefs.edit().putBoolean("game_mode_active", false).apply()
 
         if (MyVpnService.isRunning) {
-            val stopIntent = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
-            context.startService(stopIntent)
+            com.mlmvpn.scanner.ui.stopVpnSafely(context)
         }
 
         boosterState.value = BoosterState.IDLE

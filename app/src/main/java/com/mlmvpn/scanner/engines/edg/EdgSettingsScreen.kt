@@ -71,7 +71,9 @@ fun EdgSettingsScreen(
 
         withContext(Dispatchers.IO) {
             try {
-                val client = OkHttpClient()
+                val client = OkHttpClient.Builder()
+                    .addInterceptor(com.mlmvpn.scanner.emergency.EmergencyInterceptor(context))
+                    .build()
                 val isCfat = account.token.startsWith("cfat_") || account.email.isEmpty()
                 val authHeaders = Headers.Builder().apply {
                     if (isCfat) add("Authorization", "Bearer ${account.token}")
@@ -218,7 +220,9 @@ fun EdgSettingsScreen(
                                 isSaving = true
                                 withContext(Dispatchers.IO) {
                                     try {
-                                        val client = OkHttpClient()
+                                        val client = OkHttpClient.Builder()
+                                            .addInterceptor(com.mlmvpn.scanner.emergency.EmergencyInterceptor(context))
+                                            .build()
                                         val isCfat = account.token.startsWith("cfat_") || account.email.isEmpty()
                                         val authHeaders = Headers.Builder().apply {
                                             if (isCfat) add("Authorization", "Bearer ${account.token}")

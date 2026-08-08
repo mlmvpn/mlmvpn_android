@@ -1,0 +1,5 @@
+# Native libraries and large data files tracked with Git LFS.
+*.so filter=lfs diff=lfs merge=lfs -text
+*.dat filter=lfs diff=lfs merge=lfs -text
+*.apk filter=lfs diff=lfs merge=lfs -text
+*.aab filter=lfs diff=lfs merge=lfs -text

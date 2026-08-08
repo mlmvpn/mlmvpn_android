@@ -1,5 +1,6 @@
 package com.mlmvpn.scanner.ui
 
+import androidx.compose.ui.graphics.Color
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -128,7 +129,7 @@ object UaeTrialEngine {
                 .build()
 
             val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
+            val responseBody = response.body!!.string()
             val json = JSONObject(responseBody)
 
             if (!response.isSuccessful) {
@@ -195,8 +196,9 @@ object UaeTrialEngine {
         _remainingSeconds.value = 0
         _state.value = TrialState.EXPIRED
         appliedGameSubnets = null
-        val intent = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
-        context.startService(intent)
+        // Relaunches the process when the trial tunnel was up -- see stopVpnSafely for why the
+        // AmneziaWG Go runtime cannot be left alive after its own teardown.
+        stopVpnSafely(context)
     }
 
     private val isTrialConnected get() = MyVpnService.connectedNodeId == "game_uae_trial"
@@ -275,7 +277,7 @@ object UaeTrialEngine {
                 .build()
 
             val response = client.newCall(request).execute()
-            val json = JSONObject(response.body?.string() ?: "{}")
+            val json = JSONObject(response.body!!.string())
             val status = json.optString("status")
 
             when (status) {
@@ -343,7 +345,7 @@ object UaeTrialEngine {
                 .build()
 
             val response = client.newCall(request).execute()
-            val json = JSONObject(response.body?.string() ?: "{}")
+            val json = JSONObject(response.body!!.string())
             
             val status = json.optString("status")
             val err = json.optString("error")
@@ -462,17 +464,18 @@ fun WireguardTab() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
+    // ── Server 1: UAE (existing) ──
     val trialState by UaeTrialEngine.state.collectAsState()
     val remainingSeconds by UaeTrialEngine.remainingSeconds.collectAsState()
     val totalBytes by UaeTrialEngine.totalBytes.collectAsState()
     val usedBytes by UaeTrialEngine.usedBytes.collectAsState()
     val trialConfig by UaeTrialEngine.config.collectAsState()
     val trialError by UaeTrialEngine.error.collectAsState()
-    
+
     val phase by MyVpnService.connectionPhaseFlow.collectAsState()
     val connectedNodeId by MyVpnService.connectedNodeIdFlow.collectAsState()
 
-    // It's only the trial VPN if it's connected AND the config ID matches our trial config
+    // Server 1 (UAE) VPN state
     val isTrialActiveConfig = connectedNodeId == "game_uae_trial"
     val connected = phase == MyVpnService.Phase.CONNECTED && isTrialActiveConfig
     val connecting = phase == MyVpnService.Phase.CONNECTING && isTrialActiveConfig
@@ -502,8 +505,6 @@ fun WireguardTab() {
         modifier = Modifier
             .fillMaxSize()
             .background(AppColors.BgDark)
-            // bottom = 16 margin + 64 for the app's bottom nav bar (it overlays content,
-            // it's not a Scaffold bottomBar) so the pinned button sits just above it.
             .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp)
     ) {
         Column(
@@ -514,21 +515,33 @@ fun WireguardTab() {
         ) {
             // Title
             Text(
-                "🎮 بوست بازی",
+                "🔐 وایرگارد",
                 color = AppColors.TextPrimary,
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 4.dp)
             )
             Text(
-                "کاهش پینگ بازی‌ها با سرور اختصاصی امارات",
+                "اتصال سریع و امن با پروتکل وایرگارد",
                 color = AppColors.TextMuted,
                 fontSize = 13.sp,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(bottom = 24.dp)
             )
 
-            // Status Card
+            // ═══════════════════════════════════════════════
+            // ══  سرور اول — امارات
+            // ═══════════════════════════════════════════════
+            Text(
+                "🇦🇪 سرور اول — امارات",
+                color = AppColors.Primary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+            )
+
             Card(
                 colors = CardDefaults.cardColors(containerColor = AppColors.SurfaceDark),
                 shape = RoundedCornerShape(16.dp),
@@ -549,10 +562,10 @@ fun WireguardTab() {
                                 modifier = Modifier.size(48.dp)
                             )
                             Spacer(Modifier.height(12.dp))
-                            Text("تست رایگان ۱ ساعته", color = AppColors.TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text("تست ۳ ساعته سرور امارات", color = AppColors.TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                "این تست دقیقا یک ساعت زمان استفاده به شما می‌دهد و قابل تمدید نیست. لطفاً بعد از استفاده نظرات خود را در یوتیوب با ما به اشتراک بگذارید.",
+                                "سرور اختصاصی امارات با پینگ پایین برای بازی. ۳ ساعت زمان استفاده دارید.",
                                 color = AppColors.TextMuted,
                                 fontSize = 12.sp,
                                 textAlign = TextAlign.Center,
@@ -582,7 +595,6 @@ fun WireguardTab() {
                         }
 
                         UaeTrialEngine.TrialState.ACTIVE -> {
-                            // Timer display
                             val h = (remainingSeconds / 3600).toInt()
                             val m = ((remainingSeconds % 3600) / 60).toInt()
                             val s = (remainingSeconds % 60).toInt()
@@ -667,9 +679,7 @@ fun WireguardTab() {
                         UaeTrialEngine.TrialState.EXPIRED -> {
                             Text("⏰", fontSize = 48.sp)
                             Spacer(Modifier.height(12.dp))
-                            Text("زمان تست شما به پایان رسید", color = AppColors.Error, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.height(4.dp))
-                            Text("لطفاً نظرات خود را در یوتیوب بنویسید", color = AppColors.TextMuted, fontSize = 12.sp)
+                            Text("زمان تست سرور اول به پایان رسید", color = AppColors.Error, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
 
                         UaeTrialEngine.TrialState.ERROR -> {
@@ -685,34 +695,43 @@ fun WireguardTab() {
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
-
-            // Features
-            if (trialState == UaeTrialEngine.TrialState.IDLE) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = AppColors.SurfaceDark),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        FeatureRow("🚀", "پینگ بهینه", "سرور اختصاصی امارات")
-                        FeatureRow("🎯", "فقط بازی", "اینترنت عادی شما تغییر نمی‌کند")
-                        FeatureRow("⏳", "۱ ساعت خالص", "زمان فقط در زمان اتصال کسر می‌شود")
-                        FeatureRow("📱", "ضد تقلب", "ثبت در سرور بر اساس سخت‌افزار")
+            // Server 1 action button
+            Spacer(Modifier.height(12.dp))
+            when {
+                trialState == UaeTrialEngine.TrialState.IDLE -> {
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                val result = UaeTrialEngine.requestTrial(context, nickname)
+                                result.onSuccess { config ->
+                                    val prep = VpnService.prepare(context)
+                                    if (prep != null) {
+                                        vpnPrepareLauncher.launch(prep)
+                                    } else {
+                                        startGameVpn(context, config)
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AppColors.Primary,
+                            contentColor = AppColors.BgDark
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(Icons.Rounded.SportsEsports, contentDescription = null, modifier = Modifier.size(22.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("شروع سرور اول", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
                 }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
 
-        // Main Action Button
-        when {
-            trialState == UaeTrialEngine.TrialState.IDLE -> {
-                Button(
-                    onClick = {
-                        coroutineScope.launch {
-                            val result = UaeTrialEngine.requestTrial(context, nickname)
-                            result.onSuccess { config ->
+                trialState == UaeTrialEngine.TrialState.ACTIVE && !connected && !connecting -> {
+                    Button(
+                        onClick = {
+                            trialConfig?.let { config ->
                                 val prep = VpnService.prepare(context)
                                 if (prep != null) {
                                     vpnPrepareLauncher.launch(prep)
@@ -720,97 +739,82 @@ fun WireguardTab() {
                                     startGameVpn(context, config)
                                 }
                             }
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AppColors.Primary,
-                        contentColor = AppColors.BgDark
-                    ),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Icon(Icons.Rounded.SportsEsports, contentDescription = null, modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("شروع تست رایگان", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AppColors.Primary,
+                            contentColor = AppColors.BgDark
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(Icons.Rounded.Speed, contentDescription = null, modifier = Modifier.size(22.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("روشن کردن سرور اول", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                connecting -> {
+                    Button(
+                        onClick = { },
+                        enabled = false,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AppColors.SurfaceVariant,
+                            contentColor = AppColors.PrimaryBlue,
+                            disabledContainerColor = AppColors.SurfaceVariant,
+                            disabledContentColor = AppColors.PrimaryBlue
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        CircularProgressIndicator(color = AppColors.PrimaryBlue, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("در حال اتصال...", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                connected -> {
+                    Button(
+                        onClick = { stopVpnSafely(context) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AppColors.Error.copy(alpha = 0.18f),
+                            contentColor = AppColors.Error
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(Icons.Rounded.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(22.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("توقف سرور اول", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                trialState == UaeTrialEngine.TrialState.EXPIRED -> {
+                    // Do nothing
                 }
             }
 
-            trialState == UaeTrialEngine.TrialState.ACTIVE && !connected && !connecting -> {
-                Button(
-                    onClick = {
-                        trialConfig?.let { config ->
-                            val prep = VpnService.prepare(context)
-                            if (prep != null) {
-                                vpnPrepareLauncher.launch(prep)
-                            } else {
-                                startGameVpn(context, config)
-                            }
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AppColors.Primary,
-                        contentColor = AppColors.BgDark
-                    ),
-                    shape = RoundedCornerShape(16.dp)
+            // Features (show only when the server is idle)
+            if (trialState == UaeTrialEngine.TrialState.IDLE) {
+                Spacer(Modifier.height(16.dp))
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = AppColors.SurfaceDark),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Rounded.Speed, contentDescription = null, modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("روشن کردن و شروع بازی", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Column(Modifier.padding(16.dp)) {
+                        FeatureRow("🚀", "سرور اول — امارات", "پینگ بهینه برای بازی‌ها")
+                        FeatureRow("⏳", "۳ ساعت استفاده", "زمان فقط در زمان اتصال کسر می‌شود")
+                        FeatureRow("🔒", "امن و سریع", "پروتکل AmneziaWG")
+                    }
                 }
-            }
-
-            connecting -> {
-                Button(
-                    onClick = { },
-                    enabled = false,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AppColors.SurfaceVariant,
-                        contentColor = AppColors.PrimaryBlue,
-                        disabledContainerColor = AppColors.SurfaceVariant,
-                        disabledContentColor = AppColors.PrimaryBlue
-                    ),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    CircularProgressIndicator(color = AppColors.PrimaryBlue, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("در حال اتصال...", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-
-            connected -> {
-                Button(
-                    onClick = {
-                        val intent = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
-                        context.startService(intent)
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AppColors.Error.copy(alpha = 0.18f),
-                        contentColor = AppColors.Error
-                    ),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Icon(Icons.Rounded.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("توقف VPN (تایمر قطع می‌شود)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-
-            trialState == UaeTrialEngine.TrialState.EXPIRED -> {
-                // Do nothing
             }
         }
-
     }
 }
 
@@ -862,3 +866,17 @@ private fun startGameVpn(context: Context, config: UaeTrialEngine.TrialConfig) {
     context.startService(intent)
 }
 
+
+// App color palette used by the WireGuard tab. Previously defined in the (now removed)
+// WARP tab file; relocated here since this tab is its only remaining user.
+object AppColors {
+    val BgDark = Color(0xFF171717)
+    val SurfaceDark = Color(0xFF222222)
+    val SurfaceVariant = Color(0xFF2A2A2A)
+    val Primary = Color(0xFF81C995)
+    val PrimaryBlue = Color(0xFF8AB4F8)
+    val TextPrimary = Color(0xFFE8EAED)
+    val TextMuted = Color(0xFF9AA0A6)
+    val BorderDark = Color(0xFF333333)
+    val Error = Color(0xFFF28B82)
+}

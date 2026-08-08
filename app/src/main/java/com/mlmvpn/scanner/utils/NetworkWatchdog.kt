@@ -75,8 +75,15 @@ class NetworkWatchdog(context: Context) {
         return try {
             val network = connectivityManager?.activeNetwork ?: return false
             val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            // Only require that a network with a route to the internet exists (NET_CAPABILITY_INTERNET),
+            // NOT that it's currently VALIDATED. A heavy scan floods the link, so Android's own
+            // validation probe (to gstatic) times out and the Wi-Fi flips to "connected, no internet"
+            // (the "!" icon) even though the link still carries our scan traffic fine. Requiring
+            // VALIDATED made the watchdog read that as "offline" and pause the scan at ~20% on weaker
+            // routers/uplinks. The watchdog's real job is to catch a truly LOST network (no route →
+            // instant "network unreachable" fails that would fake-mark IPs dead); that case has no
+            // active network / no INTERNET capability and is still caught here.
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
         } catch (e: Exception) {
             true // fail-open: never block scanning just because the check itself errored
         }

@@ -411,7 +411,7 @@
     <string name="emergency_3_disconnected">ارتباط قطع شد</string>
 
     <string name="add_node_default_sni_title">افزودن کانفیگ‌های SNI</string>
-    <string name="add_node_default_sni">sni پیشفرض</string>
+    <string name="add_node_default_sni">ساخت SNI</string>
     <string name="add_node_default_sni_count">تعداد کانفیگ‌ها برای افزودن:</string>
     <string name="add_node_config_unit">%1$d کانفیگ</string>
     <string name="add_node_add_btn">افزودن</string>

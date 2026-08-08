@@ -34,15 +34,18 @@ data class BoostResult(
 )
 
 enum class BoostMode {
-    // NOTE: DIRECT and TUNNEL are retired from the Game tab (removed from the UI and from the
-    // AUTO race). Kept in the enum only so old persisted values/when-branches don't break.
+    // NOTE: DIRECT, TUNNEL and WARP are retired from the Game tab (removed from the UI and from
+    // the AUTO race). Kept in the enum only so old persisted values/when-branches don't break.
+    // The old two hardcoded UAE trial servers ("سرور اول" = WIREGUARD/AmneziaWG trial, "سرور دوم"
+    // = WARP_FREE) are gone entirely -- AETHER replaces both with the Aether engine, which picks
+    // a healthy endpoint itself from Cloudflare's WARP pool instead of pointing at one fixed host.
     DIRECT,        // (retired) Direct Boost
     TUNNEL,        // (retired) Tunnel Turbo (VLESS/Trojan)
-    WARP,          // WARP خودکار — سیستم چندموتوره (usque/warp-plus)
+    WARP,          // (retired) WARP خودکار — سیستم چندموتوره (usque/warp-plus)
     DEDICATED_DNS, // DNS اختصاصی کلادفلر (ورکر شخصی + انتخاب کشور)
     UAE_DNS,       // DNS اختصاصی امارات — روی سرور خودمان (رایگان/نامحدود)
-    WIREGUARD,     // وایرگارد — سرور اختصاصی امارات (تست رایگان ۱ ساعته)
-    AUTO           // Auto — بهترین بین کلادفلر/امارات/وایرگارد بر اساس پینگ واقعی
+    AETHER,        // موتور Aether — تونل کامل دستگاه (MASQUE/WireGuard/WARP-in-WARP)، بدون سرور ثابت
+    AUTO           // Auto — بهترین بین کلادفلر/امارات/Aether بر اساس پینگ واقعی
 }
 
 // وضعیت کلی Game Booster

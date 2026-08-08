@@ -29,28 +29,34 @@ object AmneziaWgConfigGenerator {
         } else {
             gameSubnets.joinToString(", ")
         }
-        
-        return """
-            [Interface]
-            PrivateKey = $privateKey
-            Address = $address
-            DNS = $dns
-            MTU = $mtu
-            Jc = $jc
-            Jmin = $jmin
-            Jmax = $jmax
-            S1 = $s1
-            S2 = $s2
-            H1 = $h1
-            H2 = $h2
-            H3 = $h3
-            H4 = $h4
 
-            [Peer]
-            PublicKey = $serverPubkey
-            Endpoint = $endpoint
-            AllowedIPs = $allowedIps
-            PersistentKeepalive = 25
-        """.trimIndent()
+        // Built line-by-line (no trimIndent) so the conditional obfuscation block can't corrupt the
+        // indentation. jc == 0 means "pure WireGuard, no obfuscation" (for standard-WireGuard peers
+        // like Cloudflare WARP) -- we omit the AmneziaWG junk/header lines entirely in that case, so
+        // the tunnel is vanilla WireGuard; writing zeroed junk params can desync a standard server.
+        val sb = StringBuilder()
+        sb.append("[Interface]\n")
+        sb.append("PrivateKey = ").append(privateKey).append('\n')
+        sb.append("Address = ").append(address).append('\n')
+        sb.append("DNS = ").append(dns).append('\n')
+        sb.append("MTU = ").append(mtu).append('\n')
+        if (jc > 0) {
+            sb.append("Jc = ").append(jc).append('\n')
+            sb.append("Jmin = ").append(jmin).append('\n')
+            sb.append("Jmax = ").append(jmax).append('\n')
+            sb.append("S1 = ").append(s1).append('\n')
+            sb.append("S2 = ").append(s2).append('\n')
+            sb.append("H1 = ").append(h1).append('\n')
+            sb.append("H2 = ").append(h2).append('\n')
+            sb.append("H3 = ").append(h3).append('\n')
+            sb.append("H4 = ").append(h4).append('\n')
+        }
+        sb.append('\n')
+        sb.append("[Peer]\n")
+        sb.append("PublicKey = ").append(serverPubkey).append('\n')
+        sb.append("Endpoint = ").append(endpoint).append('\n')
+        sb.append("AllowedIPs = ").append(allowedIps).append('\n')
+        sb.append("PersistentKeepalive = 25\n")
+        return sb.toString()
     }
 }

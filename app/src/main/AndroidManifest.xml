@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -18,6 +19,7 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application
+        android:name=".MlmApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:banner="@mipmap/ic_launcher"
@@ -62,25 +64,88 @@
             </intent-filter>
         </service>
 
-        <!-- Keeps the WARP endpoint scan running (with a progress notification) while the app is
-             backgrounded, closed from recents, or the screen is locked. -->
-        <service
-            android:name=".data.WarpScanService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Continues an in-progress network scan for the fastest WARP VPN endpoint while the app is backgrounded" />
-        </service>
-
+        <!--
+            WireguardScanService: legacy, hosts the old AmneziaWG-based WireGuard pipeline
+            that targeted a single UAE endpoint (194.50.233.133). That server is no longer
+            reachable from this application, so the service is left declared but unreachable
+            from the UI. It can be removed in a future cleanup pass once we're confident no
+            edge case still references it.
+        -->
         <service
             android:name=".engines.wireguard.WireguardScanService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse"
+            tools:targetApi="34">
+            <!-- tools:targetApi tells both the build tools AND the runtime package-parser
+                 that <property> + foregroundServiceType="specialUse" is API-34+. On
+                 older devices the entire property element and the FGS-type attribute are
+                 skipped cleanly instead of being silently rejected (which produces
+                 `ProcessRecord not found` later when ActivityManager tries to start the
+                 service). On API 34+ devices the element is parsed normally. -->
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Continues the wireguard endpoint scan in the background" />
+                android:value="Continues the wireguard endpoint scan in the background (legacy)"
+                tools:targetApi="34" />
         </service>
+
+        <!--
+            AetherScanService: foreground service that drives the Aether Rust binary
+            (assets/aether/<abi>/aether), produces a SOCKS5 listener on 127.0.0.1:20810 and
+            exposes state through androidx StateFlow's that AetherScreen renders live.
+            Replaces WireguardScanService as the primary censorship-circumvention engine.
+        -->
+        <!--
+            IMPORTANT: fully-qualified class path is REQUIRED here.
+            The Kotlin class lives at `com.mlmvpn.core.aether.AetherScanService` (no
+            "scanner" segment). The app's `namespace = com.mlmvpn.scanner` would
+            otherwise prepend `.core.aether.AetherScanService` to a wrong class name
+            (`com.mlmvpn.scanner.core.aether.AetherScanService`), and PackageManager
+            would happily register it — but ActivityManager would then return
+            `not found` every time we try to start it from
+            `Intent(context, AetherScanService::class.java)`.
+        -->
+        <service
+            android:name="com.mlmvpn.core.aether.AetherScanService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            tools:targetApi="34">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs the Aether engine (MASQUE / WireGuard / WARP-in-WARP) for censorship circumvention"
+                tools:targetApi="34" />
+        </service>
+
+        <!-- SoftEther SSL-VPN (vendored kittoku.mvc client, Apache-2.0). Brings up its own
+             tun through its own VpnService, exactly like AmneziaWG above, so MyVpnService
+             deliberately skips setupVpn() on this path. -->
+        <service
+            android:name="kittoku.mvc.service.SoftEtherVpnService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            tools:targetApi="34">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs the SoftEther SSL-VPN tunnel"
+                tools:targetApi="34" />
+        </service>
+
+        <!--
+            Tun2proxyHostService: runs the tun2proxy native core, and NOTHING else, in its own
+            process. That core calls exit(255) from native code a few seconds after a normal
+            teardown; it cannot be caught or prevented, so it is confined here instead, where its
+            death costs nothing. The app's main process keeps its UI, VPN service and engine
+            state throughout. See the class doc for the full story.
+
+            android:process is the entire point of this declaration; do not remove it.
+        -->
+        <service
+            android:name=".tun.Tun2proxyHostService"
+            android:exported="false"
+            android:process=":tun" />
 
         <!-- Quick Settings tile: one-tap toggle that connects to the fastest recent server. -->
         <service

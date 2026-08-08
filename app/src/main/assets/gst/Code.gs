@@ -1,4 +1,4 @@
-﻿/**
+/**
  * DomainFront Relay — Google Apps Script
  *
  * TWO modes:
@@ -304,9 +304,22 @@ function _doBatch(items) {
 
 // ── Request Building ───────────────────────────────────────
 
+// UrlFetchApp only accepts these HTTP methods. Anything else (HEAD, OPTIONS,
+// TRACE, …) makes UrlFetchApp throw "Attribute provided with an invalid value:
+// method" ("مشخصه با مقدار نامعتبری ارائه شده است: method"). Browsers fire HEAD
+// constantly (e.g. /generate_204 connectivity checks) and OPTIONS for CORS
+// preflight, so without this guard a big fraction of requests fail and the tunnel
+// feels stuck / returns "invalid response".
+var URLFETCH_METHODS = { get: 1, delete: 1, patch: 1, post: 1, put: 1 };
+
 function _buildOpts(req) {
+  // Coerce any UrlFetchApp-unsupported method to GET. A HEAD becomes a GET
+  // (we fetch the body but the client discards it — headers + status are what
+  // it wanted); OPTIONS/others likewise degrade to GET instead of throwing.
+  var method = String(req.m || "GET").toLowerCase();
+  if (!URLFETCH_METHODS[method]) method = "get";
   var opts = {
-    method: (req.m || "GET").toLowerCase(),
+    method: method,
     muteHttpExceptions: true,
     followRedirects: req.r !== false,
     validateHttpsCertificates: true,

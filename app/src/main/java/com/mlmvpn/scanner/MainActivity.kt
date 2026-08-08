@@ -30,7 +30,7 @@ class MainActivity : AppCompatActivity() {
         com.mlmvpn.scanner.utils.AppLocaleManager.init(this)
         
         com.mlmvpn.scanner.engines.subgenerator.SubGenManager(this).startAutoSync()
-        
+
         setContent {
             val colorScheme = androidx.compose.material3.darkColorScheme(
                 primary = androidx.compose.ui.graphics.Color(0xFF8AB4F8),
@@ -53,7 +53,18 @@ class MainActivity : AppCompatActivity() {
                             modifier = Modifier.fillMaxSize().systemBarsPadding(),
                             color = androidx.compose.ui.graphics.Color(0xFF121212)
                         ) {
+                            // AppScreen is composed underneath from the start, so the tab is
+                            // already warm and its first fetch already in flight by the time
+                            // the intro clears — the animation costs no perceived delay.
+                            val splashDone = androidx.compose.runtime.remember {
+                                androidx.compose.runtime.mutableStateOf(false)
+                            }
                             com.mlmvpn.scanner.ui.AppScreen()
+                            if (!splashDone.value) {
+                                com.mlmvpn.scanner.ui.SplashScreen(
+                                    onFinished = { splashDone.value = true }
+                                )
+                            }
                         }
                     }
                 }

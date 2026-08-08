@@ -119,6 +119,9 @@ fun activeEngineLabelFa(): String? = when {
 /** Restarts the whole app process — the only reliable way to unload a gomobile Go runtime. */
 fun restartAppProcess(context: Context) {
     val ctx = context.applicationContext
+    // Mark it, or this self-kill is indistinguishable from the native exit(255) we are chasing --
+    // both land in ApplicationExitInfo as REASON_EXIT_SELF.
+    com.mlmvpn.scanner.CrashReporter.noteDeliberateExit(ctx, "restartAppProcess")
     val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
     launch?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
     if (launch != null) ctx.startActivity(launch)
@@ -143,6 +146,19 @@ fun stopAllEnginesAndRestart(context: Context) {
     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
         restartAppProcess(context)
     }, 450)
+}
+
+/**
+ * Disconnects the VPN.
+ *
+ * Nothing engine-specific happens here any more. This briefly carried a "relaunch the app after
+ * disconnecting" workaround for the native core that exits(255) after its own teardown; that core
+ * now runs in its own process (see Tun2proxyHostService), so a disconnect is just a disconnect.
+ */
+fun stopVpnSafely(context: Context) {
+    com.mlmvpn.scanner.CrashReporter.note("stopVpnSafely")
+    val stop = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
+    context.startService(stop)
 }
 
 /**

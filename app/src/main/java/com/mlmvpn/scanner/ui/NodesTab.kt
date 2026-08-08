@@ -265,6 +265,13 @@ fun NodesTab() {
                         val response = client.newCall(request).execute()
                         if (response.isSuccessful) {
                             val bodyText = response.body?.string() ?: ""
+                            // Diagnostic: log the tunnel EXIT as Cloudflare sees it. For a leak check,
+                            // ip= must be the server's exit IP (not your real ISP IP) and loc= the
+                            // server's country. Fetched THROUGH the local proxy, so it reflects the tunnel.
+                            val exitIp = bodyText.split("\n").find { it.startsWith("ip=") }?.substringAfter("ip=")?.trim()
+                            val exitColo = bodyText.split("\n").find { it.startsWith("colo=") }?.substringAfter("colo=")?.trim()
+                            val exitLoc = bodyText.split("\n").find { it.startsWith("loc=") }?.substringAfter("loc=")?.trim()
+                            android.util.Log.d("ConnCheck", "tunnel exit → ip=$exitIp loc=$exitLoc colo=$exitColo")
                             val locLine = bodyText.split("\n").find { it.startsWith("loc=") }
                             if (locLine != null) {
                                 val country = locLine.substringAfter("loc=").trim()
@@ -1424,10 +1431,12 @@ fun NodesTab() {
                 text = { Text(stringResource(R.string.dialog_delete_all_nodes_msg), color = TextMuted) },
                 confirmButton = {
                     TextButton(onClick = {
-                        val effectiveGrouped = isGroupedByPanel || distinctEngines.size <= 1
-                        val remaining = nodes.filterNot { 
-                            (effectiveGrouped && it.engineType == selectedTabEngine) || 
-                            !effectiveGrouped
+                        // Delete exactly what's currently on screen (displayedNodes) — i.e. only the
+                        // selected folder when a group is open, not every folder in the tab. Protected
+                        // Iran defaults are always kept.
+                        val displayedIds = displayedNodes.map { it.id }.toSet()
+                        val remaining = nodes.filterNot {
+                            it.id in displayedIds && !com.mlmvpn.scanner.data.NodeManager.isProtected(it)
                         }
                         nodeManager.nodes.clear()
                         nodeManager.nodes.addAll(remaining)
@@ -1455,7 +1464,7 @@ fun NodesTab() {
                 text = { Text(stringResource(R.string.dialog_delete_node_msg), color = TextMuted) },
                 confirmButton = {
                     TextButton(onClick = {
-                        nodes = nodes.filter { it.id != nodeToDelete!!.id }
+                        nodes = nodes.filter { it.id != nodeToDelete!!.id || com.mlmvpn.scanner.data.NodeManager.isProtected(it) }
                         nodeToDelete = null
                     }) {
                         Text(stringResource(R.string.nodes_confirm), color = RedError)
@@ -1672,8 +1681,10 @@ fun NodesTab() {
                                 return@clickable
                             }
                             if (isRunning) {
-                                val stopIntent = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
-                                context.startService(stopIntent)
+                                // stopVpnSafely, not a bare STOP: if the WireGuard trial is what is
+                                // running, the process must be relaunched or the Go runtime exits
+                                // by itself seconds later. No-op for every other engine.
+                                stopVpnSafely(context)
                                 MyVpnService.isRunning = false
                             } else if (!isConnecting) {
                                 isConnecting = true
@@ -2294,12 +2305,15 @@ fun NodeCard(
                                 Text(stringResource(com.mlmvpn.scanner.R.string.node_edit), color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
-                        Divider(modifier = Modifier.height(30.dp).width(1.dp), color = BorderDark)
-                        TextButton(onClick = onDelete, modifier = Modifier.weight(1f)) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.Delete, contentDescription = null, tint = RedError, modifier = Modifier.size(20.dp))
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(stringResource(com.mlmvpn.scanner.R.string.node_delete), color = RedError, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        // Built-in Iran configs are non-deletable, so don't offer a delete button for them.
+                        if (!com.mlmvpn.scanner.data.NodeManager.isProtected(node)) {
+                            Divider(modifier = Modifier.height(30.dp).width(1.dp), color = BorderDark)
+                            TextButton(onClick = onDelete, modifier = Modifier.weight(1f)) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.Delete, contentDescription = null, tint = RedError, modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(stringResource(com.mlmvpn.scanner.R.string.node_delete), color = RedError, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }

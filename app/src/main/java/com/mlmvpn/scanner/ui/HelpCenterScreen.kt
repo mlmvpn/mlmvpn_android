@@ -35,6 +35,8 @@ fun HelpCenterScreen(onDismiss: () -> Unit) {
     var searchQuery by remember { mutableStateOf("") }
     var expandedArticleId by remember { mutableStateOf<String?>(null) }
     var showFaqModal by remember { mutableStateOf(false) }
+    // Physical back closes the FAQ first (Tutorial > FAQ), before leaving the screen.
+    androidx.activity.compose.BackHandler(enabled = showFaqModal) { showFaqModal = false }
 
     val primaryColor = Color(0xFF4285F4)
     val bgColor = Color(0xFF121212)

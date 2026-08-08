@@ -7,6 +7,13 @@ buildscript {
     }
 
     dependencies {
+        // R8 must come BEFORE AGP on the classpath so this version wins over the one AGP
+        // 8.3.2 bundles (8.3.x). That older R8 embeds kotlinx-metadata 2.0, and okhttp 5.1.0
+        // / okio 3.15.0 (pulled in transitively by amneziawg-android) carry Kotlin 2.1–2.2
+        // metadata, which it refuses to parse:
+        //   "Provided Metadata instance has version 2.1.0, while maximum supported is 2.0.0"
+        // Only the shrinker changes — AGP, Kotlin and every library version stay put.
+        classpath "com.android.tools:r8:8.7.18"
         classpath "com.android.tools.build:gradle:8.3.2"
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
