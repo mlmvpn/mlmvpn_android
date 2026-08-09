@@ -388,6 +388,22 @@ object XrayJsonGenerator {
             })
         }
         if (sanctionedDomains.isNotEmpty()) {
+            // Route by the fakedns pool's IP range directly, instead of relying on the
+            // dispatcher reverse-mapping a fake IP back to its domain at routing time (traced
+            // live: DNS resolution into the pool below was confirmed working via logcat --
+            // 198.18.x.x fake IPs were being handed out correctly for sanctioned lookups -- but
+            // routing still sent that traffic `direct`, so the domain-based rule alone isn't
+            // reliably matching fakedns-resolved connections on this Xray build). Anything
+            // resolved into this pool can only be a domain from [sanctionedDomains] (it's the
+            // only thing scoped to use fakedns), so matching by IP is just as precise and does
+            // not depend on that reverse-lookup step at all.
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("ip", JSONArray().put("198.18.0.0/15"))
+                put("outboundTag", "proxy")
+            })
+            // Kept as a second line of defense for any sanctioned domain that gets sniffed via
+            // SNI/HTTP host before it would otherwise fall through (e.g. non-ECH sites).
             rules.put(JSONObject().apply {
                 put("type", "field")
                 put("domain", JSONArray().apply { sanctionedDomains.forEach { put(it) } })
