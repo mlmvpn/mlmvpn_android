@@ -251,6 +251,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.CloudSync
                         ),
                         ChangelogItem(
+                            "ورکر EDG به آخرین نسخه آپدیت شد",
+                            "ورکر EDG داخل بخش ابری (بر پایه پروژه cmliu/edgetunnel) به آخرین نسخهٔ منتشرشده ارتقا یافت؛ شامل چند ماه بهینه‌سازی انتقال داده از منبع اصلی (بسته‌بندی هوشمند بسته‌های آپلود/دانلود، رقابت هم‌زمان چند اتصال TCP، کش سریع‌تر DNS) که باید کانفیگ‌های EDG را سریع‌تر و پایدارتر کند. جایگزینی کاملاً سازگار بود؛ نیازی به تغییر تنظیمات اکانت‌های موجود نیست.",
+                            Icons.Default.CloudSync
+                        ),
+                        ChangelogItem(
                             "دکمهٔ جدید «دریافت کانفیگ رایگان» در بخش اتصال",
                             "بالای دکمهٔ + یک ویزارد چندمرحله‌ای اضافه شد: اول تعداد کانفیگ‌های در دسترس را از چند منبع عمومی نشان می‌دهد، بعد شما تعداد دلخواه را انتخاب می‌کنید، سیستم کانفیگ‌ها را با یک تست دو مرحله‌ای (فیلتر سریع شبکه + تست واقعی اتصال با Xray، همان دقتی که «دیلی واقعی» دارد) بررسی می‌کند و فقط کانفیگ‌های واقعاً متصل را برمی‌گرداند. یک دکمهٔ «همین تعداد کافیه» هم هست که هر لحظه می‌توانید جستجو را متوقف و به همان‌ها بسنده کنید. کانفیگ‌ها با نام‌های رندوم mlmvpnXXXX داخل پوشهٔ «کانفیگ‌های رایگان» در تب Manual قرار می‌گیرند و اگر کانفیگی را از قبل داشته باشید، دوباره اضافه نمی‌شود (به شما می‌گوید چند تا تکراری بود).",
                             Icons.Default.Bolt
@@ -626,6 +631,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                         ChangelogItem(
                             "Updated the bundled BPB panel to v5.1.1",
                             "The BPB panel in the Cloud section was upgraded from the old v4.2.2 to v5.1.1. Since that version changed the deployment model entirely (per-account settings are now baked directly into the worker's own code instead of Cloudflare env variables like before), deploy, panel login, subscription fetching, and settings save were all rewritten for the new approach. The settings form was also updated to match the new version's fields.",
+                            Icons.Default.CloudSync
+                        ),
+                        ChangelogItem(
+                            "Updated the bundled EDG worker to the latest build",
+                            "The EDG worker in the Cloud section (based on cmliu/edgetunnel) was updated to the latest upstream release, carrying several months of transport optimizations (smarter up/downlink packet coalescing, concurrent TCP connection racing, faster DNS caching) that should make EDG configs noticeably faster and more stable. The swap is fully compatible -- no changes needed for existing accounts.",
                             Icons.Default.CloudSync
                         ),
                         ChangelogItem(

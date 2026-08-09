@@ -944,7 +944,7 @@ class CloudManager private constructor(private val context: Context) {
 
             val metadata = JSONObject().apply {
                 put("main_module", "worker.js")
-                put("compatibility_date", "2024-03-03")
+                put("compatibility_date", "2025-11-04")
                 val bindings = org.json.JSONArray().apply {
                     put(JSONObject().apply {
                         put("type", "plain_text")
