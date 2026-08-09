@@ -163,7 +163,7 @@
         </service>
 
         <!-- FileProvider: shares the downloaded update APK (in cache dir) with the system
-             package installer. Required on API 24+ -- raw file:// URIs are blocked. -->
+             package installer. Required on API 24+, since raw file:// URIs are blocked. -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
