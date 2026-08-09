@@ -137,6 +137,12 @@ object AntiSanctionManager {
         val config = VpnConfig.parseUri(vless) ?: return null
         val domains = routingDomains(context)
         if (domains.isEmpty()) return null
+        // Temporary diagnostic: a live device trace showed some sanctioned domains (e.g.
+        // microsoft.com) correctly routing to proxy while another (flaticon.com) did not, with
+        // no visible structural difference in how they were dispatched -- logging the exact list
+        // actually being used settles whether the domain is even present as expected, instead of
+        // guessing further from routing-decision logs alone. Remove once root-caused.
+        android.util.Log.d("AntiSanction", "buildConfig: sanctionedDomains (${domains.size}) = $domains")
         return XrayJsonGenerator.generateAntiSanctionConfig(
             config = config,
             localPort = localPort,
