@@ -97,22 +97,32 @@ class NahanDeployer(private val context: Context) {
             onProgress(40, "Setting up D1 Database...")
             var databaseId = account.nahanDbId?.takeIf { it.isNotEmpty() } ?: ""
 
+            var listErrorInfo = ""
+            var createErrorInfo = ""
+
             if (databaseId.isEmpty()) {
                 val listReq = Request.Builder()
-                    .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/d1/database")
+                    .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/d1/database?per_page=100")
                     .headers(authHeaders)
                     .get().build()
                 client.newCall(listReq).execute().use { listRes ->
-                    val listJson = JSONObject(listRes.body?.string() ?: "")
-                    if (listJson.optBoolean("success")) {
-                        val results = listJson.getJSONArray("result")
-                        for (i in 0 until results.length()) {
-                            val entry = results.getJSONObject(i)
-                            if (entry.optString("name").startsWith("nhn_db_")) {
-                                databaseId = entry.getString("uuid")
-                                break
+                    val listBody = listRes.body?.string() ?: ""
+                    try {
+                        val listJson = JSONObject(listBody)
+                        if (listJson.optBoolean("success")) {
+                            val results = listJson.getJSONArray("result")
+                            for (i in 0 until results.length()) {
+                                val entry = results.getJSONObject(i)
+                                if (entry.optString("name").startsWith("nhn_db_")) {
+                                    databaseId = entry.getString("uuid")
+                                    break
+                                }
                             }
+                        } else if (!listRes.isSuccessful) {
+                            listErrorInfo = listBody.take(300)
                         }
+                    } catch (e: Exception) {
+                        listErrorInfo = "parse error: ${e.message} / body: ${listBody.take(300)}"
                     }
                 }
             }
@@ -131,13 +141,20 @@ class NahanDeployer(private val context: Context) {
                         val json = JSONObject(body)
                         if (response.isSuccessful && json.optBoolean("success")) {
                             databaseId = json.getJSONObject("result").getString("uuid")
+                        } else {
+                            createErrorInfo = body.take(300)
                         }
-                    } catch (e: Exception) { }
+                    } catch (e: Exception) {
+                        createErrorInfo = "parse error: ${e.message} / body: ${body.take(300)}"
+                    }
                 }
             }
 
             if (databaseId.isEmpty()) {
-                return@withContext Pair(false, "Failed to create D1 Database. If you've retried this deploy several times, your Cloudflare account may have hit its D1 database limit -- delete unused databases at dash.cloudflare.com and try again.")
+                return@withContext Pair(
+                    false,
+                    "Failed to create D1 Database.\nCreate error: $createErrorInfo\nList error: $listErrorInfo"
+                )
             }
 
             // 3. Upload Worker
