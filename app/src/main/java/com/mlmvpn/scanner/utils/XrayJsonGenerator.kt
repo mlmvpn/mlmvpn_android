@@ -261,8 +261,13 @@ object XrayJsonGenerator {
         val json = JSONObject()
         json.put("log", JSONObject().put("loglevel", "warning"))
 
-        // Inbounds (tun injected later by MyVpnService). Sniffing recovers the SNI/host so
-        // routing can match by domain.
+        // Inbounds (tun injected later by MyVpnService, with its own sniffing that already
+        // includes "fakedns" -- see the DNS section below for why routing does NOT rely on TLS
+        // SNI sniffing alone: modern browsers increasingly encrypt the ClientHello (ECH), which
+        // blinds SNI sniffing entirely and silently sends every "sanctioned" connection out
+        // `direct` with the real Iranian IP -- exactly the site-doesn't-open symptom this was
+        // built to avoid. destOverride still includes tls/http/quic as a fallback for domains
+        // that aren't in the fakedns pool (e.g. the worker's own host).
         val inbounds = JSONArray()
         inbounds.put(JSONObject().apply {
             put("port", localPort)
@@ -272,7 +277,7 @@ object XrayJsonGenerator {
             put("settings", JSONObject().apply { put("auth", "noauth"); put("udp", true) })
             put("sniffing", JSONObject().apply {
                 put("enabled", true)
-                put("destOverride", JSONArray().put("http").put("tls").put("quic"))
+                put("destOverride", JSONArray().put("fakedns").put("http").put("tls").put("quic"))
                 put("routeOnly", false)
             })
         })
@@ -325,6 +330,22 @@ object XrayJsonGenerator {
         outbounds.put(JSONObject().apply { put("protocol", "dns"); put("tag", "dns-out") })
         json.put("outbounds", outbounds)
 
+        // Routing sanctioned domains used to rely entirely on TLS SNI sniffing (destOverride
+        // tls/http/quic) to recognize them after the fact. That silently fails for any site
+        // using Encrypted Client Hello (ECH) -- increasingly the default in Chrome -- since the
+        // SNI is no longer visible in plaintext, so sniffing finds nothing, the connection falls
+        // through to the final catch-all "direct" rule, and the sanctioned site loads (or fails
+        // to load) over the user's real Iranian IP as if this feature were off. Fixed by
+        // resolving sanctioned domains to a reserved "fake" IP pool via DNS instead: Xray
+        // remembers which domain a fake IP came from and routes by that domain regardless of
+        // what's (or isn't) visible in the TLS handshake -- immune to ECH.
+        val dnsServers = JSONArray()
+        if (sanctionedDomains.isNotEmpty()) {
+            dnsServers.put(JSONObject().apply {
+                put("address", "fakedns")
+                put("domains", JSONArray().apply { sanctionedDomains.forEach { put(it) } })
+            })
+        }
         // Plain UDP:53 to backendDns (Cloudflare/Google resolvers) is commonly blocked or
         // throttled on Iranian ISPs -- since this feature only tunnels a handful of sanctioned
         // domains, that used to break DNS resolution for EVERYTHING while it was on, including
@@ -332,13 +353,19 @@ object XrayJsonGenerator {
         // which isn't blocked the way plain DNS is) instead, same fix already used for the main
         // VPN config's xhttp path; backendDns is kept only as a fallback if DoH itself is
         // unreachable.
-        val dnsServers = JSONArray()
         dnsServers.put(JSONObject().apply {
             put("address", "https://8.8.8.8/dns-query")
             put("tag", "remote-dns")
         })
         dnsServers.put(backendDns)
         json.put("dns", JSONObject().put("servers", dnsServers))
+
+        if (sanctionedDomains.isNotEmpty()) {
+            json.put("fakedns", JSONArray().put(JSONObject().apply {
+                put("ipPool", "198.18.0.0/15")
+                put("poolSize", 65535)
+            }))
+        }
 
         // Routing: DNS → dns-out; the DoH resolver's own HTTPS traffic → direct (it's just a
         // lookup, not sanctioned data); sanctioned domains → proxy; everything else → direct.

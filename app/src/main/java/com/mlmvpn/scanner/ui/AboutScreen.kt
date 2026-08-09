@@ -271,6 +271,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Storage
                         ),
                         ChangelogItem(
+                            "رفع باز نشدن سایت‌های تحریمی (خطای ۴۰۳) در «DNS ضد تحریم شخصی»",
+                            "سایت‌های تحریمی که خودِ ابزار استعلام همین بخش هم «تحریم» تشخیص می‌داد، بازهم باز نمی‌شدند و ۴۰۳ می‌دادند — دقیقاً انگار قابلیت روشن نبود. علت (با گرفتن لاگ زنده از گوشی واقعی پیدا شد): مسیریابی دامنه‌ها کاملاً به تشخیص SNI از TLS ClientHello وابسته بود که برای سایت‌های دارای Encrypted Client Hello (ECH، این روزها پیش‌فرض کروم) کاملاً از کار می‌افتد چون SNI رمزنگاری‌شده قابل خواندن نیست؛ نتیجه این‌که هر اتصال تحریمی به قانون مستقیم می‌افتاد. رفع شد با استفاده از یک استخر DNS جعلی (fakedns) مخصوص دامنه‌های تحریمی به‌جای sniffing — روشی که کاملاً مستقل از TLS handshake و مقاوم در برابر ECH است.",
+                            Icons.Default.Dns
+                        ),
+                        ChangelogItem(
                             "رفع خراب‌شدن سایت‌های غیرمرتبط با روشن‌کردن «DNS ضد تحریم شخصی»",
                             "روشن‌کردن این بخش گاهی سایت‌هایی که اصلاً قرار نبود دست‌خورده باشند (مثل Gmail) را هم خراب می‌کرد. علت: resolver DNS این بخش به‌صورت ثابت روی UDP ساده 1.1.1.1:53 تنظیم شده بود — پروتکلی که در بسیاری از خطوط ایران فیلتر یا کند می‌شود، بدون هیچ راه جایگزین؛ برخلاف تنظیمات اصلی VPN که به همین دلیل قبلاً به DoH روی HTTPS تغییر کرده بود. حالا از همان روش DoH روی پورت 443 استفاده می‌کند.",
                             Icons.Default.Dns
@@ -697,6 +702,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed MLM/Nahan deploys getting permanently stuck on a D1 database error",
                             "MLM (and Nahan) deploys could get permanently stuck failing at \"Failed to create D1 Database\", with no fix short of manually deleting old databases in the Cloudflare dashboard. Root cause: every deploy attempt -- including retries of a failed one -- provisioned a brand-new D1 database and never reused or cleaned up earlier ones, so a handful of retries would quietly eat into the account's D1 database quota until none was left to create. Deploys now reuse the account's existing database (or an orphaned one from a previous attempt) instead of always creating a new one. If the account's 10-database Free-plan limit is genuinely full of databases from other tools, the error now lists every existing database's name so you know exactly what to delete.",
                             Icons.Default.Storage
+                        ),
+                        ChangelogItem(
+                            "Fixed sanctioned sites (403 errors) still not opening in the personal anti-sanction DNS",
+                            "Sanctioned sites -- confirmed \"sanctioned\" by the feature's own domain checker -- still didn't open, returning 403s exactly as if the feature were off. Root cause, found via a live logcat capture from a real device: domain routing relied entirely on sniffing the SNI out of the TLS ClientHello, which silently fails for any site using Encrypted Client Hello (ECH, increasingly Chrome's default) since the SNI is encrypted and invisible to sniffing -- every \"sanctioned\" connection fell through to the catch-all direct rule and hit the origin from the real Iranian IP. Fixed by resolving sanctioned domains through a reserved fake-IP DNS pool instead of relying on sniffing -- immune to ECH.",
+                            Icons.Default.Dns
                         ),
                         ChangelogItem(
                             "Fixed unrelated sites breaking when the personal anti-sanction DNS was turned on",
