@@ -256,6 +256,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.CloudSync
                         ),
                         ChangelogItem(
+                            "پنل نهان (Nahan) به نسخه 3.0.0 آپدیت شد",
+                            "پنل نهان داخل بخش ابری از نسخهٔ 2.9.4 به 3.0.0 ارتقا یافت: پروکسی زنجیره‌ای VLESS به‌عنوان upstream، فرمت ساب v2rayN JSON، فرم بازطراحی‌شدهٔ افزودن/ویرایش کاربر با toggle مدرن به‌جای چک‌باکس، و رفع چند باگ ظاهری در حالت تاریک/راست‌چین. نام بایندینگ D1 و مسیرهای API بدون تغییر ماندند، پس جایگزینی کاملاً سازگار بود.",
+                            Icons.Default.CloudSync
+                        ),
+                        ChangelogItem(
                             "دکمهٔ جدید «دریافت کانفیگ رایگان» در بخش اتصال",
                             "بالای دکمهٔ + یک ویزارد چندمرحله‌ای اضافه شد: اول تعداد کانفیگ‌های در دسترس را از چند منبع عمومی نشان می‌دهد، بعد شما تعداد دلخواه را انتخاب می‌کنید، سیستم کانفیگ‌ها را با یک تست دو مرحله‌ای (فیلتر سریع شبکه + تست واقعی اتصال با Xray، همان دقتی که «دیلی واقعی» دارد) بررسی می‌کند و فقط کانفیگ‌های واقعاً متصل را برمی‌گرداند. یک دکمهٔ «همین تعداد کافیه» هم هست که هر لحظه می‌توانید جستجو را متوقف و به همان‌ها بسنده کنید. کانفیگ‌ها با نام‌های رندوم mlmvpnXXXX داخل پوشهٔ «کانفیگ‌های رایگان» در تب Manual قرار می‌گیرند و اگر کانفیگی را از قبل داشته باشید، دوباره اضافه نمی‌شود (به شما می‌گوید چند تا تکراری بود).",
                             Icons.Default.Bolt
@@ -636,6 +641,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                         ChangelogItem(
                             "Updated the bundled EDG worker to the latest build",
                             "The EDG worker in the Cloud section (based on cmliu/edgetunnel) was updated to the latest upstream release, carrying several months of transport optimizations (smarter up/downlink packet coalescing, concurrent TCP connection racing, faster DNS caching) that should make EDG configs noticeably faster and more stable. The swap is fully compatible -- no changes needed for existing accounts.",
+                            Icons.Default.CloudSync
+                        ),
+                        ChangelogItem(
+                            "Updated the bundled Nahan panel to v3.0.0",
+                            "The Nahan panel in the Cloud section was upgraded from v2.9.4 to v3.0.0: upstream VLESS proxy chaining, a v2rayN JSON subscription format, a redesigned add/edit-user form with modern toggle switches instead of checkboxes, and several RTL/dark-mode dashboard fixes. The D1 binding name and API route contract are unchanged, so the swap is fully compatible.",
                             Icons.Default.CloudSync
                         ),
                         ChangelogItem(
