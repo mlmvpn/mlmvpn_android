@@ -256,6 +256,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Timer
                         ),
                         ChangelogItem(
+                            "رفع قفل‌شدن بی‌جهت پنل ابری پشت «تایید ایمیل الزامی»",
+                            "افزودن اکانت کلودفلر می‌توانست برای همیشه پشت صفحه‌ی «تایید ایمیل الزامی» گیر کند، بدون هیچ راه خروجی جز لاگین بیرونی به کلودفلر — حتی وقتی مشکل واقعی، تایید نبودن ایمیل نبود. علت: وقتی ساخت ساب‌دامین workers.dev حساب شکست می‌خورد، اپ صرفاً با بررسی این‌که آیا متن خطای خام کلودفلر شامل کلمه «verify» است یا نه تصمیم می‌گرفت که حتماً ایمیل تایید نشده — در حالی که چند خطای بی‌ربط دیگر کلودفلر (مشکل دامنه‌ی توکن، محدودیت نرخ درخواست و غیره) هم می‌توانند همین کلمه را داشته باشند، و کل پنل ابری را بدون هیچ نشانه‌ای از علت واقعی پشت صفحه‌ی تایید قفل می‌کردند. حالا قبل از نمایش آن صفحه، وضعیت واقعی تایید ایمیل از خودِ endpoint وضعیت حساب کلودفلر پرسیده می‌شود؛ در غیر این صورت خطای واقعی نمایش داده می‌شود.",
+                            Icons.Default.VerifiedUser
+                        ),
+                        ChangelogItem(
                             "رفع خالی‌شدن خودکار کانفیگ‌های لینک اشتراک",
                             "کانفیگ‌های یک لینک اشتراک ممکن بود بعد از مدتی خودشان خالی شوند — خیلی قبل از این‌که کاربر اصلاً دکمه «بروزرسانی» را بزند. علت: هر لینک اشتراک این‌که به کدام گروه نود اشاره می‌کند را به‌صورت یک رشته ترکیبی ذخیره می‌کند (مثلاً «manual:نوع‌موتور:عنوان‌گروه»)، و دکمه «بروزرسانی» خودِ صفحه این رشته را درست تجزیه می‌کند تا نودهای منطبق را پیدا کند — ولی وظیفه‌ی همگام‌سازی خودکار پس‌زمینه (که چند ثانیه بعد از هر تغییر در لیست نودها دوباره کانفیگ‌ها را آپلود می‌کند) نوع موتور خام هر نود را مستقیم با کل همان رشته‌ی ترکیبی مقایسه می‌کرد که هیچ‌وقت برابر نمی‌شد. پس هر بار همگام‌سازی پس‌زمینه اجرا می‌شد، لینک را بی‌صدا با یک لیست کانفیگ خالی جایگزین می‌کرد؛ «بعد از ۲۰-۳۰ بار بروزرسانی» که کاربران می‌دیدند در واقع فقط به این بستگی داشت چقدر طول می‌کشید تا یکی از این همگام‌سازی‌های پس‌زمینه اجرا شود. حالا وظیفه‌ی همگام‌سازی خودکار دقیقاً همان روشی که دکمه «بروزرسانی» استفاده می‌کند را به‌کار می‌برد.",
                             Icons.Default.LinkOff
@@ -727,6 +732,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Aether: added a timer and explanation on the gateway-scan step",
                             "The gateway-scan step (MASQUE) can legitimately take anywhere from tens of seconds to a few minutes depending on scan mode, and on networks that DPI-block MASQUE it runs the full time budget before failing -- with only a static \"working\" badge, that read as a frozen app. The status card now shows a live elapsed-time counter on the scan step, and after 20 seconds an explanatory note that this step can take a while and that some networks block or slow MASQUE, with a reminder that tapping the connect button again cancels it. This doesn't change scan behavior or success rate -- it just makes a long scan legible instead of looking stuck.",
                             Icons.Default.Timer
+                        ),
+                        ChangelogItem(
+                            "Fixed the cloud panel getting stuck behind \"email verification required\" for unrelated errors",
+                            "Adding a Cloudflare account could get permanently stuck behind a \"verify your email\" overlay with no way out except an external Cloudflare login, even when email verification wasn't actually the problem. Root cause: when creating the account's workers.dev subdomain failed, the app decided it must be an unverified email purely by checking whether Cloudflare's raw error text happened to contain the word \"verify\" -- which several unrelated Cloudflare errors (token scope issues, rate limiting, etc.) can also contain, incorrectly locking the whole cloud panel behind the verification screen with no visibility into the real cause. It now asks Cloudflare's own account-status endpoint for the real verified state before showing that screen, and surfaces the actual error otherwise.",
+                            Icons.Default.VerifiedUser
                         ),
                         ChangelogItem(
                             "Fixed subscription-link configs going empty on their own",

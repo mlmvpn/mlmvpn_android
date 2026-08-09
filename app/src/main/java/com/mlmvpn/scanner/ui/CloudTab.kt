@@ -1003,7 +1003,19 @@ fun AccountGroupCard(
                                             cloudManager.saveAccounts()
                                             subdomainTimer = 180
                                         } else {
-                                            if (res.second.contains("verify", ignoreCase = true)) {
+                                            // Cloudflare's raw subdomain-create error text can contain the
+                                            // word "verify" for reasons that have nothing to do with email
+                                            // verification (token scope, rate limiting, etc). Matching on
+                                            // that substring alone used to lock the whole cloud panel behind
+                                            // the "verify your email" overlay for any such error, with no way
+                                            // out except an external Cloudflare login -- even when the real
+                                            // problem was something else entirely. Ask Cloudflare's own /user
+                                            // endpoint for the actual verified state instead of guessing from
+                                            // unrelated error text.
+                                            val realStatus = if (res.second.contains("verify", ignoreCase = true)) {
+                                                cloudManager.checkAccountStatus(account)
+                                            } else null
+                                            if (realStatus != null && !realStatus.second) {
                                                 isEmailVerified = false
                                                 account.isEmailVerified = false
                                                 cloudManager.saveAccounts()
