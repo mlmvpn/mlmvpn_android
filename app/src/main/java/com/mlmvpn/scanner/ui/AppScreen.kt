@@ -70,6 +70,16 @@ fun AppScreen() {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
+    // In-app update check: fires once when the main screen first composes (right after splash).
+    // Silent by design if GitHub is unreachable -- MyVpnService retries this same check whenever
+    // a connection reaches CONNECTED, covering the "GitHub was blocked, VPN just turned on" case.
+    val updateInfo by com.mlmvpn.scanner.update.UpdateChecker.updateAvailableFlow.collectAsState()
+    var updateDismissed by remember { mutableStateOf(false) }
+    var showUpdateDownloadScreen by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        com.mlmvpn.scanner.update.UpdateChecker.checkForUpdate(context)
+    }
+
     // Physical back-button behaviour (standard Android hierarchy):
     //   drawer open        -> close drawer
     //   emergency/other full-screen modal open -> close it (returns to the tab underneath)
@@ -553,6 +563,21 @@ fun AppScreen() {
                 }
             }
         )
+    }
+
+    if (updateInfo != null && !updateDismissed) {
+        if (showUpdateDownloadScreen) {
+            com.mlmvpn.scanner.ui.update.UpdateDownloadScreen(
+                info = updateInfo!!,
+                onBack = { showUpdateDownloadScreen = false }
+            )
+        } else {
+            com.mlmvpn.scanner.ui.update.UpdateAvailableDialog(
+                info = updateInfo!!,
+                onDismiss = { updateDismissed = true },
+                onDownloadClick = { showUpdateDownloadScreen = true }
+            )
+        }
     }
 }
 

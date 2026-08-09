@@ -53,6 +53,17 @@ class MyVpnService : VpnService() {
         super.onCreate()
         instance = this
         registerNetworkWatchdog()
+        // If the update check on app launch failed silently (GitHub filtered/unreachable before
+        // any tunnel was up), retry it once real connectivity exists -- whichever engine got us
+        // there. Cheap: UpdateChecker throttles itself internally, so repeated CONNECTED events
+        // (reconnects, engine switches) don't spam the API.
+        serviceScope.launch {
+            connectionPhaseFlow.collect { phase ->
+                if (phase == Phase.CONNECTED) {
+                    com.mlmvpn.scanner.update.UpdateChecker.checkForUpdate(applicationContext)
+                }
+            }
+        }
     }
 
     private fun registerNetworkWatchdog() {

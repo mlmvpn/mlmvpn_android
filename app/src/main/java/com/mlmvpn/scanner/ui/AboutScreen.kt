@@ -246,6 +246,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Menu
                         ),
                         ChangelogItem(
+                            "بررسی خودکار نسخه جدید و دانلود/نصب داخل اپ",
+                            "اپ حالا بلافاصله بعد از اجرا (و همچنین هر بار یک اتصال VPN برقرار می‌شود، برای وقتی گیت‌هاب موقع اجرا فیلتر بوده) نسخه جدید را از گیت‌هاب بررسی می‌کند. اگر نسخه جدیدتری منتشر شده باشد، پنجره‌ای با شماره نسخه، حجم فایل، و لیست کامل و قابل‌اسکرول تغییرات نمایش داده می‌شود، همراه با دکمه «دانلود نسخه جدید» که به یک صفحه دانلود اختصاصی می‌رود (نوار پیشرفت با درصد زنده) و بعد از اتمام دانلود خودکار نصب‌کننده سیستم را باز می‌کند. اگر گیت‌هاب در دسترس نباشد، این بررسی کاملاً بی‌صدا شکست می‌خورد و هیچ خللی در کارکرد اپ ایجاد نمی‌کند.",
+                            Icons.Default.SystemUpdate
+                        ),
+                        ChangelogItem(
                             "رفع پیام گمراه‌کننده هنگام افزودن اکانت کلودفلر",
                             "وقتی از Global API Key بدون وارد کردن ایمیل استفاده می‌شد، برنامه پیام مبهم «Invalid API Token» نشان می‌داد. حالا پیام واضح می‌گوید که برای این نوع کلید، ایمیل هم لازم است؛ راهنمای متنی هم زیر فیلد اضافه شد.",
                             Icons.Default.BugReport
@@ -697,6 +702,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed a dead empty gap under the hamburger drawer on tall phones",
                             "The drawer left an empty gap between the last menu item and the bottom of the screen on tall phones. The gap between the main menu and the emergency section now expands on tall screens (pinning the emergency section to the bottom), while still scrolling normally with everything packed together on short screens where it doesn't all fit.",
                             Icons.Default.Menu
+                        ),
+                        ChangelogItem(
+                            "In-app update check, download and install",
+                            "The app now checks GitHub for a newer release right after launch (and again whenever any VPN connection reaches \"connected\", in case GitHub itself was blocked at launch). If a newer version exists, a modal shows the new version number, download size, and the full scrollable changelog, with a \"Download new version\" button that opens a dedicated download screen (a fill progress bar with a live percentage) and hands off to the system installer automatically once the download completes. If GitHub is unreachable, the check fails completely silently with no interruption to the rest of the app.",
+                            Icons.Default.SystemUpdate
                         ),
                         ChangelogItem(
                             "Fixed misleading error when adding a Cloudflare account",
