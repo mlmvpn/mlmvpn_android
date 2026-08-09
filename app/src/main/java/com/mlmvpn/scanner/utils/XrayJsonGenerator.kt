@@ -418,8 +418,15 @@ object XrayJsonGenerator {
         rules.put(JSONObject().apply {
             put("type", "field"); put("network", "tcp,udp"); put("outboundTag", "direct")
         })
+        // "AsIs" only ever matches by domain once one is known, and never falls back to the ip
+        // rule above -- a live debug trace showed fakedns correctly resolving a sanctioned
+        // domain into our pool AND Xray correctly reverse-mapping it back to that domain, but
+        // the domain-based rule still not matching it (a quirk of this bundled Xray build), and
+        // "AsIs" meant the ip-based rule never got a chance to catch it either. "IPIfNonMatch"
+        // falls back to matching the destination address (here, the already-known fake IP --
+        // no extra DNS work needed) whenever the domain rules don't hit.
         json.put("routing", JSONObject().apply {
-            put("domainStrategy", "AsIs"); put("rules", rules)
+            put("domainStrategy", "IPIfNonMatch"); put("rules", rules)
         })
 
         return json.toString()
