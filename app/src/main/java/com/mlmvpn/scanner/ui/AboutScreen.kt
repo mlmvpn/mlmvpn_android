@@ -261,6 +261,16 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.CloudSync
                         ),
                         ChangelogItem(
+                            "حذف کامل پنل Deno",
+                            "پنل Deno (آیتم منو، تب، بخش سؤالات متداول و کد داخلی) کاملاً حذف شد. api.deno.com مدتی است در ایران فیلتر است و مدل صورتحساب Deno (بر اساس مدت‌زمان باز بودن اتصال، نه حجم) اصلاً برای VPN مناسب نبود؛ پنل‌های کلودفلر (BPB/EDG/Nahan) همان نیاز را بدون این مشکلات پوشش می‌دهند.",
+                            Icons.Default.Delete
+                        ),
+                        ChangelogItem(
+                            "رفع گیر کردن دائمی دیپلوی MLM/نهان روی خطای دیتابیس D1",
+                            "دیپلوی MLM (و نهان) گاهی برای همیشه روی خطای «Failed to create D1 Database» گیر می‌کرد و تنها راه‌حل حذف دستی دیتابیس‌های قدیمی از پنل کلودفلر بود. علت: هر بار دیپلوی — حتی هر بار تلاش دوباره بعد از شکست — یک دیتابیس D1 کاملاً تازه می‌ساخت و قدیمی‌ها را پاک نمی‌کرد؛ چند بار تلاش دوباره کافی بود تا سقف تعداد دیتابیس D1 حساب پر شود. حالا دیپلوی از دیتابیس موجود حساب (یا یک دیتابیس رهاشده از تلاش قبلی) استفاده مجدد می‌کند.",
+                            Icons.Default.Storage
+                        ),
+                        ChangelogItem(
                             "دکمهٔ جدید «دریافت کانفیگ رایگان» در بخش اتصال",
                             "بالای دکمهٔ + یک ویزارد چندمرحله‌ای اضافه شد: اول تعداد کانفیگ‌های در دسترس را از چند منبع عمومی نشان می‌دهد، بعد شما تعداد دلخواه را انتخاب می‌کنید، سیستم کانفیگ‌ها را با یک تست دو مرحله‌ای (فیلتر سریع شبکه + تست واقعی اتصال با Xray، همان دقتی که «دیلی واقعی» دارد) بررسی می‌کند و فقط کانفیگ‌های واقعاً متصل را برمی‌گرداند. یک دکمهٔ «همین تعداد کافیه» هم هست که هر لحظه می‌توانید جستجو را متوقف و به همان‌ها بسنده کنید. کانفیگ‌ها با نام‌های رندوم mlmvpnXXXX داخل پوشهٔ «کانفیگ‌های رایگان» در تب Manual قرار می‌گیرند و اگر کانفیگی را از قبل داشته باشید، دوباره اضافه نمی‌شود (به شما می‌گوید چند تا تکراری بود).",
                             Icons.Default.Bolt
@@ -647,6 +657,16 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Updated the bundled Nahan panel to v3.0.0",
                             "The Nahan panel in the Cloud section was upgraded from v2.9.4 to v3.0.0: upstream VLESS proxy chaining, a v2rayN JSON subscription format, a redesigned add/edit-user form with modern toggle switches instead of checkboxes, and several RTL/dark-mode dashboard fixes. The D1 binding name and API route contract are unchanged, so the swap is fully compatible.",
                             Icons.Default.CloudSync
+                        ),
+                        ChangelogItem(
+                            "Removed the Deno panel entirely",
+                            "The Deno panel (drawer entry, tab, FAQ section, and its underlying code) has been removed. api.deno.com has been blocked in Iran for a while now, and Deno's connection-duration-based billing model was never a good fit for VPN use anyway; the Cloudflare panels (BPB/EDG/Nahan) cover the same need without either problem.",
+                            Icons.Default.Delete
+                        ),
+                        ChangelogItem(
+                            "Fixed MLM/Nahan deploys getting permanently stuck on a D1 database error",
+                            "MLM (and Nahan) deploys could get permanently stuck failing at \"Failed to create D1 Database\", with no fix short of manually deleting old databases in the Cloudflare dashboard. Root cause: every deploy attempt -- including retries of a failed one -- provisioned a brand-new D1 database and never reused or cleaned up earlier ones, so a handful of retries would quietly eat into the account's D1 database quota until none was left to create. Deploys now reuse the account's existing database (or an orphaned one from a previous attempt) instead of always creating a new one.",
+                            Icons.Default.Storage
                         ),
                         ChangelogItem(
                             "New \"Get free configs\" button in the Connection tab",

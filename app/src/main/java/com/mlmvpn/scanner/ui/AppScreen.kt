@@ -252,7 +252,6 @@ fun AppScreen() {
                 CustomDrawerItem(icon = Icons.Default.Dns, text = stringResource(R.string.drawer_workers_list), onClick = { scope.launch { drawerState.close() }; openTab("workers_list") })
                 CustomDrawerItem(icon = Icons.Default.Shield, text = "DNS ضد تحریم شخصی", onClick = { scope.launch { drawerState.close() }; activeModal = "antisanction" })
                 CustomDrawerItem(icon = Icons.Default.Link, text = stringResource(R.string.subgen_drawer_menu), onClick = { scope.launch { drawerState.close() }; openTab("sublink") })
-                CustomDrawerItem(icon = Icons.Default.CloudUpload, text = "Deno Panel", onClick = { scope.launch { drawerState.close() }; openTab("deno") })
                 CustomDrawerItem(icon = Icons.Default.Book, text = stringResource(R.string.drawer_tutorial), onClick = { scope.launch { drawerState.close() }; openTab("tutorial") })
                 CustomDrawerItem(icon = Icons.Default.Info, text = stringResource(R.string.drawer_about), onClick = { scope.launch { drawerState.close() }; openTab("about") })
                 
@@ -347,14 +346,6 @@ fun AppScreen() {
                             cloudManager = androidx.compose.runtime.remember { com.mlmvpn.scanner.data.CloudManager(context) },
                             nodeManager = androidx.compose.runtime.remember { com.mlmvpn.scanner.data.NodeManager(context) },
                             onNavigateToCloud = { switchTab("cloud") }
-                        )
-                    }
-                }
-                if (visitedTabs.contains("deno")) {
-                    Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "deno") 0.dp else 10000.dp)) {
-                        com.mlmvpn.scanner.engines.deno.DenoPanelScreen(
-                            nodeManager = androidx.compose.runtime.remember { com.mlmvpn.scanner.data.NodeManager(context) },
-                            onDismiss = { goBack() }
                         )
                     }
                 }

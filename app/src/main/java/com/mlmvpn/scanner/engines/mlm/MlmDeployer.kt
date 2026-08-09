@@ -88,42 +88,59 @@ class MlmDeployer(private val context: Context) {
                 }
             }
 
-            // 2. Create D1 Database
-            onProgress(40, "Creating D1 Database...")
-            var databaseId = ""
-            val dbName = "mlm_db_" + UUID.randomUUID().toString().substring(0, 6)
-            val d1Req = Request.Builder()
-                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/d1/database")
-                .headers(authHeaders)
-                .post("{\"name\":\"$dbName\"}".toRequestBody("application/json".toMediaTypeOrNull()))
-                .build()
+            // 2. Reuse the existing D1 Database if this account was already deployed before
+            // (a redeploy/update used to always create a brand-new D1 database and never
+            // cleaned up the old one on failure, so repeated retries silently ate into the
+            // account's D1 quota until every future deploy failed with no D1 left to create --
+            // matching reports of "have to delete the previous version to make it work again").
+            onProgress(40, "Setting up D1 Database...")
+            var databaseId = account.mlmDbId?.takeIf { it.isNotEmpty() } ?: ""
 
-            client.newCall(d1Req).execute().use { response ->
-                val body = response.body?.string() ?: ""
-                try {
-                    val json = JSONObject(body)
-                    if (response.isSuccessful && json.optBoolean("success")) {
-                        databaseId = json.getJSONObject("result").getString("uuid")
-                    } else {
-                        // fallback: find existing db
-                        val listReq = Request.Builder()
-                            .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/d1/database")
-                            .headers(authHeaders)
-                            .get().build()
-                        client.newCall(listReq).execute().use { listRes ->
-                            val listJson = JSONObject(listRes.body?.string() ?: "")
-                            if (listJson.optBoolean("success")) {
-                                val results = listJson.getJSONArray("result")
-                                if (results.length() > 0) {
-                                    databaseId = results.getJSONObject(0).getString("uuid")
-                                }
+            if (databaseId.isEmpty()) {
+                // Look for a previously-created mlm_db_* database on this account before
+                // provisioning a new one, in case an earlier failed/interrupted deploy already
+                // created one that never got saved to account.mlmDbId.
+                val listReq = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/d1/database")
+                    .headers(authHeaders)
+                    .get().build()
+                client.newCall(listReq).execute().use { listRes ->
+                    val listJson = JSONObject(listRes.body?.string() ?: "")
+                    if (listJson.optBoolean("success")) {
+                        val results = listJson.getJSONArray("result")
+                        for (i in 0 until results.length()) {
+                            val entry = results.getJSONObject(i)
+                            if (entry.optString("name").startsWith("mlm_db_")) {
+                                databaseId = entry.getString("uuid")
+                                break
                             }
                         }
                     }
-                } catch(e: Exception) { }
+                }
             }
 
-            if (databaseId.isEmpty()) return@withContext Pair(false, "Failed to create D1 Database.")
+            if (databaseId.isEmpty()) {
+                val dbName = "mlm_db_" + UUID.randomUUID().toString().substring(0, 6)
+                val d1Req = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/d1/database")
+                    .headers(authHeaders)
+                    .post("{\"name\":\"$dbName\"}".toRequestBody("application/json".toMediaTypeOrNull()))
+                    .build()
+
+                client.newCall(d1Req).execute().use { response ->
+                    val body = response.body?.string() ?: ""
+                    try {
+                        val json = JSONObject(body)
+                        if (response.isSuccessful && json.optBoolean("success")) {
+                            databaseId = json.getJSONObject("result").getString("uuid")
+                        }
+                    } catch (e: Exception) { }
+                }
+            }
+
+            if (databaseId.isEmpty()) {
+                return@withContext Pair(false, "Failed to create D1 Database. If you've retried this deploy several times, your Cloudflare account may have hit its D1 database limit -- delete unused databases at dash.cloudflare.com and try again.")
+            }
 
             // 3. Upload Worker
             onProgress(60, "Uploading MLM Worker...")
