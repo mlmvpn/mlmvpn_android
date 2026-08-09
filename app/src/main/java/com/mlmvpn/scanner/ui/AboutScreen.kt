@@ -276,6 +276,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Dns
                         ),
                         ChangelogItem(
+                            "رفع نمایش نادرست دکمه «ساخت وورکر» بعد از دیپلوی موفق",
+                            "بعد از دیپلوی موفق وورکر خروجی در DNS ضد تحریم شخصی، صفحه هنوز دکمه «ساخت وورکر» را نشان می‌داد و کاربر مجبور بود از صفحه خارج و دوباره وارد شود تا وضعیت «آماده ✅» را ببیند. علت: توابع دیپلوی فیلدهای همان آبجکت اکانت کلودفلر را مستقیم تغییر می‌دهند، پس لیست به‌روزشده از نظر ساختاری با چیزی که از قبل در state مشترک بود یکسان بود و Kotlin StateFlow رویداد جدیدی ارسال نمی‌کرد. حالا موفقیت دیپلوی به‌صورت محلی هم ردیابی می‌شود.",
+                            Icons.Default.Refresh
+                        ),
+                        ChangelogItem(
                             "رفع شکست دائمی «ساخت وورکر» در DNS ضد تحریم شخصی",
                             "این مرحله (همان دیپلوی EDG که جای دیگری هم استفاده می‌شود) می‌توانست دقیقاً به همان دلیلی که MLM و نهان داشتند، بعد از چند تلاش برای همیشه شکست بخورد: هر بار یک KV Namespace کاملاً تازه می‌ساخت و قدیمی‌ها را پاک نمی‌کرد. حالا از namespace موجود حساب (یا یکی رهاشده از تلاش قبلی) استفاده مجدد می‌کند؛ خطاها هم حالا متن واقعی پاسخ کلودفلر را نشان می‌دهند.",
                             Icons.Default.CloudSync
@@ -692,6 +697,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed unrelated sites breaking when the personal anti-sanction DNS was turned on",
                             "Turning this feature on could break sites that were never even supposed to be touched (e.g. Gmail). Root cause: its DNS resolver was hardcoded to plain UDP 1.1.1.1:53 -- a protocol commonly blocked or throttled on Iranian ISPs -- with no fallback, unlike the main VPN config which already resolves via DoH over HTTPS for exactly this reason. It now resolves via the same DoH-over-443 approach.",
                             Icons.Default.Dns
+                        ),
+                        ChangelogItem(
+                            "Fixed the \"build worker\" button not updating after a successful deploy",
+                            "After successfully deploying the exit worker in the personal anti-sanction DNS screen, it kept showing the \"build worker\" button instead of switching to \"ready\" -- you had to leave and re-enter the screen to see it had worked. Root cause: the deploy functions update the Cloudflare account object's fields in place, so the updated list pushed into the shared account state was structurally identical to what was already there, and Kotlin's StateFlow skips re-emitting a value it considers unchanged. Now tracks deploy success locally instead.",
+                            Icons.Default.Refresh
                         ),
                         ChangelogItem(
                             "Fixed the anti-sanction DNS worker deploy failing permanently on retries",

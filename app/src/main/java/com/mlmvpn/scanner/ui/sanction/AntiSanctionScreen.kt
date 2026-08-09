@@ -57,9 +57,15 @@ fun AntiSanctionScreen(onBack: () -> Unit) {
     var deploying by remember { mutableStateOf(false) }
     var deployStatus by remember { mutableStateOf("") }
     var pendingConfig by remember { mutableStateOf<String?>(null) }
+    // deployEdgWorker() mutates the CloudAccount object in place, so the list saveAccounts()
+    // pushes into accountsFlow is structurally equal to what's already there (same mutated
+    // object references) -- StateFlow's distinctUntilChanged then skips the emission and this
+    // screen never recomposes with the new worker URL until it's fully recreated. Track success
+    // locally instead of relying purely on the flow round-tripping.
+    var justDeployed by remember { mutableStateOf(false) }
 
     val workerAccounts = accounts.filter { !it.edgWorkerUrl.isNullOrEmpty() && !it.edgUuid.isNullOrEmpty() }
-    val hasWorker = workerAccounts.isNotEmpty()
+    val hasWorker = workerAccounts.isNotEmpty() || justDeployed
 
     fun startService(cfg: String) {
         val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
@@ -113,7 +119,10 @@ fun AntiSanctionScreen(onBack: () -> Unit) {
             val (ok, msg) = cloud.deployEdgWorker(acct) { _, label -> deployStatus = label }
             deploying = false
             deployStatus = ""
-            if (ok) toast(context, "وورکر ساخته شد ✅")
+            if (ok) {
+                justDeployed = true
+                toast(context, "وورکر ساخته شد ✅")
+            }
             else android.widget.Toast.makeText(context, "ساخت وورکر ناموفق: $msg", android.widget.Toast.LENGTH_LONG).show()
         }
     }
@@ -159,7 +168,9 @@ fun AntiSanctionScreen(onBack: () -> Unit) {
                     Text("وورکر خروجی (کلادفلر)", color = TextC, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Spacer(Modifier.height(6.dp))
                     if (hasWorker) {
-                        Text("آماده ✅ — از حساب: ${workerAccounts.first().email.ifEmpty { workerAccounts.first().accountId }}", color = Green, fontSize = 12.sp)
+                        val readyAccount = workerAccounts.firstOrNull() ?: accounts.firstOrNull()
+                        val label = readyAccount?.email?.ifEmpty { readyAccount.accountId } ?: "—"
+                        Text("آماده ✅ — از حساب: $label", color = Green, fontSize = 12.sp)
                     } else {
                         Text("هنوز وورکری ساخته نشده. یک‌بار روی حساب کلادفلر خودتان بسازید.", color = Muted, fontSize = 12.sp)
                         Spacer(Modifier.height(10.dp))
