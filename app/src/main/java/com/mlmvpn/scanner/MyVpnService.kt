@@ -386,7 +386,13 @@ class MyVpnService : VpnService() {
                                     localPort = localPort,
                                     backendDns = backendDns,
                                     allowLan = allowLan,
-                                    includeTun = true,
+                                    // fd==0 means setupVpn() was skipped (proxy mode, or a TUN
+                                    // establish failure) -- a "tun" inbound with no real fd to
+                                    // attach to isn't just inert, it hands xray-core a bogus
+                                    // descriptor it can still try to read/write, which can crash
+                                    // the whole engine loop a few seconds after startLoop()
+                                    // already returned success. See the same fix below.
+                                    includeTun = fd > 0,
                                     mtu = mtu,
                                     useFragment = false,
                                     gameMode = true,
@@ -604,7 +610,16 @@ class MyVpnService : VpnService() {
                             localPort = localPort,
                             backendDns = backendDns,
                             allowLan = allowLan,
-                            includeTun = true,
+                            // Proxy mode (PROXY_MODE extra) deliberately skips setupVpn() above,
+                            // so fd stays 0 -- there is no real TUN file descriptor for xray-core
+                            // to attach a "tun" inbound to. Building the config with
+                            // includeTun=true anyway (the previous hardcoded value) handed
+                            // xray-core a tun inbound pointing at fd 0, a bogus descriptor it
+                            // could still try to read from -- this was silently crashing the
+                            // whole engine loop a few seconds after startLoop() had already
+                            // reported success, which is exactly the "MLM shows connected but
+                            // the SOCKS proxy passes nothing" symptom users hit in proxy mode.
+                            includeTun = fd > 0,
                             mtu = mtu,
                             useFragment = false,
                             gameMode = isGameMode,

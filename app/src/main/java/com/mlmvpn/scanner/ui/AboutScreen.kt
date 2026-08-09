@@ -246,6 +246,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Menu
                         ),
                         ChangelogItem(
+                            "رفع پروکسی محلی بی‌اثر در «حالت پروکسی»",
+                            "در «حالت پروکسی» (فقط پروکسی محلی SOCKS/HTTP، بدون تونل کامل VPN)، بعد از وصل‌شدن به یک نود، اپ ممکن بود «متصل» نشان بدهد ولی پروکسی محلی هیچ ترافیکی رد نمی‌کرد و هر سایتی روی آن Timeout می‌داد. علت: این حالت عمداً رابط تونل VPN را نمی‌سازد، ولی تنظیمات Xray طوری ساخته می‌شد که انگار تونلی وجود دارد و یک ورودی «tun» با فایل‌توصیفگر نامعتبر به هسته Xray می‌داد. هسته در لحظه شروع این را قبول می‌کرد (موفقیت گزارش می‌داد)، ولی چند ثانیه بعد همین ورودی نامعتبر می‌توانست کل موتور — از جمله پروکسی SOCKS/HTTP — را بی‌صدا از کار بیندازد، درست بعد از اینکه رابط کاربری از قبل «متصل» را نشان داده بود. حالا این ورودی تونل فقط وقتی ساخته می‌شود که یک رابط VPN واقعی موجود باشد.",
+                            Icons.Default.SettingsEthernet
+                        ),
+                        ChangelogItem(
                             "بررسی خودکار نسخه جدید و دانلود/نصب داخل اپ",
                             "اپ حالا بلافاصله بعد از اجرا (و همچنین هر بار یک اتصال VPN برقرار می‌شود، برای وقتی گیت‌هاب موقع اجرا فیلتر بوده) نسخه جدید را از گیت‌هاب بررسی می‌کند. اگر نسخه جدیدتری منتشر شده باشد، پنجره‌ای با شماره نسخه، حجم فایل، و لیست کامل و قابل‌اسکرول تغییرات نمایش داده می‌شود، همراه با دکمه «دانلود نسخه جدید» که به یک صفحه دانلود اختصاصی می‌رود (نوار پیشرفت با درصد زنده) و بعد از اتمام دانلود خودکار نصب‌کننده سیستم را باز می‌کند. اگر گیت‌هاب در دسترس نباشد، این بررسی کاملاً بی‌صدا شکست می‌خورد و هیچ خللی در کارکرد اپ ایجاد نمی‌کند.",
                             Icons.Default.SystemUpdate
@@ -702,6 +707,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed a dead empty gap under the hamburger drawer on tall phones",
                             "The drawer left an empty gap between the last menu item and the bottom of the screen on tall phones. The gap between the main menu and the emergency section now expands on tall screens (pinning the emergency section to the bottom), while still scrolling normally with everything packed together on short screens where it doesn't all fit.",
                             Icons.Default.Menu
+                        ),
+                        ChangelogItem(
+                            "Fixed the local proxy passing no traffic in \"Proxy mode\"",
+                            "In \"Proxy mode\" (local SOCKS/HTTP proxy only, no full-device VPN tunnel), connecting to a node could leave the app showing \"connected\" while the local proxy passed no traffic at all -- every site timed out through it. Root cause: proxy mode deliberately skips creating the VPN tunnel interface, but the Xray config was still being built as if a tunnel existed, handing xray-core a \"tun\" inbound pointing at an invalid file descriptor. xray-core accepted this at startup (reporting success), then the invalid inbound could crash the whole engine loop a few seconds later -- taking the SOCKS/HTTP proxy down with it, silently, after the UI had already committed to \"connected\". The tunnel inbound is now only included when a real VPN interface actually exists.",
+                            Icons.Default.SettingsEthernet
                         ),
                         ChangelogItem(
                             "In-app update check, download and install",
