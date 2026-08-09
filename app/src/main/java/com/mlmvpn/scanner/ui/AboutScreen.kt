@@ -271,6 +271,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Storage
                         ),
                         ChangelogItem(
+                            "رفع گیر کردن صفحه «مدیریت کاربران» MLM روی «Error fetching users»",
+                            "این صفحه گاهی بلافاصله بعد از یک دیپلوی تازه، برای همیشه روی این خطا گیر می‌کرد. علت: خودِ Cloudflare چند ثانیه اول بعد از فعال‌شدن یک روت تازهٔ *.workers.dev یک ۴۰۴ موقتی (کد داخلی خودِ کلودفلر: 1042) برمی‌گرداند، قبل از اینکه کد ورکر ما اصلاً اجرا شود. اپ حالا چند بار خودکار دوباره امتحان می‌کند؛ اگر خطای واقعی دیگری هم باشد، حالا کد HTTP و متن دقیق پاسخ نمایش داده می‌شود، نه یک پیام کلی و مبهم.",
+                            Icons.Default.Refresh
+                        ),
+                        ChangelogItem(
                             "دکمهٔ جدید «دریافت کانفیگ رایگان» در بخش اتصال",
                             "بالای دکمهٔ + یک ویزارد چندمرحله‌ای اضافه شد: اول تعداد کانفیگ‌های در دسترس را از چند منبع عمومی نشان می‌دهد، بعد شما تعداد دلخواه را انتخاب می‌کنید، سیستم کانفیگ‌ها را با یک تست دو مرحله‌ای (فیلتر سریع شبکه + تست واقعی اتصال با Xray، همان دقتی که «دیلی واقعی» دارد) بررسی می‌کند و فقط کانفیگ‌های واقعاً متصل را برمی‌گرداند. یک دکمهٔ «همین تعداد کافیه» هم هست که هر لحظه می‌توانید جستجو را متوقف و به همان‌ها بسنده کنید. کانفیگ‌ها با نام‌های رندوم mlmvpnXXXX داخل پوشهٔ «کانفیگ‌های رایگان» در تب Manual قرار می‌گیرند و اگر کانفیگی را از قبل داشته باشید، دوباره اضافه نمی‌شود (به شما می‌گوید چند تا تکراری بود).",
                             Icons.Default.Bolt
@@ -667,6 +672,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed MLM/Nahan deploys getting permanently stuck on a D1 database error",
                             "MLM (and Nahan) deploys could get permanently stuck failing at \"Failed to create D1 Database\", with no fix short of manually deleting old databases in the Cloudflare dashboard. Root cause: every deploy attempt -- including retries of a failed one -- provisioned a brand-new D1 database and never reused or cleaned up earlier ones, so a handful of retries would quietly eat into the account's D1 database quota until none was left to create. Deploys now reuse the account's existing database (or an orphaned one from a previous attempt) instead of always creating a new one. If the account's 10-database Free-plan limit is genuinely full of databases from other tools, the error now lists every existing database's name so you know exactly what to delete.",
                             Icons.Default.Storage
+                        ),
+                        ChangelogItem(
+                            "Fixed the MLM \"User Management\" screen getting stuck on \"Error fetching users\"",
+                            "This screen could get permanently stuck on that error right after a fresh deploy. Root cause: Cloudflare's own edge returns a transient 404 (its own error code 1042) for the first few seconds after a brand-new *.workers.dev route is enabled, before the worker code even runs. The app now retries a few times automatically; any other real failure now shows the actual HTTP status/response instead of a generic message.",
+                            Icons.Default.Refresh
                         ),
                         ChangelogItem(
                             "New \"Get free configs\" button in the Connection tab",
