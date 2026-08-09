@@ -406,8 +406,15 @@ fun NodesTab() {
                         libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey)
                     } catch (e: Exception) {}
 
-                    val semaphore = kotlinx.coroutines.sync.Semaphore(8)
-                    
+                    // Real delay/speed tests are actual Xray-proxied connections, not raw pings --
+                    // running too many at once against the same server(s) reads as suspicious
+                    // concurrent-handshake traffic to Cloudflare/DPI and gets throttled, which
+                    // shows up as inflated per-node delay/speed numbers that are really just
+                    // self-inflicted congestion, not real network conditions. Capped at 3,
+                    // matching the same safety margin already documented next to the other
+                    // real-delay semaphore below.
+                    val semaphore = kotlinx.coroutines.sync.Semaphore(3)
+
                     // Check if we need RSTA
                     val needsRsta = targetNodes.any { 
                         val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(it.uri)
@@ -648,7 +655,7 @@ fun NodesTab() {
                                 libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey) 
                             } catch (e: Exception) {}
 
-                            val measureSemaphore = kotlinx.coroutines.sync.Semaphore(8) // Cloudflare/DPI might block if >3 concurrent handshakes
+                            val measureSemaphore = kotlinx.coroutines.sync.Semaphore(3) // Cloudflare/DPI might block if >3 concurrent handshakes -- was set to 8 here, directly contradicting this comment
                             // Country lookup is much heavier (spins up its own CoreController + SOCKS
                             // proxy, see CountryLookup.kt) than the lightweight measureOutboundDelay
                             // ping above, so it gets its own small concurrency cap and runs as a

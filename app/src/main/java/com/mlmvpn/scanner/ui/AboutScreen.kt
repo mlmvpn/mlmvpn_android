@@ -256,6 +256,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Timer
                         ),
                         ChangelogItem(
+                            "واقع‌بینانه‌تر شدن نتایج تست «دیلی واقعی» و سرعت اسکنر",
+                            "این تست یک اتصال واقعی پروکسی‌شده از طریق Xray برای هر کانفیگ است، نه یک پینگ خام — ولی صدها کانفیگ با تا ۸ اتصال واقعی هم‌زمان روی همان سرورها تست می‌شدند، که برای کلودفلر/DPI شبیه ترافیک مشکوک هم‌زمانِ handshake به‌نظر می‌رسد و throttle می‌شود. عددهای دیلی/سرعت نمایش داده‌شده در واقع ازدحام خودساخته‌ی همان تست را اندازه می‌گرفتند، نه شرایط واقعی شبکه را. یکی از دو محدودیت هم‌زمانی درگیر، حتی یک کامنت داشت («ممکن است کلودفلر/DPI با بیش از ۳ handshake هم‌زمان مسدود کند») که مستقیماً با عدد واقعی‌اش (۸) در تضاد بود. هر دو حالا روی ۳ محدود شدند، مطابق همان مقدار امنی که جای دیگری از اپ برای همین نوع تست استفاده می‌شود.",
+                            Icons.Default.Speed
+                        ),
+                        ChangelogItem(
                             "کاهش محسوس مصرف باتری در حالت متصل",
                             "چهار علت جدا پیدا شد که همگی تا وقتی VPN وصل بود مدام باتری مصرف می‌کردند: ۱) تونل یک wake lock بدون سقف زمانی برای کل مدت اتصال نگه می‌داشت، یعنی تا وقتی وصل بودید پردازنده هیچ‌وقت نمی‌توانست به خواب عمیق یا حالت Doze برود — حتی تمام شب که گوشی توی جیب بی‌استفاده بود و حتی یک بایت هم رد و بدل نمی‌شد. حالا این قفل فقط تا وقتی ترافیک واقعاً در جریان است نگه داشته می‌شود و بعد از ۵ دقیقه سکوت آزاد می‌شود؛ بسته‌های ورودی همچنان مستقل از این قفل پردازه را بیدار می‌کنند. ۲) یک حلقه تشخیصی باقی‌مانده هر ۵ ثانیه بیدار می‌شد فقط برای نوشتن یک عدد مصرف رم در لاگ که در نسخه نهایی هیچ‌کس نمی‌خواندش — حدود ۱۷٬۰۰۰ بیدارشدن در روز بدون هیچ کار مفیدی؛ کاملاً حذف شد. ۳) شمارنده ترافیک هر ۲ ثانیه روی حافظه می‌نوشت فارغ از این‌که چیزی تغییر کرده باشد یا نه — روی یک تونل بی‌استفاده حدود ۴۳٬۰۰۰ نوشتن بی‌فایده در روز؛ حالا فقط وقتی می‌نویسد که واقعاً بایتی جابه‌جا شده باشد. ۴) ناظر تعویض خودکار سرور هر ۱۰ ثانیه یک مقدار بولین را دوباره می‌خواند با این‌که این قابلیت پیش‌فرض خاموش است؛ حالا دقیقه‌ای یک بار بررسی می‌شود.",
                             Icons.Default.BatteryChargingFull
@@ -742,6 +747,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Aether: added a timer and explanation on the gateway-scan step",
                             "The gateway-scan step (MASQUE) can legitimately take anywhere from tens of seconds to a few minutes depending on scan mode, and on networks that DPI-block MASQUE it runs the full time budget before failing -- with only a static \"working\" badge, that read as a frozen app. The status card now shows a live elapsed-time counter on the scan step, and after 20 seconds an explanatory note that this step can take a while and that some networks block or slow MASQUE, with a reminder that tapping the connect button again cancels it. This doesn't change scan behavior or success rate -- it just makes a long scan legible instead of looking stuck.",
                             Icons.Default.Timer
+                        ),
+                        ChangelogItem(
+                            "Made scanner \"Real Delay\" and speed test results more accurate",
+                            "This test is an actual Xray-proxied connection per config, not a raw ping -- but hundreds of configs were being tested with up to 8 real proxied connections running concurrently against the same servers, which reads as suspicious concurrent-handshake traffic to Cloudflare/DPI and gets throttled. The resulting delay/speed numbers were measuring self-inflicted congestion from the test itself, not real conditions. One of the two concurrency limits involved even carried a comment (\"Cloudflare/DPI might block if >3 concurrent handshakes\") directly contradicting the 8 it was actually set to. Both are now capped at 3, matching the safe value already used elsewhere in the app for the same kind of test.",
+                            Icons.Default.Speed
                         ),
                         ChangelogItem(
                             "Substantially reduced battery drain while connected",
