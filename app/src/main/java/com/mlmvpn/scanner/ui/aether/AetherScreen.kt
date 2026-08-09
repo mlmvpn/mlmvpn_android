@@ -1088,6 +1088,22 @@ private const val FLUSH_INTERVAL_MS = 250L
 
 @Composable
 private fun StatusCard(state: AetherState, @Suppress("UNUSED_PARAMETER") protocol: AetherProtocol) {
+    // The gateway scan is a real search, not a hang -- it can legitimately run for tens of
+    // seconds to a few minutes (scan-mode dependent), and on networks that DPI-block MASQUE it
+    // runs the full budget before failing. With nothing but a static "در حال کار" badge, that
+    // reads as frozen. A ticking counter plus a delayed hint gives the user something to watch
+    // and, past the point most successful scans have already resolved, an honest explanation
+    // for why it might still be going.
+    var scanElapsedSec by remember { mutableStateOf(0) }
+    LaunchedEffect(state.stage) {
+        if (state.stage == AetherStage.SCAN) {
+            scanElapsedSec = 0
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                scanElapsedSec++
+            }
+        }
+    }
     SettingsCard(title = "وضعیت") {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(state.stageFa, fontWeight = FontWeight.Bold, fontSize = 14.sp,
@@ -1153,7 +1169,20 @@ private fun StatusCard(state: AetherState, @Suppress("UNUSED_PARAMETER") protoco
                 Text(fa, fontSize = 12.sp,
                     color = if (done) Color(0xFF3ba55d)
                     else if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f) else Color(0xFF6a6773))
+                if (key == "scan" && active && scanElapsedSec > 0) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("${scanElapsedSec}s", fontSize = 11.sp, color = Color(0xFF6a6773))
+                }
             }
+        }
+        if (state.stage == AetherStage.SCAN && scanElapsedSec >= 20) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "این مرحله می‌تواند تا چند دقیقه طول بکشد؛ بعضی شبکه‌ها اتصال MASQUE را کند یا مسدود می‌کنند. اگر خیلی طول کشید می‌توانید دکمه اتصال را دوباره بزنید تا لغو شود.",
+                fontSize = 11.sp,
+                color = Color(0xFF9a97a3),
+                lineHeight = 16.sp,
+            )
         }
         if (state.server != null || state.rtt != null || state.profile != null) {
             Spacer(modifier = Modifier.height(8.dp))

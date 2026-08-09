@@ -251,6 +251,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.SettingsEthernet
                         ),
                         ChangelogItem(
+                            "Aether: نشانگر زمان و توضیح در مرحله «اسکن گیت‌وی»",
+                            "مرحله «اسکن گیت‌وی» (MASQUE) می‌تواند بسته به حالت اسکن از چند ده ثانیه تا چند دقیقه طول بکشد، و روی شبکه‌هایی که MASQUE را با DPI مسدود می‌کنند، تا آخرین لحظه‌ی بودجه‌ی زمانی ادامه پیدا می‌کند و بعد شکست می‌خورد — با فقط یک نشان ثابت «در حال کار»، این حالت مثل هنگ‌کردن اپ به‌نظر می‌رسید. حالا کارت وضعیت یک شمارنده زمان زنده روی مرحله اسکن نشان می‌دهد، و بعد از ۲۰ ثانیه یک توضیح اضافه می‌شود که این مرحله ممکن است طول بکشد و بعضی شبکه‌ها MASQUE را کند یا مسدود می‌کنند، به‌همراه یادآوری که با زدن دوباره دکمه اتصال می‌توانید لغوش کنید. این تغییر رفتار یا نرخ موفقیت اسکن را عوض نمی‌کند — فقط یک اسکن طولانی را قابل‌فهم می‌کند به‌جای این‌که گیرکرده به‌نظر برسد.",
+                            Icons.Default.Timer
+                        ),
+                        ChangelogItem(
                             "بررسی خودکار نسخه جدید و دانلود/نصب داخل اپ",
                             "اپ حالا بلافاصله بعد از اجرا (و همچنین هر بار یک اتصال VPN برقرار می‌شود، برای وقتی گیت‌هاب موقع اجرا فیلتر بوده) نسخه جدید را از گیت‌هاب بررسی می‌کند. اگر نسخه جدیدتری منتشر شده باشد، پنجره‌ای با شماره نسخه، حجم فایل، و لیست کامل و قابل‌اسکرول تغییرات نمایش داده می‌شود، همراه با دکمه «دانلود نسخه جدید» که به یک صفحه دانلود اختصاصی می‌رود (نوار پیشرفت با درصد زنده) و بعد از اتمام دانلود خودکار نصب‌کننده سیستم را باز می‌کند. اگر گیت‌هاب در دسترس نباشد، این بررسی کاملاً بی‌صدا شکست می‌خورد و هیچ خللی در کارکرد اپ ایجاد نمی‌کند.",
                             Icons.Default.SystemUpdate
@@ -712,6 +717,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed the local proxy passing no traffic in \"Proxy mode\"",
                             "In \"Proxy mode\" (local SOCKS/HTTP proxy only, no full-device VPN tunnel), connecting to a node could leave the app showing \"connected\" while the local proxy passed no traffic at all -- every site timed out through it. Root cause: proxy mode deliberately skips creating the VPN tunnel interface, but the Xray config was still being built as if a tunnel existed, handing xray-core a \"tun\" inbound pointing at an invalid file descriptor. xray-core accepted this at startup (reporting success), then the invalid inbound could crash the whole engine loop a few seconds later -- taking the SOCKS/HTTP proxy down with it, silently, after the UI had already committed to \"connected\". The tunnel inbound is now only included when a real VPN interface actually exists.",
                             Icons.Default.SettingsEthernet
+                        ),
+                        ChangelogItem(
+                            "Aether: added a timer and explanation on the gateway-scan step",
+                            "The gateway-scan step (MASQUE) can legitimately take anywhere from tens of seconds to a few minutes depending on scan mode, and on networks that DPI-block MASQUE it runs the full time budget before failing -- with only a static \"working\" badge, that read as a frozen app. The status card now shows a live elapsed-time counter on the scan step, and after 20 seconds an explanatory note that this step can take a while and that some networks block or slow MASQUE, with a reminder that tapping the connect button again cancels it. This doesn't change scan behavior or success rate -- it just makes a long scan legible instead of looking stuck.",
+                            Icons.Default.Timer
                         ),
                         ChangelogItem(
                             "In-app update check, download and install",
