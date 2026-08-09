@@ -56,19 +56,31 @@ class MlmApiManager(private val context: Context) {
         return builder.build()
     }
 
+    // lastGetUsersError carries the raw failure detail (HTTP code + body, or exception message)
+    // from the most recent getUsers() call, since a plain null return gives the UI nothing to
+    // show the user beyond a generic "error fetching users".
+    var lastGetUsersError: String? = null
+        private set
+
     suspend fun getUsers(account: CloudAccount): List<MlmUser>? = withContext(Dispatchers.IO) {
+        lastGetUsersError = null
         try {
-            val req = buildRequest(account, "/api/users") ?: return@withContext null
+            val req = buildRequest(account, "/api/users") ?: run {
+                lastGetUsersError = "No worker URL saved for this account -- deploy MLM first."
+                return@withContext null
+            }
             client.newCall(req).execute().use { response ->
                 val body = response.body?.string()
                 if (response.isSuccessful) {
                     val res = gson.fromJson(body, MlmUsersResponse::class.java)
                     return@withContext res.users ?: emptyList()
                 } else {
+                    lastGetUsersError = "HTTP ${response.code}: ${body?.take(300)}"
                     android.util.Log.e("MlmApi", "getUsers Failed! Code: ${response.code}, Body: $body")
                 }
             }
         } catch (e: Exception) {
+            lastGetUsersError = "${e.javaClass.simpleName}: ${e.message}"
             android.util.Log.e("MlmApi", "getUsers Exception: ${e.message}", e)
         }
         return@withContext null

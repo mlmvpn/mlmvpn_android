@@ -57,7 +57,7 @@ fun MlmUsersScreen(
             if (fetchedUsers != null) {
                 users = fetchedUsers
             } else {
-                Toast.makeText(context, "Error fetching users", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Error fetching users: ${apiManager.lastGetUsersError}", Toast.LENGTH_LONG).show()
             }
             isLoading = false
         }
