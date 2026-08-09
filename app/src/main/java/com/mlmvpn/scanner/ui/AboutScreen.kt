@@ -271,6 +271,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Storage
                         ),
                         ChangelogItem(
+                            "رفع گیر کردن/کرش دکمه «تست سلامت پینگ» در تب اسکنر",
+                            "این دکمه روی گروه‌های ترکیبی/Mix (و به‌تبع آن بروزرسانی ساب‌اسکریپشن MLM با آی‌پی‌های سالم که به همین مسیر وابسته است) روی بعضی گوشی‌ها ممکن بود برای همیشه گیر کند یا اپ کرش کند. علت: این مسیر خاص، برخلاف تمام مسیرهای مشابه دیگر در اپ، فراخوانی مقداردهی اولیه هسته Xray را نداشت — یک خط کد به‌اشتباه کامنت شده بود. این‌که کار می‌کرد یا نه کاملاً به این بستگی داشت که آیا صفحه دیگری در همان نشست، هسته را قبلاً مقداردهی کرده باشد؛ همین باعث می‌شد برای بعضی کاربران همیشه کار کند و برای بعضی دیگر هرگز. خط گم‌شده بازگردانده شد.",
+                            Icons.Default.BugReport
+                        ),
+                        ChangelogItem(
                             "رفع گیر کردن صفحه «مدیریت کاربران» MLM روی «Error fetching users»",
                             "این صفحه گاهی بلافاصله بعد از یک دیپلوی تازه، برای همیشه روی این خطا گیر می‌کرد. علت: خودِ Cloudflare چند ثانیه اول بعد از فعال‌شدن یک روت تازهٔ *.workers.dev یک ۴۰۴ موقتی (کد داخلی خودِ کلودفلر: 1042) برمی‌گرداند، قبل از اینکه کد ورکر ما اصلاً اجرا شود. اپ حالا چند بار خودکار دوباره امتحان می‌کند؛ اگر خطای واقعی دیگری هم باشد، حالا کد HTTP و متن دقیق پاسخ نمایش داده می‌شود، نه یک پیام کلی و مبهم.",
                             Icons.Default.Refresh
@@ -672,6 +677,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed MLM/Nahan deploys getting permanently stuck on a D1 database error",
                             "MLM (and Nahan) deploys could get permanently stuck failing at \"Failed to create D1 Database\", with no fix short of manually deleting old databases in the Cloudflare dashboard. Root cause: every deploy attempt -- including retries of a failed one -- provisioned a brand-new D1 database and never reused or cleaned up earlier ones, so a handful of retries would quietly eat into the account's D1 database quota until none was left to create. Deploys now reuse the account's existing database (or an orphaned one from a previous attempt) instead of always creating a new one. If the account's 10-database Free-plan limit is genuinely full of databases from other tools, the error now lists every existing database's name so you know exactly what to delete.",
                             Icons.Default.Storage
+                        ),
+                        ChangelogItem(
+                            "Fixed the Scanner tab's \"Ping Health Test\" button hanging or crashing",
+                            "This button on combined/mixed config groups (and the MLM \"update subscription with healthy IPs\" flow that depends on it) could hang indefinitely or crash the app on some devices. Root cause: this specific code path was missing the native Xray core initialization call that every other testing feature in the app performs first -- one line was accidentally commented out. Whether it worked depended entirely on some other screen having already initialized the core earlier in the same app session, which is why it worked reliably for some users/flows and not others. Restored the missing call.",
+                            Icons.Default.BugReport
                         ),
                         ChangelogItem(
                             "Fixed the MLM \"User Management\" screen getting stuck on \"Error fetching users\"",

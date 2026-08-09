@@ -556,7 +556,7 @@ fun ScannerTab() {
                                                                 java.security.SecureRandom().nextBytes(keyBytes)
                                                                 val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                                                                 val xudpBaseKey = android.util.Base64.encodeToString(keyBytes, flags)
-//                                                                 libv2ray.libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey) 
+                                                                libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey)
                                                             } catch (e: Exception) {}
 
                                                             val measureSemaphore = kotlinx.coroutines.sync.Semaphore(3)
