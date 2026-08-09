@@ -276,6 +276,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Dns
                         ),
                         ChangelogItem(
+                            "دکمه «بروزرسانی وورکر» در DNS ضد تحریم شخصی",
+                            "وقتی وورکر خروجی از قبل ساخته شده، حالا می‌توانید بدون حذف و افزودن دوباره حساب، آخرین نسخه ورکر EDG را مستقیم روی همان حساب دیپلوی کنید.",
+                            Icons.Default.CloudSync
+                        ),
+                        ChangelogItem(
                             "رفع نمایش نادرست دکمه «ساخت وورکر» بعد از دیپلوی موفق",
                             "بعد از دیپلوی موفق وورکر خروجی در DNS ضد تحریم شخصی، صفحه هنوز دکمه «ساخت وورکر» را نشان می‌داد و کاربر مجبور بود از صفحه خارج و دوباره وارد شود تا وضعیت «آماده ✅» را ببیند. علت: توابع دیپلوی فیلدهای همان آبجکت اکانت کلودفلر را مستقیم تغییر می‌دهند، پس لیست به‌روزشده از نظر ساختاری با چیزی که از قبل در state مشترک بود یکسان بود و Kotlin StateFlow رویداد جدیدی ارسال نمی‌کرد. حالا موفقیت دیپلوی به‌صورت محلی هم ردیابی می‌شود.",
                             Icons.Default.Refresh
@@ -697,6 +702,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed unrelated sites breaking when the personal anti-sanction DNS was turned on",
                             "Turning this feature on could break sites that were never even supposed to be touched (e.g. Gmail). Root cause: its DNS resolver was hardcoded to plain UDP 1.1.1.1:53 -- a protocol commonly blocked or throttled on Iranian ISPs -- with no fallback, unlike the main VPN config which already resolves via DoH over HTTPS for exactly this reason. It now resolves via the same DoH-over-443 approach.",
                             Icons.Default.Dns
+                        ),
+                        ChangelogItem(
+                            "\"Update worker\" button in the personal anti-sanction DNS screen",
+                            "Once an exit worker is already deployed, you can now redeploy the latest bundled EDG worker onto the same account without deleting and re-adding it.",
+                            Icons.Default.CloudSync
                         ),
                         ChangelogItem(
                             "Fixed the \"build worker\" button not updating after a successful deploy",

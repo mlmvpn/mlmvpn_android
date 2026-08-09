@@ -171,6 +171,20 @@ fun AntiSanctionScreen(onBack: () -> Unit) {
                         val readyAccount = workerAccounts.firstOrNull() ?: accounts.firstOrNull()
                         val label = readyAccount?.email?.ifEmpty { readyAccount.accountId } ?: "—"
                         Text("آماده ✅ — از حساب: $label", color = Green, fontSize = 12.sp)
+                        Spacer(Modifier.height(10.dp))
+                        if (deploying) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Blue, strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text(deployStatus.ifEmpty { "در حال بروزرسانی…" }, color = Blue, fontSize = 12.sp)
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = { deployWorker() },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp)
+                            ) { Text("بروزرسانی وورکر (نصب مجدد آخرین نسخه)", color = Blue) }
+                        }
                     } else {
                         Text("هنوز وورکری ساخته نشده. یک‌بار روی حساب کلادفلر خودتان بسازید.", color = Muted, fontSize = 12.sp)
                         Spacer(Modifier.height(10.dp))
