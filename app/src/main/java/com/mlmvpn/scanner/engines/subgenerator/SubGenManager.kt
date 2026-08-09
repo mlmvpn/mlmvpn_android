@@ -12,7 +12,9 @@ import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import kotlinx.coroutines.flow.collectLatest
 import com.mlmvpn.scanner.data.CloudManager
+import com.mlmvpn.scanner.data.GroupManager
 import com.mlmvpn.scanner.data.NodeManager
+import com.mlmvpn.scanner.models.VpnNode
 import kotlinx.coroutines.launch
 
 data class SubGenAccountData(
@@ -345,25 +347,56 @@ class SubGenManager(private val context: Context) {
         }
     }
 
+    /**
+     * Resolves a sub-link's `mappedGroupName` (a composite `"manual:<engine>:<groupTitle>"` /
+     * `"cloud:<groupId>:<engine>"` / `"scanner:<groupId>:<engine>"` string, always set this way
+     * by SubLinkScreen -- see its "Update" button logic) to the actual node list it refers to.
+     * Must stay in sync with that screen's own copy of this parsing; kept here as the one shared
+     * implementation so the two can no longer drift.
+     */
+    private fun resolveGroupNodes(
+        mappedGroupName: String,
+        liveNodes: List<VpnNode>,
+        groupManager: GroupManager
+    ): List<VpnNode> {
+        val parts = mappedGroupName.split(":")
+        return if (parts.size >= 2) {
+            when (parts[0]) {
+                "manual" -> {
+                    val engine = parts[1]
+                    val groupTitle = parts.getOrNull(2)?.let { if (it == "null") null else it }
+                    liveNodes.filter { it.engineType == engine && (groupTitle == null || it.groupTitle == groupTitle) }
+                }
+                "cloud" -> groupManager.cloudGroups.find { it.id == parts[1] }?.nodes?.filter { it.engineType == parts.getOrNull(2) } ?: emptyList()
+                "scanner" -> groupManager.scannerGroups.find { it.id == parts[1] }?.nodes?.filter { it.engineType == parts.getOrNull(2) } ?: emptyList()
+                else -> emptyList()
+            }
+        } else {
+            liveNodes.filter { it.engineType == mappedGroupName }
+        }
+    }
+
     fun startAutoSync() {
         autoSyncJob?.cancel()
         val cloudManager = CloudManager(context)
         val nodeManager = NodeManager(context)
+        val groupManager = GroupManager(context)
         autoSyncJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             nodeManager.nodesFlow.collectLatest { nodes ->
                 kotlinx.coroutines.delay(5000) // Wait 5 seconds after modifications
-                
+
                 val accounts = cloudManager.accounts
                 if (accounts.isEmpty()) return@collectLatest
-                
+
                 val allLinks = getSubLinks()
                 for (account in accounts) {
                     val accountData = getAccountData(account.id) ?: continue
                     val links = allLinks.filter { it.accountId == account.id || it.accountId.isEmpty() }
-                    
+
                     for (link in links) {
-                        if (link.mappedGroupName != null) {
-                            val groupNodes = nodes.filter { it.engineType == link.mappedGroupName }
+                        val mapped = link.mappedGroupName
+                        if (mapped != null) {
+                            val groupNodes = resolveGroupNodes(mapped, nodes, groupManager)
                             val configsStr = groupNodes.joinToString("\n") { it.uri }
                             uploadConfigs(account, accountData, link.slug, configsStr, link.expiryTimestamp)
                         }

@@ -256,6 +256,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Timer
                         ),
                         ChangelogItem(
+                            "رفع خالی‌شدن خودکار کانفیگ‌های لینک اشتراک",
+                            "کانفیگ‌های یک لینک اشتراک ممکن بود بعد از مدتی خودشان خالی شوند — خیلی قبل از این‌که کاربر اصلاً دکمه «بروزرسانی» را بزند. علت: هر لینک اشتراک این‌که به کدام گروه نود اشاره می‌کند را به‌صورت یک رشته ترکیبی ذخیره می‌کند (مثلاً «manual:نوع‌موتور:عنوان‌گروه»)، و دکمه «بروزرسانی» خودِ صفحه این رشته را درست تجزیه می‌کند تا نودهای منطبق را پیدا کند — ولی وظیفه‌ی همگام‌سازی خودکار پس‌زمینه (که چند ثانیه بعد از هر تغییر در لیست نودها دوباره کانفیگ‌ها را آپلود می‌کند) نوع موتور خام هر نود را مستقیم با کل همان رشته‌ی ترکیبی مقایسه می‌کرد که هیچ‌وقت برابر نمی‌شد. پس هر بار همگام‌سازی پس‌زمینه اجرا می‌شد، لینک را بی‌صدا با یک لیست کانفیگ خالی جایگزین می‌کرد؛ «بعد از ۲۰-۳۰ بار بروزرسانی» که کاربران می‌دیدند در واقع فقط به این بستگی داشت چقدر طول می‌کشید تا یکی از این همگام‌سازی‌های پس‌زمینه اجرا شود. حالا وظیفه‌ی همگام‌سازی خودکار دقیقاً همان روشی که دکمه «بروزرسانی» استفاده می‌کند را به‌کار می‌برد.",
+                            Icons.Default.LinkOff
+                        ),
+                        ChangelogItem(
                             "بررسی خودکار نسخه جدید و دانلود/نصب داخل اپ",
                             "اپ حالا بلافاصله بعد از اجرا (و همچنین هر بار یک اتصال VPN برقرار می‌شود، برای وقتی گیت‌هاب موقع اجرا فیلتر بوده) نسخه جدید را از گیت‌هاب بررسی می‌کند. اگر نسخه جدیدتری منتشر شده باشد، پنجره‌ای با شماره نسخه، حجم فایل، و لیست کامل و قابل‌اسکرول تغییرات نمایش داده می‌شود، همراه با دکمه «دانلود نسخه جدید» که به یک صفحه دانلود اختصاصی می‌رود (نوار پیشرفت با درصد زنده) و بعد از اتمام دانلود خودکار نصب‌کننده سیستم را باز می‌کند. اگر گیت‌هاب در دسترس نباشد، این بررسی کاملاً بی‌صدا شکست می‌خورد و هیچ خللی در کارکرد اپ ایجاد نمی‌کند.",
                             Icons.Default.SystemUpdate
@@ -722,6 +727,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Aether: added a timer and explanation on the gateway-scan step",
                             "The gateway-scan step (MASQUE) can legitimately take anywhere from tens of seconds to a few minutes depending on scan mode, and on networks that DPI-block MASQUE it runs the full time budget before failing -- with only a static \"working\" badge, that read as a frozen app. The status card now shows a live elapsed-time counter on the scan step, and after 20 seconds an explanatory note that this step can take a while and that some networks block or slow MASQUE, with a reminder that tapping the connect button again cancels it. This doesn't change scan behavior or success rate -- it just makes a long scan legible instead of looking stuck.",
                             Icons.Default.Timer
+                        ),
+                        ChangelogItem(
+                            "Fixed subscription-link configs going empty on their own",
+                            "A subscription link's configs could silently go empty after a while, well before the user ever pressed \"Update\" -- any client would refresh the link and get zero configs back, even though the link had worked fine right after creation. Root cause: sub-links store which node group they serve as a composite string (e.g. \"manual:<engine>:<groupTitle>\"), and the screen's own \"Update\" button correctly parses that string apart to find the matching nodes -- but the background auto-sync job (which re-uploads a link's configs a few seconds after any node list change) was comparing a node's plain engine type directly against that whole composite string, which can never match. So every background sync silently overwrote the link with an empty config list; the \"after 20-30 refreshes\" users saw was really just how long it took one of those background syncs to fire. The auto-sync job now parses the group reference the same way the Update button does.",
+                            Icons.Default.LinkOff
                         ),
                         ChangelogItem(
                             "In-app update check, download and install",
