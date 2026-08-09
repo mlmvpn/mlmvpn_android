@@ -120,7 +120,8 @@ The debug APK is written to `app/build/outputs/apk/debug/`.
 
 ### Changelog
 
-See [`CHANGELOG.md`](CHANGELOG.md) for the full version history (bilingual).
+See [`CHANGELOG.md`](CHANGELOG.md) for the full version history (bilingual), or the
+nicer-looking [**changelog page**](https://mlmvpn.github.io/mlmvpn_android/changelog.html).
 
 ### Contributing
 
@@ -244,7 +245,8 @@ cd mlmvpn_android
 
 ### لیست تغییرات
 
-برای مشاهده تاریخچه کامل نسخه‌ها (دوزبانه) به [`CHANGELOG.md`](CHANGELOG.md) مراجعه کنید.
+برای مشاهده تاریخچه کامل نسخه‌ها (دوزبانه) به [`CHANGELOG.md`](CHANGELOG.md)، یا نسخه
+[**شیک و تصویری آن**](https://mlmvpn.github.io/mlmvpn_android/changelog.html) مراجعه کنید.
 
 ### مشارکت در پروژه
 

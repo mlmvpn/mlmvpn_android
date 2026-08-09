@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>لیست تغییرات — MLM VPN اندروید</title>
+<meta name="description" content="تاریخچه کامل نسخه‌های اپ اندروید MLM VPN">
+<meta name="color-scheme" content="dark light">
+<style>
+:root{
+  --bg:#12151a; --surface:#1a1e25; --surface2:#20252e; --border:#2a303c;
+  --text:#e8eaef; --muted:#8b93a3; --muted2:#5f6675;
+  --accent:#3fb6ad; --accent-soft:#173330;
+  --added:#3fb6ad; --added-soft:#173330;
+  --fixed:#e5484d; --fixed-soft:#3a1c1e;
+  --changed:#5b8def; --changed-soft:#182338;
+  --sec:#e8a33d; --sec-soft:#3a2c14;
+  --radius:10px;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f5f4f0; --surface:#ffffff; --surface2:#faf9f6; --border:#e3e0d8;
+    --text:#1c1d1f; --muted:#5c5f66; --muted2:#8a8d94;
+    --accent:#0f7a70; --accent-soft:#e3f4f1;
+    --added:#0f7a70; --added-soft:#e3f4f1;
+    --fixed:#c22b30; --fixed-soft:#fbe7e7;
+    --changed:#2255b8; --changed-soft:#e8eefc;
+    --sec:#a5680a; --sec-soft:#fbf0dc;
+  }
+}
+
+*{box-sizing:border-box;}
+html,body{margin:0; padding:0;}
+body{
+  direction:rtl;
+  font-family:"Segoe UI",Tahoma,"Vazirmatn","Noto Sans Arabic",system-ui,sans-serif;
+  background:var(--bg); color:var(--text);
+}
+.page{
+  line-height:1.75; max-width:880px; margin:0 auto; padding:32px 20px 80px;
+}
+.eyebrow{
+  font-family:"Consolas","SFMono-Regular",Menlo,monospace;
+  font-size:12.5px; letter-spacing:.08em; color:var(--accent); text-transform:uppercase;
+  display:flex; align-items:center; gap:10px; margin-bottom:10px;
+}
+.eyebrow::before{content:"";width:22px;height:1px;background:var(--accent);}
+h1{font-size:clamp(26px,4vw,34px); font-weight:800; margin:0 0 8px; text-wrap:balance; letter-spacing:-.01em;}
+.subtitle{color:var(--muted); font-size:15.5px; margin:0 0 32px; max-width:64ch;}
+
+.timeline{position:relative; padding-right:26px; border-right:2px solid var(--border);}
+
+.ver{position:relative; margin-bottom:44px;}
+.ver::before{
+  content:""; position:absolute; right:-33px; top:6px; width:12px; height:12px;
+  border-radius:50%; background:var(--surface); border:2px solid var(--accent);
+}
+.ver.latest::before{background:var(--accent);}
+
+.ver-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:4px;}
+.ver-head h2{font-size:21px; margin:0; letter-spacing:-.01em; font-family:"Consolas",Menlo,monospace;}
+.ver-date{font-size:12.5px; color:var(--muted2); font-family:"Consolas",Menlo,monospace;}
+.badge-latest{
+  font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+  background:var(--accent-soft); color:var(--accent); padding:2px 9px; border-radius:999px;
+}
+.ver-sub{color:var(--muted); font-size:13.5px; margin:2px 0 14px;}
+
+.group{margin-bottom:12px;}
+.group-label{
+  display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:700;
+  letter-spacing:.03em; padding:3px 10px; border-radius:999px; margin-bottom:8px;
+  font-family:"Consolas",Menlo,monospace; text-transform:uppercase;
+}
+.group-label.added{background:var(--added-soft); color:var(--added);}
+.group-label.fixed{background:var(--fixed-soft); color:var(--fixed);}
+.group-label.changed{background:var(--changed-soft); color:var(--changed);}
+.group-label.security{background:var(--sec-soft); color:var(--sec);}
+
+ul.items{margin:0 0 4px; padding-right:20px; list-style:none;}
+ul.items li{
+  position:relative; padding-right:16px; margin-bottom:9px; font-size:14px; color:var(--text);
+}
+ul.items li::before{
+  content:"–"; position:absolute; right:0; color:var(--muted2);
+}
+ul.items li b{font-weight:700;}
+ul.items li .detail{color:var(--muted); display:block; font-size:13px; margin-top:2px; line-height:1.65;}
+
+.divider{height:1px; background:var(--border); margin:36px 0; border:none;}
+.older-head{font-size:13px; color:var(--muted2); text-transform:uppercase; letter-spacing:.06em; font-family:"Consolas",Menlo,monospace; margin-bottom:18px;}
+
+.mini-ver{margin-bottom:22px;}
+.mini-head{display:flex; align-items:baseline; gap:10px; margin-bottom:6px;}
+.mini-head h3{font-size:15px; margin:0; font-family:"Consolas",Menlo,monospace;}
+.mini-head span{font-size:11.5px; color:var(--muted2);}
+.mini-ver p{margin:0; font-size:13.5px; color:var(--muted); line-height:1.7;}
+
+footer{margin-top:50px; padding-top:20px; border-top:1px solid var(--border); font-size:12px; color:var(--muted2);}
+code{background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-family:"Consolas",Menlo,monospace; font-size:0.92em;}
+a{color:var(--accent);}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="eyebrow">MLM VPN &middot; اندروید</div>
+<h1>لیست تغییرات</h1>
+<p class="subtitle">تاریخچه کامل نسخه‌های اپ اندروید. شماره نسخه مطابق <code>versionName</code> در build.gradle است.</p>
+
+<div class="timeline">
+
+  <div class="ver latest">
+    <div class="ver-head"><h2>1.2.1</h2><span class="ver-date">2026-08-09</span><span class="badge-latest">جدیدترین</span></div>
+
+    <div class="group">
+      <span class="group-label added">افزوده‌شده</span>
+      <ul class="items">
+        <li>انتشار عمومی سورس اپ اندروید با مجوز <b>GPLv3</b> روی گیت‌هاب
+          <span class="detail">README دوزبانه کامل، راهنمای مشارکت (CONTRIBUTING)، و Git LFS برای باینری‌های native و فایل‌های داده جغرافیایی.</span>
+        </li>
+        <li>تب اتصال: دکمه جدید «دریافت کانفیگ رایگان»
+          <span class="detail">ویزارد چندمرحله‌ای بالای دکمه + — از چند منبع عمومی گیت‌هابی کانفیگ جمع می‌کند، تعداد در دسترس را نشان می‌دهد، تعداد دلخواه شما را می‌گیرد و با تست دو مرحله‌ای (فیلتر سریع شبکه + تست واقعی Xray، دقیقاً دقت «دیلی واقعی») فقط کانفیگ‌های واقعاً متصل را برمی‌گرداند. دکمه «همین تعداد کافیه» توقف زودهنگام را ممکن می‌کند. نتایج با نام رندوم <code>mlmvpnXXXX</code> در پوشه «کانفیگ‌های رایگان» تب Manual قرار می‌گیرند؛ تکراری‌ها (بر اساس هویت واقعی سرور) دوباره اضافه نمی‌شوند.</span>
+        </li>
+        <li>تب اتصال: پرچم واقعی کشور برای هر کانفیگ، بدون نیاز به اتصال کامل
+          <span class="detail">حین تست «دیلی واقعی»، کانفیگی که وصل شد و پرچمش نامشخص بود، یک‌بار (فقط همان یک‌بار، بعد از آن از حافظه) از همان تونل واقعی کشور خروجی‌اش استعلام می‌شود.</span>
+        </li>
+      </ul>
+    </div>
+
+    <div class="group">
+      <span class="group-label changed">تغییریافته</span>
+      <ul class="items">
+        <li>تب گیم: جایگزینی سرور اول/دوم با موتور Aether
+          <span class="detail">دو سرور ثابت قدیمی وایرگارد امارات (یکی از قبل غیرفعال) حذف شدند؛ اتصال کامل بوستر بازی حالا از موتور Aether استفاده می‌کند که خودش سالم‌ترین مسیر را از میان چند پروتکل انتخاب می‌کند.</span>
+        </li>
+        <li>پنل BPB از نسخه 4.2.2 به <b>5.1.1</b> ارتقا یافت
+          <span class="detail">این نسخه مدل دیپلوی را کاملاً عوض کرده: تنظیمات هر حساب (UUID، پسورد Trojan، مسیر امن، ایمیل/توکن) مستقیم داخل کد ورکر جاسازی می‌شود، نه از طریق متغیرهای کلودفلر مثل قبل. دیپلوی، ورود به پنل (با JSON به‌جای متن ساده)، دریافت ساب‌لینک و ذخیره تنظیمات همگی بازنویسی شدند؛ فرم تنظیمات هم با فیلدهای نسخه جدید هماهنگ شد.</span>
+        </li>
+      </ul>
+    </div>
+
+    <div class="group">
+      <span class="group-label fixed">رفع باگ</span>
+      <ul class="items">
+        <li>پیام مبهم «Invalid API Token» هنگام افزودن اکانت با Global API Key بدون ایمیل
+          <span class="detail">حالا پیام واضح فارسی می‌گوید ایمیل هم برای این نوع کلید الزامی است؛ راهنمای متنی هم زیر فیلد اضافه شد.</span>
+        </li>
+        <li>خطای «آپلود ورکر MLM ناموفق بود»
+          <span class="detail">علت: تاریخ سازگاری ورکر از ساعت محلی گوشی محاسبه می‌شد؛ برای تایم‌زون‌های جلوتر از UTC (ایران +۳:۳۰) بین ۰۰:۰۰ تا ۰۳:۳۰ بامداد این تاریخ یک روز جلوتر از سرور کلادفلر می‌افتاد و آپلود رد می‌شد. حالا مثل بقیه ورکرهای برنامه، ثابت و امن است.</span>
+        </li>
+        <li>خطای آپلود ورکر BPB («No such module node:crypto»)
+          <span class="detail">نسخه 5.1.1 نیاز به فلگ سازگاری <code>nodejs_compat</code> دارد که ارسال نمی‌شد.</span>
+        </li>
+        <li>کانفیگ‌های دریافتی از BPB کاملاً قطع بودند
+          <span class="detail">SNI/Host خالی می‌ماند و به دامنه پیش‌فرض BPB (<code>www.speedtest.net</code>) سقوط می‌کرد، چون <code>mainDomain</code> تنظیم نشده بود؛ حالا به آدرس واقعی ورکر تنظیم می‌شود.</span>
+        </li>
+        <li>بریدگی/عدم اسکرول منوی کشویی همبرگری در صفحه‌های کوتاه
+          <span class="detail">گزینه‌های اضطراری در پایین منو روی برخی گوشی‌ها غیرقابل‌دسترس بودند؛ محتوای منو حالا کامل اسکرول می‌شود.</span>
+        </li>
+        <li>ناهماهنگی پرچم بالای دکمه اتصال با واقعیت
+          <span class="detail">این پرچم از دیتابیس geoIP خودِ Cloudflare (فیلد <code>loc</code> در cdn-cgi/trace) خوانده می‌شد که گاهی اشتباه بود (مثلاً یک آی‌پی آمریکایی را کانادا نشان می‌داد). حالا از همان منبع پرچم کانفیگ‌ها (<code>api.ip.sb/geoip</code>) استفاده می‌کند و همیشه با هم و با ابزارهایی مثل ip.me هماهنگ است.</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="ver">
+    <div class="ver-head"><h2>1.2.0</h2><span class="ver-date">2026-07</span></div>
+    <div class="group">
+      <span class="group-label added">افزوده‌شده</span>
+      <ul class="items">
+        <li><b>GATE MLMVPN</b> — موتور اتصال تازه روی TCP :443 <span class="detail">برای خطوطی که UDP محدود است؛ هزاران سرور با پرچم کشور و آرشیو کامل تاریخی سرورها.</span></li>
+        <li>تست واقعی اتصال، جدا از تست پینگ <span class="detail">دست‌دادن کامل با سرور، نه فقط اندازه‌گیری RTT.</span></li>
+        <li>مرور سرورها بر اساس قاره/کشور با تست دسته‌جمعی</li>
+        <li>شتاب‌دهی UDP قابل‌انتخاب</li>
+      </ul>
+    </div>
+    <div class="group">
+      <span class="group-label changed">تغییریافته</span>
+      <ul class="items"><li>بازطراحی کامل تب وایرگارد</li></ul>
+    </div>
+    <div class="group">
+      <span class="group-label fixed">رفع باگ</span>
+      <ul class="items">
+        <li>کرش و ری‌استارت اپ چند ثانیه بعد از قطع Google Apps Script <span class="detail">هسته تونل جدا از فرآیند اصلی اجرا می‌شود.</span></li>
+        <li>تشخیص غلط تونل سالم به‌عنوان مرده بعد از ~۱۲ ثانیه بی‌کاری در وایرگارد</li>
+        <li>تلاش خودکار برای ترنسپورت جایگزین و هویت تازه وارپ</li>
+      </ul>
+    </div>
+    <div class="group">
+      <span class="group-label security">امنیت</span>
+      <ul class="items"><li>آی‌پی:پورت سرورها دیگر روی کارت‌ها نمایش داده نمی‌شود</li></ul>
+    </div>
+  </div>
+
+  <div class="ver">
+    <div class="ver-head"><h2>1.1.0</h2><span class="ver-date">2026-06</span></div>
+    <div class="group">
+      <span class="group-label added">افزوده‌شده</span>
+      <ul class="items">
+        <li>DNS ضد تحریم شخصی <span class="detail">فقط دامنه‌های تحریم‌شده از وورکر شخصی شما با آی‌پی تمیز عبور می‌کنند.</span></li>
+        <li>بازطراحی کامل ویزارد اضطراری دوم (Google Apps Script)</li>
+        <li>نصب گواهی امنیتی بدون نیاز به اتصال قبلی</li>
+      </ul>
+    </div>
+    <div class="group">
+      <span class="group-label fixed">رفع باگ</span>
+      <ul class="items">
+        <li>کد کپی‌شده اسکریپت تمیز شد (حذف BOM و کامنت اضافه) + گزینه ذخیره به فایل</li>
+        <li>بسته‌شدن ناگهانی اپ هنگام قطع اضطراری دوم</li>
+        <li>استانداردسازی رفتار دکمه برگشت</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+<hr class="divider"/>
+<div class="older-head">نسخه‌های قدیمی‌تر — خلاصه</div>
+
+<div class="mini-ver">
+  <div class="mini-head"><h3>1.0.9</h3><span>نسخه ویژه شرایط اضطراری</span></div>
+  <p>بهینه‌سازی کامل اضطراری دوم برای شرایط سخت شبکه؛ اضطراری اول (Vercel) برای هر ۴ پنل کار می‌کند؛ رفع لگ و نشت DNS در کانفیگ‌های xHTTP؛ شش کانفیگ پیش‌فرض ایران با استراتژی‌های متفاوت عبور.</p>
+</div>
+<div class="mini-ver">
+  <div class="mini-head"><h3>1.0.8</h3></div>
+  <p>وایرگارد اختصاصی امارات برای کاهش پینگ؛ بازطراحی کامل تب گیم با مقایسه پینگ واقعی در حالت AUTO؛ DNS اختصاصی کلادفلر و امارات.</p>
+</div>
+<div class="mini-ver">
+  <div class="mini-head"><h3>1.0.8 beta</h3></div>
+  <p>پنل Deno (بدون کارت اعتباری)؛ کانفیگ VLESS/Trojan روی WS و xHTTP؛ کاشی Quick Settings؛ کاهش چشمگیر حجم اپ؛ سیستم گیم بوستر اختصاصی.</p>
+</div>
+<div class="mini-ver">
+  <div class="mini-head"><h3>1.0.7</h3></div>
+  <p>متد سرورلس جدید برای شرایط سخت؛ پنل اختصاصی MLMVPN با XHTTP پایدار؛ بازنویسی کامل اسکنر.</p>
+</div>
+<div class="mini-ver">
+  <div class="mini-head"><h3>1.0.6</h3></div>
+  <p>سیستم ساخت ساب‌لینک.</p>
+</div>
+<div class="mini-ver">
+  <div class="mini-head"><h3>1.0.51</h3></div>
+  <p>سازگاری کامل با اندروید ۱۵ و ۱۶ — رفع هم‌پوشانی منو با نوار ناوبری.</p>
+</div>
+<div class="mini-ver">
+  <div class="mini-head"><h3>1.0.5</h3></div>
+  <p>موتور ضد فیلتر SNI با ۴۰۰+ کانفیگ؛ سیستم‌های اضطراری اول و دوم معرفی شدند؛ ارتقای هسته سه پنل ابری؛ MTU دستی؛ چندزبانگی EN/FA؛ بازطراحی کامل UI.</p>
+</div>
+
+<footer>منبع کامل: <a href="https://github.com/mlmvpn/mlmvpn_android/blob/main/CHANGELOG.md">CHANGELOG.md</a> در ریپازیتوری · MLM VPN Android</footer>
+
+</div>
+</body>
+</html>
