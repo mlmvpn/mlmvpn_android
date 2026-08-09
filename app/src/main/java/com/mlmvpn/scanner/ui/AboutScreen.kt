@@ -256,6 +256,16 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Timer
                         ),
                         ChangelogItem(
+                            "کاهش محسوس مصرف باتری در حالت متصل",
+                            "چهار علت جدا پیدا شد که همگی تا وقتی VPN وصل بود مدام باتری مصرف می‌کردند: ۱) تونل یک wake lock بدون سقف زمانی برای کل مدت اتصال نگه می‌داشت، یعنی تا وقتی وصل بودید پردازنده هیچ‌وقت نمی‌توانست به خواب عمیق یا حالت Doze برود — حتی تمام شب که گوشی توی جیب بی‌استفاده بود و حتی یک بایت هم رد و بدل نمی‌شد. حالا این قفل فقط تا وقتی ترافیک واقعاً در جریان است نگه داشته می‌شود و بعد از ۵ دقیقه سکوت آزاد می‌شود؛ بسته‌های ورودی همچنان مستقل از این قفل پردازه را بیدار می‌کنند. ۲) یک حلقه تشخیصی باقی‌مانده هر ۵ ثانیه بیدار می‌شد فقط برای نوشتن یک عدد مصرف رم در لاگ که در نسخه نهایی هیچ‌کس نمی‌خواندش — حدود ۱۷٬۰۰۰ بیدارشدن در روز بدون هیچ کار مفیدی؛ کاملاً حذف شد. ۳) شمارنده ترافیک هر ۲ ثانیه روی حافظه می‌نوشت فارغ از این‌که چیزی تغییر کرده باشد یا نه — روی یک تونل بی‌استفاده حدود ۴۳٬۰۰۰ نوشتن بی‌فایده در روز؛ حالا فقط وقتی می‌نویسد که واقعاً بایتی جابه‌جا شده باشد. ۴) ناظر تعویض خودکار سرور هر ۱۰ ثانیه یک مقدار بولین را دوباره می‌خواند با این‌که این قابلیت پیش‌فرض خاموش است؛ حالا دقیقه‌ای یک بار بررسی می‌شود.",
+                            Icons.Default.BatteryChargingFull
+                        ),
+                        ChangelogItem(
+                            "رفع آپلودهای تکراری لینک اشتراک روی کلودفلر",
+                            "همگام‌سازی خودکار پس‌زمینه با هر تغییر در لیست نودها کانفیگ‌های لینک را دوباره روی کلودفلر آپلود می‌کرد، در حالی که اکثر این تغییرات فقط فراداده‌اند (نتیجه پینگ، عدد تست سرعت، پرچم کشور) و لیست واقعی کانفیگ‌ها را ذره‌ای عوض نمی‌کنند. با این حال هرکدام یک رفت‌وبرگشت کامل به API کلودفلر هزینه داشت، تمام روز، برای هر لینک روی هر حساب — هدررفت باتری و دیتا، و آن‌قدر ترافیک API که می‌تواند در خطاهای کلودفلری که بعضی کاربران بعد از یک روز روشن ماندن اپ می‌دیدند نقش داشته باشد. حالا اگر لیست کانفیگ‌ها واقعاً تغییر نکرده باشد، آپلود کاملاً رد می‌شود.",
+                            Icons.Default.CloudSync
+                        ),
+                        ChangelogItem(
                             "رفع قفل‌شدن بی‌جهت پنل ابری پشت «تایید ایمیل الزامی»",
                             "افزودن اکانت کلودفلر می‌توانست برای همیشه پشت صفحه‌ی «تایید ایمیل الزامی» گیر کند، بدون هیچ راه خروجی جز لاگین بیرونی به کلودفلر — حتی وقتی مشکل واقعی، تایید نبودن ایمیل نبود. علت: وقتی ساخت ساب‌دامین workers.dev حساب شکست می‌خورد، اپ صرفاً با بررسی این‌که آیا متن خطای خام کلودفلر شامل کلمه «verify» است یا نه تصمیم می‌گرفت که حتماً ایمیل تایید نشده — در حالی که چند خطای بی‌ربط دیگر کلودفلر (مشکل دامنه‌ی توکن، محدودیت نرخ درخواست و غیره) هم می‌توانند همین کلمه را داشته باشند، و کل پنل ابری را بدون هیچ نشانه‌ای از علت واقعی پشت صفحه‌ی تایید قفل می‌کردند. حالا قبل از نمایش آن صفحه، وضعیت واقعی تایید ایمیل از خودِ endpoint وضعیت حساب کلودفلر پرسیده می‌شود؛ در غیر این صورت خطای واقعی نمایش داده می‌شود.",
                             Icons.Default.VerifiedUser
@@ -732,6 +742,16 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Aether: added a timer and explanation on the gateway-scan step",
                             "The gateway-scan step (MASQUE) can legitimately take anywhere from tens of seconds to a few minutes depending on scan mode, and on networks that DPI-block MASQUE it runs the full time budget before failing -- with only a static \"working\" badge, that read as a frozen app. The status card now shows a live elapsed-time counter on the scan step, and after 20 seconds an explanatory note that this step can take a while and that some networks block or slow MASQUE, with a reminder that tapping the connect button again cancels it. This doesn't change scan behavior or success rate -- it just makes a long scan legible instead of looking stuck.",
                             Icons.Default.Timer
+                        ),
+                        ChangelogItem(
+                            "Substantially reduced battery drain while connected",
+                            "Four separate causes, all of which cost power continuously for as long as the VPN was up: 1) The tunnel held an unbounded partial wake lock for the entire session, so the CPU could never enter deep sleep or Doze while connected -- including overnight with the phone idle in a pocket and not a single byte moving. The lock is now held only while traffic is actually flowing and released after 5 minutes of silence; incoming packets still wake the process through the tunnel interface regardless. 2) A leftover diagnostic loop woke every 5 seconds for the whole session purely to write a RAM figure to the log that nothing reads in a release build -- roughly 17,000 wakeups a day doing no work; removed entirely. 3) The traffic meter wrote to storage every 2 seconds whether or not anything had changed -- about 43,000 pointless disk writes a day on an idle tunnel; it now only writes when bytes actually moved. 4) The auto-switch watcher re-read a single boolean every 10 seconds even though the feature is off by default; now checked once a minute.",
+                            Icons.Default.BatteryChargingFull
+                        ),
+                        ChangelogItem(
+                            "Fixed redundant subscription-link uploads to Cloudflare",
+                            "The background auto-sync re-uploaded a link's configs to Cloudflare on every node-list change, and most of those changes are metadata-only (a ping result, a speed-test figure, a country flag) that leave the actual config list byte-identical. Every one still cost a full Cloudflare API round trip, all day, for every link on every account -- wasted battery and data, and enough API traffic to plausibly contribute to the Cloudflare errors some users saw after leaving the app running for a day. Auto-sync now skips the upload entirely when the config list hasn't actually changed.",
+                            Icons.Default.CloudSync
                         ),
                         ChangelogItem(
                             "Fixed the cloud panel getting stuck behind \"email verification required\" for unrelated errors",

@@ -20,7 +20,6 @@ class MyVpnService : VpnService() {
     private var screenReceiver: android.content.BroadcastReceiver? = null
     private var disconnectJob: kotlinx.coroutines.Job? = null
     private var trafficMonitorJob: kotlinx.coroutines.Job? = null
-    private var stressTestJob: kotlinx.coroutines.Job? = null
     private var autoSwitchJob: kotlinx.coroutines.Job? = null
     private val serviceScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
 
@@ -144,7 +143,6 @@ class MyVpnService : VpnService() {
                     vpnInterface = null
                 }
                 trafficMonitorJob?.cancel()
-                stressTestJob?.cancel()
                 // stopSelf(startId), NOT bare stopSelf().
                 //
                 // The teardown above runs behind xrayMutex and can take seconds (Aether kills
@@ -175,15 +173,18 @@ class MyVpnService : VpnService() {
             if (wakeLock?.isHeld == true) wakeLock?.release()
             val powerManager = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
             wakeLock = powerManager.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "MLMVPN::VpnWakeLock")
-            wakeLock?.acquire()
-            Log.d("MyVpnService", "WakeLock acquired")
+            // Not reference-counted: acquireWakeLock()/releaseWakeLock() are called repeatedly
+            // from the traffic monitor below, and with the default counting behaviour a run of
+            // acquires would need an equal run of releases to actually let the CPU sleep --
+            // i.e. the idle release would silently never take effect.
+            wakeLock?.setReferenceCounted(false)
+            acquireWakeLock()
         } catch (e: Exception) {
             Log.e("MyVpnService", "Failed to acquire WakeLock", e)
         }
-        
+
         setupScreenReceiver()
         startTrafficMonitor()
-        startStressTestMonitor()
         startAutoSwitchMonitor()
         
         val nodeUri = intent?.getStringExtra("NODE_URI") ?: return START_NOT_STICKY
@@ -789,15 +790,35 @@ class MyVpnService : VpnService() {
         disconnectJob?.cancel()
         autoSwitchJob?.cancel()
         trafficMonitorJob?.cancel()
-        stressTestJob?.cancel()
-        
-        try {
-            if (wakeLock?.isHeld == true) {
-                wakeLock?.release()
-                Log.d("MyVpnService", "WakeLock released")
-            }
-        } catch (e: Exception) {}
+
+        releaseWakeLock()
         wakeLock = null
+    }
+
+    // Battery: the tunnel used to hold an unbounded PARTIAL_WAKE_LOCK for the entire session,
+    // so the CPU could never enter deep sleep / Doze for as long as the VPN was connected --
+    // including all night with the phone idle in a pocket and not a byte moving. The lock is
+    // now held only while traffic is actually flowing, and dropped after IDLE_RELEASE_MS of
+    // silence; an incoming packet wakes the process through the tun fd regardless of the lock,
+    // and the traffic monitor re-acquires on the next tick that sees movement. The timeout on
+    // acquire() is a backstop so an abnormally-killed service can't strand the lock held.
+    private val WAKELOCK_TIMEOUT_MS = 10 * 60 * 1000L
+    private val IDLE_RELEASE_MS = 5 * 60 * 1000L
+
+    private fun acquireWakeLock() {
+        try {
+            wakeLock?.acquire(WAKELOCK_TIMEOUT_MS)
+        } catch (e: Exception) {
+            Log.w("MyVpnService", "Could not acquire WakeLock", e)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        } catch (e: Exception) {
+            Log.w("MyVpnService", "Could not release WakeLock", e)
+        }
     }
 
     private fun startTrafficMonitor() {
@@ -832,6 +853,7 @@ class MyVpnService : VpnService() {
 
             var sessionRx = 0L
             var sessionTx = 0L
+            var lastTrafficAt = System.currentTimeMillis()
 
             try {
                 while (true) {
@@ -854,16 +876,29 @@ class MyVpnService : VpnService() {
                         txDelta = totalTxDelta / 2
                     }
 
-                    sessionRx += rxDelta
-                    sessionTx += txDelta
-                    sessionPrefs.edit()
-                        .putLong("session_rx", sessionRx)
-                        .putLong("session_tx", sessionTx)
-                        .apply()
+                    // Only touch storage when something actually moved. This loop runs every
+                    // 2s for the whole session, so the unconditional write it used to do was
+                    // ~43k pointless disk writes a day on an idle tunnel.
+                    if (rxDelta > 0L || txDelta > 0L) {
+                        sessionRx += rxDelta
+                        sessionTx += txDelta
+                        sessionPrefs.edit()
+                            .putLong("session_rx", sessionRx)
+                            .putLong("session_tx", sessionTx)
+                            .apply()
 
-                    val defaultPrefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this@MyVpnService)
-                    if (defaultPrefs.getBoolean("enable_usage_tracking", true)) {
-                        trafficManager.addTraffic(rxDelta, txDelta)
+                        val defaultPrefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this@MyVpnService)
+                        if (defaultPrefs.getBoolean("enable_usage_tracking", true)) {
+                            trafficManager.addTraffic(rxDelta, txDelta)
+                        }
+
+                        lastTrafficAt = System.currentTimeMillis()
+                        if (wakeLock?.isHeld != true) acquireWakeLock()
+                    } else if (wakeLock?.isHeld == true &&
+                        System.currentTimeMillis() - lastTrafficAt > IDLE_RELEASE_MS) {
+                        // Tunnel is up but nothing is using it -- let the device sleep.
+                        Log.d("MyVpnService", "Tunnel idle; releasing WakeLock so the CPU can sleep")
+                        releaseWakeLock()
                     }
 
                     lastRx = currentRx
@@ -903,19 +938,10 @@ class MyVpnService : VpnService() {
         }
     }
 
-    private fun startStressTestMonitor() {
-        stressTestJob?.cancel()
-        stressTestJob = serviceScope.launch {
-            while (true) {
-                kotlinx.coroutines.delay(5000) // Every 5 seconds
-                val runtime = Runtime.getRuntime()
-                val usedMem = (runtime.totalMemory() - runtime.freeMemory()) / 1048576L
-                val totalMem = runtime.totalMemory() / 1048576L
-                val maxMem = runtime.maxMemory() / 1048576L
-                Log.d("StressTest", "RAM Usage: ${usedMem}MB / ${totalMem}MB (Max: ${maxMem}MB) | Engine Running: ${currentEngine != null}")
-            }
-        }
-    }
+    // startStressTestMonitor() was removed: it was a leftover diagnostic loop that woke every
+    // 5 seconds for the entire session purely to Log.d() a RAM figure nobody reads in a release
+    // build -- ~17k wakeups a day doing no work, on top of a wakelock that guaranteed the CPU
+    // was awake to service them.
 
     private fun startAutoSwitchMonitor() {
         autoSwitchJob?.cancel()
@@ -926,7 +952,11 @@ class MyVpnService : VpnService() {
                 // Check if auto-switch is enabled
                 val isAutoSwitchEnabled = prefs.getBoolean("auto_switch_enabled", false)
                 if (!isAutoSwitchEnabled) {
-                    kotlinx.coroutines.delay(10000) // check again in 10s
+                    // Auto-switch is off by default, so for most users this branch is the only
+                    // one that ever runs. Re-checking a single boolean every 10s meant ~8.6k
+                    // needless wakeups a day; a minute's latency on noticing the user turned
+                    // the feature on costs nothing (the interval itself is 15+ minutes).
+                    kotlinx.coroutines.delay(60000)
                     continue
                 }
                 

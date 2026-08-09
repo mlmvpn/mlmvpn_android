@@ -26,6 +26,15 @@ data class SubGenAccountData(
 class SubGenManager(private val context: Context) {
     companion object {
         private var autoSyncJob: kotlinx.coroutines.Job? = null
+        /**
+         * Last config payload actually pushed per slug, so auto-sync can skip a re-upload that
+         * would change nothing. The flow it listens on re-emits on every node mutation, and
+         * most of those are metadata-only (a ping result, a speed-test figure, a country flag)
+         * which leave the URI list byte-identical -- without this guard each one still cost a
+         * full Cloudflare API round trip, all day, for every link on every account.
+         * Process-scoped on purpose: the worst a restart can cause is one redundant upload.
+         */
+        private val lastUploadedConfigs = java.util.concurrent.ConcurrentHashMap<String, String>()
     }
 
     private val prefs = context.getSharedPreferences("subgen_prefs", Context.MODE_PRIVATE)
@@ -398,7 +407,9 @@ class SubGenManager(private val context: Context) {
                         if (mapped != null) {
                             val groupNodes = resolveGroupNodes(mapped, nodes, groupManager)
                             val configsStr = groupNodes.joinToString("\n") { it.uri }
-                            uploadConfigs(account, accountData, link.slug, configsStr, link.expiryTimestamp)
+                            if (lastUploadedConfigs[link.slug] == configsStr) continue
+                            val ok = uploadConfigs(account, accountData, link.slug, configsStr, link.expiryTimestamp).first
+                            if (ok) lastUploadedConfigs[link.slug] = configsStr
                         }
                     }
                 }
