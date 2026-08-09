@@ -226,6 +226,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Code
                         ),
                         ChangelogItem(
+                            "ریکاوری خودکار بعد از قطعی واقعی شبکه",
+                            "قبلاً وقتی وای‌فای/دیتا واقعاً قطع می‌شد، تونل هیچ راهی برای فهمیدن این موضوع نداشت، پس رابط کاربری همچنان «متصل» نشان می‌داد — حتی بعد از برگشتن اینترنت — تا وقتی کاربر دستی قطع و وصل می‌کرد. حالا اپ اتصال واقعی شبکه را زیر نظر دارد و اگر در حالت متصل شبکه قطع و بعداً برگردد، خودکار همان اتصال را (قطع، صبر برای پاک‌سازی کامل، وصل مجدد) از نو برقرار می‌کند.",
+                            Icons.Default.Wifi
+                        ),
+                        ChangelogItem(
                             "بخش گیم: جایگزینی سرور اول/دوم با موتور Aether",
                             "دو سرور ثابت قدیمی وایرگارد امارات (که یکی‌شان اصلاً از قبل غیرفعال بود) از تب گیم حذف شدند. حالا بوستر بازی برای اتصال تونل کامل از موتور Aether استفاده می‌کند که خودش سالم‌ترین مسیر را از میان چند پروتکل پیدا می‌کند، نه یک سرور ثابت.",
                             Icons.Default.SportsEsports
@@ -662,6 +667,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Source review and public release on GitHub",
                             "The full Android app source is now published under GPLv3 on GitHub, so anyone can review it, contribute, or build their own version.",
                             Icons.Default.Code
+                        ),
+                        ChangelogItem(
+                            "Automatic recovery after a real network drop",
+                            "Previously, when Wi-Fi/mobile actually dropped, the tunnel had no way to notice, so the UI kept reporting \"connected\" indefinitely -- even after the network came back -- until the user manually disconnected and reconnected. The app now watches real connectivity and, if the network is lost while connected and later comes back, automatically cycles the same connection (stop, wait for full teardown, reconnect) instead of leaving it stuck.",
+                            Icons.Default.Wifi
                         ),
                         ChangelogItem(
                             "Game tab: Server 1/2 replaced with the Aether engine",

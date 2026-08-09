@@ -20,6 +20,9 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 ### Removed
 - **Deno Panel**: removed entirely (drawer entry, tab, FAQ section, and the underlying `engines/deno` deploy/stats code). `api.deno.com` has been blocked in Iran for a while now, and Deno's connection-duration-based billing model made free servers unsuitable for VPN use anyway (constant "Memory Time / Usage Exceeded" suspensions) -- the Cloudflare panels (BPB/EDG/Nahan) cover the same need without either problem.
 
+### Added
+- **Connection**: the app now recovers automatically from a real network drop (Wi-Fi/mobile dropping and coming back) while connected. Previously the tunnel had no way to notice its underlying network was gone, so the UI kept reporting "connected" indefinitely -- even after the network came back -- until the user manually disconnected and reconnected. `MyVpnService` now watches real connectivity and, if the network is lost while CONNECTED and later comes back, automatically cycles the same connection (stop, wait for teardown, reconnect) instead of leaving it stuck.
+
 ### Fixed
 - **Cloud panel**: adding a Cloudflare account with a Global API Key and no email showed a vague "Invalid API Token" error. It now explains clearly that Global API Keys require an email, with a hint shown under the field.
 - **Cloud panel**: MLM worker deploys failed intermittently with "Failed to upload MLM worker". Root cause: the worker's `compatibility_date` was computed from the device's local clock instead of a fixed date; for timezones ahead of UTC (e.g. Iran, UTC+3:30), roughly between midnight and 03:30 local time the computed date landed a day ahead of Cloudflare's UTC clock and the upload was rejected. Now pinned to a fixed, safe date, matching every other worker deployer in the app.
@@ -141,6 +144,7 @@ Optimized specifically for degraded/censored network conditions (server creation
 - انتشار عمومی سورس با مجوز GPLv3 روی گیت‌هاب، به‌همراه README دوزبانه کامل، راهنمای مشارکت، و Git LFS برای باینری‌ها/دیتای جغرافیایی.
 - **تب اتصال:** دکمه جدید «دریافت کانفیگ رایگان» بالای دکمه +. یک ویزارد چندمرحله‌ای از چند منبع عمومی گیت‌هابی کانفیگ جمع می‌کند، تعداد در دسترس را نشان می‌دهد، تعداد دلخواه کاربر را می‌گیرد، و با تست دو مرحله‌ای (فیلتر سریع شبکه + تست واقعی اتصال Xray، همان دقت «دیلی واقعی») فقط کانفیگ‌های واقعاً متصل را نگه می‌دارد. دکمه «همین تعداد کافیه» امکان توقف زودهنگام را می‌دهد. نتایج با نام رندوم `mlmvpnXXXX` (داخل خود URI هم baked می‌شود تا هنگام اشتراک‌گذاری بماند) در پوشه «کانفیگ‌های رایگان» تب Manual قرار می‌گیرند؛ کانفیگ‌های تکراری (بر اساس هویت واقعی سرور) دوباره اضافه نمی‌شوند.
 - **تب اتصال:** پرچم واقعی کشور برای هر کانفیگ. حین تست «دیلی واقعی»، کانفیگی که متصل شد و پرچمش نامشخص بود، یک‌بار (و فقط یک‌بار، بعد از آن از حافظه) از همان تونل واقعی کشور خروجی‌اش استعلام می‌شود — دیگر لازم نیست حتماً وصل شوید تا پرچم واقعی را ببینید.
+- **اتصال:** اپ حالا خودش از یک قطعی واقعی شبکه (قطع و وصل شدن وای‌فای/دیتا) در حین اتصال، خودکار ریکاوری می‌کند. قبلاً وقتی شبکه واقعی قطع می‌شد، تونل هیچ راهی برای فهمیدن این موضوع نداشت، پس رابط کاربری همچنان «متصل» نشون می‌داد — حتی بعد از برگشتن اینترنت — تا وقتی کاربر دستی قطع و وصل می‌کرد. حالا `MyVpnService` اتصال واقعی شبکه رو زیر نظر داره و اگه در حالت متصل شبکه قطع بشه و بعداً برگرده، خودکار همون اتصال رو (قطع، صبر برای پاک‌سازی کامل، وصل مجدد) از نو برقرار می‌کنه.
 
 **تغییرات:**
 - در تب گیم، دو سرور ثابت قدیمی وایرگارد امارات حذف و بوستر بازی برای اتصال کامل از موتور Aether استفاده می‌کند.

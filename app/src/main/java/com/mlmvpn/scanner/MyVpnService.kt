@@ -24,6 +24,17 @@ class MyVpnService : VpnService() {
     private var autoSwitchJob: kotlinx.coroutines.Job? = null
     private val serviceScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
 
+    // Reconnect-on-network-recovery: without this, losing the underlying network (Wi-Fi/mobile
+    // drop) while CONNECTED leaves the tunnel sitting dead -- Xray/the engine has no way to know
+    // its socket is gone, so the UI keeps reporting "connected" and stays that way even after the
+    // network comes back, until the user manually disconnects and reconnects. Tracks whether a
+    // real drop-then-recover happened while we were actually connected (not during the initial
+    // connect, and not on every capabilities tweak) and, if so, cycles the same connection.
+    private var lastConnectIntent: Intent? = null
+    private var networkWatchdogCallback: android.net.ConnectivityManager.NetworkCallback? = null
+    private var lostNetworkWhileConnected = false
+    private var reconnectJob: kotlinx.coroutines.Job? = null
+
     companion object {
         val isRunningFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
         val connectedNodeIdFlow = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
@@ -41,6 +52,55 @@ class MyVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        registerNetworkWatchdog()
+    }
+
+    private fun registerNetworkWatchdog() {
+        if (networkWatchdogCallback != null) return
+        val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return
+        val request = android.net.NetworkRequest.Builder()
+            .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onLost(network: android.net.Network) {
+                if (isRunning && connectionPhaseFlow.value == Phase.CONNECTED) {
+                    Log.w("MyVpnService", "Underlying network lost while connected -- will reconnect once it's back")
+                    lostNetworkWhileConnected = true
+                }
+            }
+            override fun onAvailable(network: android.net.Network) {
+                if (lostNetworkWhileConnected && isRunning) {
+                    lostNetworkWhileConnected = false
+                    Log.d("MyVpnService", "Network back after a drop -- reconnecting")
+                    triggerReconnect()
+                }
+            }
+        }
+        try {
+            cm.registerNetworkCallback(request, cb)
+            networkWatchdogCallback = cb
+        } catch (e: Exception) {
+            Log.w("MyVpnService", "Could not register network watchdog", e)
+        }
+    }
+
+    private fun triggerReconnect() {
+        val intentToRestore = lastConnectIntent ?: return
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = serviceScope.launch {
+            val stopIntent = Intent(this@MyVpnService, MyVpnService::class.java).apply {
+                action = "STOP"
+                putExtra("INTERNAL_RECONNECT", true)
+            }
+            startService(stopIntent)
+            // connectionPhaseFlow flips to IDLE synchronously at the top of the STOP handler,
+            // before the actual (async, behind xrayMutex) engine teardown below it even starts --
+            // it can't be used as a "teardown finished" signal. There's no such signal exposed,
+            // so use a flat delay generous enough for the slowest engine (Aether killing a native
+            // process) rather than racing a fresh connect against teardown still in flight.
+            kotlinx.coroutines.delay(3000)
+            startService(intentToRestore)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -49,6 +109,16 @@ class MyVpnService : VpnService() {
             connectedNodeId = null
             isRunning = false
             connectionPhaseFlow.value = Phase.IDLE
+            lastConnectIntent = null
+            lostNetworkWhileConnected = false
+            // Don't cancel our own reconnect job if this STOP is the one IT issued -- that would
+            // cancel the coroutine currently suspended a few lines below in triggerReconnect(),
+            // right before it restarts the connection, silently turning "network came back" into
+            // "stayed disconnected forever". Only a STOP from outside that flow (user tapping
+            // disconnect, screen-off timeout, etc.) should cancel a pending reconnect.
+            if (intent?.getBooleanExtra("INTERNAL_RECONNECT", false) != true) {
+                reconnectJob?.cancel()
+            }
             // Aether's connect can sit waiting on a gateway scan for a minute or more while
             // holding xrayMutex, so the teardown below would queue behind it. Signal it
             // here, before contending for the lock, so the button responds immediately.
@@ -87,7 +157,9 @@ class MyVpnService : VpnService() {
         isRunning = true
         connectedNodeId = intent?.getStringExtra("NODE_ID")
         connectionPhaseFlow.value = Phase.CONNECTING
-        
+        lostNetworkWhileConnected = false
+        if (intent != null) lastConnectIntent = Intent(intent)
+
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
             val powerManager = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
@@ -646,6 +718,15 @@ class MyVpnService : VpnService() {
         // next MyVpnService before the previous one's onDestroy() runs; an unconditional
         // null here would blank out the LIVE instance and leave callers holding nothing.
         if (instance === this) instance = null
+        try {
+            networkWatchdogCallback?.let {
+                (getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)
+                    ?.unregisterNetworkCallback(it)
+            }
+        } catch (e: Exception) {}
+        networkWatchdogCallback = null
+        reconnectJob?.cancel()
+        lastConnectIntent = null
         isRunning = false
         connectedNodeId = null
         isRunningFlow.value = false
