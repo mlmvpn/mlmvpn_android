@@ -8,14 +8,20 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 
 ### Added
 - Public GPLv3 source release on GitHub, with a full bilingual README, CONTRIBUTING guide, and Git LFS for native binaries/geo data.
+- **Connection tab**: new "Get free configs" button above the `+` add-node button. A multi-step wizard aggregates configs from a few public GitHub-hosted subscription sources, shows how many are available, lets the user pick a target count, then tests them in two stages — a fast TCP reachability pre-check, then a real Xray-proxied connection test (the same primitive the app's own "Real Delay" test uses) — keeping only genuinely working configs. A "this many is enough" button stops the search early and keeps whatever's been found. Results are renamed to random `mlmvpnXXXX` IDs (baked into the URI's own remark so it survives sharing) and land in a "Free Configs" folder under the Manual tab; configs the user already has (matched by real server identity, not name) are skipped and reported instead of duplicated.
+- **Connection tab**: real per-config country flags. During the "Real Delay" test, a config that connects and has no cached flag yet gets its exit country queried once through that same live tunnel (via `api.ip.sb/geoip`) and cached on the node — no full VPN connection needed just to see a config's real flag, and it's a one-time lookup afterward served from storage.
 
 ### Changed
 - **Game tab**: removed the two hardcoded legacy UAE WireGuard servers ("Server 1" — a dead 1-hour-trial WireGuard endpoint, "Server 2" — already-retired dead code). Full-tunnel game boosting now goes through the Aether engine, which self-selects a healthy endpoint across multiple protocols instead of a single fixed server.
+- **Cloud panel**: bundled BPB Worker Panel upgraded from v4.2.2 to **v5.1.1**. This upstream release changed the deployment model entirely: per-account config (UUID, Trojan password, secure path, account email/token) is now baked directly into the worker's own JS source at upload time (`EMBEDED_SETTINGS`), replacing the old Cloudflare secret-binding approach, which v5 actively rejects. Deploy, panel login (now JSON `{username,password}` instead of a plain-text password, matched against the account email), subscription fetching, and settings save were all rewritten for the new route scheme (routes are now prefixed with a `securePath` obfuscation segment). The in-app settings form was also updated to match v5's schema (a single `protocols` field instead of separate VLESS/Trojan toggles; Proxy IP/NAT64 selection moved to deploy-time only).
 
 ### Fixed
 - **Cloud panel**: adding a Cloudflare account with a Global API Key and no email showed a vague "Invalid API Token" error. It now explains clearly that Global API Keys require an email, with a hint shown under the field.
 - **Cloud panel**: MLM worker deploys failed intermittently with "Failed to upload MLM worker". Root cause: the worker's `compatibility_date` was computed from the device's local clock instead of a fixed date; for timezones ahead of UTC (e.g. Iran, UTC+3:30), roughly between midnight and 03:30 local time the computed date landed a day ahead of Cloudflare's UTC clock and the upload was rejected. Now pinned to a fixed, safe date, matching every other worker deployer in the app.
+- **Cloud panel**: BPB worker uploads failed with Cloudflare error 10021 ("No such module node:crypto") — v5.1.1 requires the `nodejs_compat` compatibility flag, which wasn't being sent.
+- **Cloud panel**: BPB-generated configs connected to nothing (empty SNI/Host, falling back to BPB's own placeholder domain `www.speedtest.net`) because the worker's `mainDomain` was left blank; it's now set to the deployed worker's actual `*.workers.dev` hostname.
 - **Navigation**: the hamburger drawer menu could get cut off on short screens, making the emergency-tier options at the bottom unreachable. Drawer content now scrolls fully.
+- **Connection tab**: the country flag shown above the Connect button came from Cloudflare's own geoIP database (the `loc` field in `cdn-cgi/trace`), which occasionally disagreed with reality (e.g. showed Canada for a US exit IP). It now uses the same `api.ip.sb/geoip` source as the per-config flags, so both agree with each other and with third-party checkers like ip.me.
 
 ---
 
@@ -117,13 +123,21 @@ Optimized specifically for degraded/censored network conditions (server creation
 نسخه‌بندی این فایل مطابق `versionName` در [`app/build.gradle`](app/build.gradle) است. برای جزئیات کامل‌تر و به‌روزتر هر نسخه، داخل خود اپ به «درباره ما → لیست تغییرات» مراجعه کنید.
 
 ### [1.2.1] — 2026-08-09
-**افزوده‌شده:** انتشار عمومی سورس با مجوز GPLv3 روی گیت‌هاب، به‌همراه README دوزبانه کامل، راهنمای مشارکت، و Git LFS برای باینری‌ها/دیتای جغرافیایی.
+**افزوده‌شده:**
+- انتشار عمومی سورس با مجوز GPLv3 روی گیت‌هاب، به‌همراه README دوزبانه کامل، راهنمای مشارکت، و Git LFS برای باینری‌ها/دیتای جغرافیایی.
+- **تب اتصال:** دکمه جدید «دریافت کانفیگ رایگان» بالای دکمه +. یک ویزارد چندمرحله‌ای از چند منبع عمومی گیت‌هابی کانفیگ جمع می‌کند، تعداد در دسترس را نشان می‌دهد، تعداد دلخواه کاربر را می‌گیرد، و با تست دو مرحله‌ای (فیلتر سریع شبکه + تست واقعی اتصال Xray، همان دقت «دیلی واقعی») فقط کانفیگ‌های واقعاً متصل را نگه می‌دارد. دکمه «همین تعداد کافیه» امکان توقف زودهنگام را می‌دهد. نتایج با نام رندوم `mlmvpnXXXX` (داخل خود URI هم baked می‌شود تا هنگام اشتراک‌گذاری بماند) در پوشه «کانفیگ‌های رایگان» تب Manual قرار می‌گیرند؛ کانفیگ‌های تکراری (بر اساس هویت واقعی سرور) دوباره اضافه نمی‌شوند.
+- **تب اتصال:** پرچم واقعی کشور برای هر کانفیگ. حین تست «دیلی واقعی»، کانفیگی که متصل شد و پرچمش نامشخص بود، یک‌بار (و فقط یک‌بار، بعد از آن از حافظه) از همان تونل واقعی کشور خروجی‌اش استعلام می‌شود — دیگر لازم نیست حتماً وصل شوید تا پرچم واقعی را ببینید.
 
-**تغییرات:** در تب گیم، دو سرور ثابت قدیمی وایرگارد امارات حذف و بوستر بازی برای اتصال کامل از موتور Aether استفاده می‌کند.
+**تغییرات:**
+- در تب گیم، دو سرور ثابت قدیمی وایرگارد امارات حذف و بوستر بازی برای اتصال کامل از موتور Aether استفاده می‌کند.
+- پنل BPB در بخش ابری از نسخه ۴٫۲٫۲ به **۵٫۱٫۱** ارتقا یافت. این نسخه مدل دیپلوی را کاملاً عوض کرده: تنظیمات هر حساب (UUID، پسورد Trojan، مسیر امن، ایمیل/توکن حساب) حالا مستقیم داخل کد ورکر جاسازی می‌شود، نه از طریق متغیرهای کلودفلر مثل قبل. دیپلوی، ورود به پنل (حالا با JSON به‌جای متن ساده)، دریافت ساب‌لینک و ذخیره تنظیمات همگی با روش جدید بازنویسی شدند؛ فرم تنظیمات هم با فیلدهای نسخه جدید هماهنگ شد.
 
 **رفع باگ:**
 - پیام مبهم هنگام افزودن اکانت کلودفلر با Global API Key بدون ایمیل، حالا واضح توضیح می‌دهد.
 - خطای «آپلود ورکر MLM ناموفق بود» به‌خاطر محاسبه اشتباه تاریخ سازگاری از ساعت گوشی رفع شد.
+- خطای آپلود ورکر BPB («No such module node:crypto») رفع شد — نسخه ۵٫۱٫۱ نیاز به فلگ سازگاری `nodejs_compat` دارد.
+- کانفیگ‌های دریافتی از BPB قطع بودند (SNI/Host خالی، بازگشت به دامنه پیش‌فرض BPB) چون `mainDomain` تنظیم نشده بود؛ حالا به آدرس واقعی ورکر تنظیم می‌شود.
 - بریدگی/عدم اسکرول منوی کشویی همبرگری در صفحه‌های کوتاه رفع شد.
+- پرچم بالای دکمه اتصال گاهی با واقعیت اختلاف داشت (چون از دیتابیس geoIP خودِ Cloudflare خوانده می‌شد)؛ حالا از همان منبع پرچم کانفیگ‌ها استفاده می‌کند و همیشه با هم و با ابزارهایی مثل ip.me هماهنگ است.
 
 برای جزئیات کامل نسخه‌های ۱٫۲٫۰ تا ۱٫۰٫۵، به بخش انگلیسی همین فایل یا صفحه «لیست تغییرات» داخل اپ مراجعه کنید (این‌ها به فارسی، به‌طور کامل، همان‌جا موجودند).

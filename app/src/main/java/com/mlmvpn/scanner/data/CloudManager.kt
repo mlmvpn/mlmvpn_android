@@ -482,29 +482,53 @@ class CloudManager private constructor(private val context: Context) {
                 return@withContext Pair(false, "Failed to read worker.js from assets: ${e.message}")
             }
 
+            // Worker name/domain must be known before building EMBEDED_SETTINGS below -- v5's own
+            // config generator (src/cores/xray/configs.ts getXrCustomConfigs) uses EMBEDED_SETTINGS's
+            // "mainDomain" as THE domain for every config's Host/SNI. Leaving it blank doesn't just
+            // omit a field: every generated config gets an empty host/sni and Xray falls back to
+            // connecting straight to whatever's in cleanIPs (BPB's own stock default,
+            // "www.speedtest.net") with no TLS SNI at all, which is a dead, non-functional config.
+            val workerName = com.mlmvpn.scanner.utils.AntiDpi.generateSafeWorkerName()
+            val mainDomain = "$workerName.$subdomain.workers.dev"
+
+            // BPB Worker Panel v5.x reads its per-account config from a runtime global named
+            // EMBEDED_SETTINGS (see src/settings/settings.ts init()) instead of Cloudflare secret
+            // bindings -- it actively THROWS if it sees env.UUID/env.TR_PASS bindings without that
+            // global also being present. Upstream's own "BPB Wizard" tool builds this by prepending
+            // an `Object.assign(globalThis, {EMBEDED_SETTINGS: {...}})` call before the bundled
+            // script; we do the same here at upload time so each deploy gets its own UUID/pass/path
+            // baked into the JS text itself.
+            val embededSettings = JSONObject().apply {
+                put("accID", account.accountId)
+                put("accEmail", account.email.lowercase())
+                put("apiToken", account.token)
+                put("vlUUID", workerUuid)
+                put("trPass", trPass)
+                put("securePath", subPath)
+                put("proxyIpMode", "proxyip")
+                put("proxyIPs", org.json.JSONArray().apply { put("bpb.yousef.isegaro.com") })
+                put("prefixes", org.json.JSONArray())
+                put("fallback", "")
+                put("dohUrl", "")
+                put("mainDomain", mainDomain)
+            }
+            workerScript = "Object.assign(globalThis,{\"EMBEDED_SETTINGS\":$embededSettings});$workerScript"
+
             val metadata = JSONObject().apply {
                 put("main_module", "worker.js")
-                put("compatibility_date", "2024-03-03")
+                // BPB v5 imports `node:crypto` (src/protocols/trojan.ts, src/api/warp.ts), which only
+                // exists under the nodejs_compat flag; Cloudflare rejects the upload otherwise with
+                // error 10021 "No such module node:crypto". Upstream's own self-redeploy route
+                // (src/api/workers.ts) always pairs this flag with a recent compatibility_date.
+                put("compatibility_date", "2024-09-23")
+                put("compatibility_flags", org.json.JSONArray().apply { put("nodejs_compat") })
+                // No UUID/TR_PASS/SUB_PATH bindings anymore -- v5's settings.ts init() throws if it
+                // sees them (see the EMBEDED_SETTINGS injection above). Only the KV binding remains.
                 val bindings = org.json.JSONArray().apply {
                     put(JSONObject().apply {
                         put("type", "kv_namespace")
                         put("name", "kv")
                         put("namespace_id", namespaceId)
-                    })
-                    put(JSONObject().apply {
-                        put("type", "secret_text")
-                        put("name", "UUID")
-                        put("text", workerUuid)
-                    })
-                    put(JSONObject().apply {
-                        put("type", "secret_text")
-                        put("name", "TR_PASS")
-                        put("text", trPass)
-                    })
-                    put(JSONObject().apply {
-                        put("type", "secret_text")
-                        put("name", "SUB_PATH")
-                        put("text", subPath)
                     })
                 }
                 put("bindings", bindings)
@@ -516,7 +540,6 @@ class CloudManager private constructor(private val context: Context) {
                 .addFormDataPart("worker.js", "worker.js", workerScript.toRequestBody("application/javascript+module".toMediaTypeOrNull()))
                 .build()
 
-            val workerName = com.mlmvpn.scanner.utils.AntiDpi.generateSafeWorkerName()
             val uploadReq = Request.Builder()
                 .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/scripts/$workerName")
                 .headers(authHeaders)
@@ -528,15 +551,11 @@ class CloudManager private constructor(private val context: Context) {
                 if (!response.isSuccessful) return@withContext Pair(false, "Failed to upload worker: $body")
             }
 
-            // 5. Proxy settings are intentionally NOT pre-seeded here anymore. BPB Worker Panel
-            // v5.1.1 changed the KvSettings schema substantially (e.g. proxyIPs/VLConfigs/TRConfigs
-            // from the old v4.2.2 format are gone; replaced by cleanIPs/protocols/fragmentMode/etc,
-            // dozens of new fields). Hand-rolling a settings blob here means it silently drifts out
-            // of sync every time upstream BPB changes its schema. The worker's own getDataset()
-            // already does the right thing on first load: if no `proxySettings` key exists in KV, it
-            // writes the panel's own in-code defaults (see src/settings/settings.ts upstream), which
-            // are correct for whatever worker.js version is actually bundled. So we just leave the KV
-            // key unset and let the worker initialize itself on its first request.
+            // 5. Proxy settings are intentionally NOT pre-seeded here. BPB v5's KvSettings schema is
+            // dozens of fields and changes across releases; the worker's own getDataset() already
+            // writes correct in-code defaults to KV on its first request when no `proxySettings` key
+            // exists yet, so we just let it self-initialize instead of hand-maintaining a schema copy
+            // here that would silently drift out of sync on every upstream update.
 
             // 6. Enable Subdomain
             onProgress(80, "Enabling subdomain routing...")
@@ -585,8 +604,10 @@ class CloudManager private constructor(private val context: Context) {
                 return@withContext Pair(false, emptyList())
             }
 
-            // Fetch subscription data using the stored workerUrl, subPath, and trPass
-            val subUrl = "${account.workerUrl}/sub/raw/${account.subPath}?app=xray"
+            // Fetch subscription data using the stored workerUrl, subPath, and trPass.
+            // BPB v5: subPath now doubles as the route-obfuscation "securePath" prefix -- the URL
+            // shape moved from /sub/raw/{subPath}?app=xray to /{subPath}/sub/raw?app=xray.
+            val subUrl = "${account.workerUrl}/${account.subPath}/sub/raw?app=xray"
             val fetchReq = Request.Builder()
                 .url(subUrl)
                 .get().build()
@@ -611,21 +632,29 @@ class CloudManager private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * BPB v5's /login/authenticate expects a JSON body `{"username","password"}` (not plain text
+     * like v4.2.2) and rejects any username that doesn't match the accEmail baked into
+     * EMBEDED_SETTINGS at deploy time (see the addAccount-adjacent worker upload code) -- so the
+     * username here MUST be account.email.lowercase(), not a guessed literal.
+     */
+    private fun loginBody(username: String, password: String): okhttp3.RequestBody =
+        JSONObject().apply { put("username", username); put("password", password) }
+            .toString().toRequestBody("application/json".toMediaTypeOrNull())
+
     private fun ensureLogin(account: CloudAccount): Pair<Boolean, String> {
-        val passwordsToTry = listOf(
-            "Admin123!",
-            "{\"username\":\"admin\",\"password\":\"admin\"}",
-            "admin"
-        )
-        
+        // securePath (== the stored subPath) prefixes every v5 route, including login.
+        val loginUrl = "${account.workerUrl}/${account.subPath}/login/authenticate"
+        val username = account.email.lowercase()
+        val passwordsToTry = listOf("Admin123!", "admin")
+
         try {
             for (pass in passwordsToTry) {
-                val loginUrl = "${account.workerUrl}/login/authenticate"
                 val loginReq = Request.Builder()
                     .url(loginUrl)
-                    .post(pass.toRequestBody("text/plain".toMediaTypeOrNull()))
+                    .post(loginBody(username, pass))
                     .build()
-                
+
                 val loginRes = client.newCall(loginReq).execute()
                 if (loginRes.isSuccessful) {
                     val cookies = loginRes.headers("Set-Cookie")
@@ -647,16 +676,16 @@ class CloudManager private constructor(private val context: Context) {
             }
             return Pair(false, "Error during login: ${e.message}")
         }
-        
+
         // If all failed, forcefully reset password via Cloudflare API
         forceResetPasswordViaCloudflareAPI(account)
-        
+
         // Try login one last time with Admin123! Retry for up to 30 seconds to allow KV edge propagation
         for (i in 1..10) {
             Log.d("CloudManager", "ensureLogin retry $i: Attempting login with password: Admin123!")
             val finalLoginReq = Request.Builder()
-                .url("${account.workerUrl}/login/authenticate")
-                .post("Admin123!".toRequestBody("text/plain".toMediaTypeOrNull()))
+                .url(loginUrl)
+                .post(loginBody(username, "Admin123!"))
                 .build()
             val finalLoginRes = client.newCall(finalLoginReq).execute()
             if (finalLoginRes.isSuccessful) {
@@ -743,7 +772,7 @@ class CloudManager private constructor(private val context: Context) {
             val sessionCookie = loginResult.second
 
             // Step 2: Get settings
-            val settingsUrl = "${account.workerUrl}/panel/settings"
+            val settingsUrl = "${account.workerUrl}/${account.subPath}/panel/settings"
             val settingsReqBuilder = Request.Builder().url(settingsUrl).get()
             if (sessionCookie.isNotEmpty()) {
                 settingsReqBuilder.header("Cookie", sessionCookie)
@@ -780,7 +809,7 @@ class CloudManager private constructor(private val context: Context) {
             val sessionCookie = loginResult.second
 
             // Step 2: Put settings to /panel/update-settings
-            val settingsUrl = "${account.workerUrl}/panel/update-settings"
+            val settingsUrl = "${account.workerUrl}/${account.subPath}/panel/update-settings"
             val settingsReqBuilder = Request.Builder()
                 .url(settingsUrl)
                 .put(settingsJson.toString().toRequestBody("application/json".toMediaTypeOrNull()))

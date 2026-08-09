@@ -244,6 +244,26 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "رفع بریدگی منوی کشویی همبرگری در صفحه‌های کوتاه",
                             "روی برخی گوشی‌ها گزینه‌های اضطراری در پایین منوی کناری قابل مشاهده یا لمس نبودند. محتوای منو حالا در صفحه‌های کوتاه هم به‌طور کامل قابل اسکرول است.",
                             Icons.Default.Menu
+                        ),
+                        ChangelogItem(
+                            "پنل BPB به نسخه 5.1.1 آپدیت شد",
+                            "پنل BPB داخل بخش ابری از نسخهٔ قدیمی 4.2.2 به 5.1.1 ارتقا یافت. چون این نسخه مدل دیپلوی را کاملاً عوض کرده (تنظیمات هر حساب باید داخل خودِ کد ورکر جاسازی شود، نه از طریق متغیرهای کلودفلر مثل قبل)، دیپلوی، ورود به پنل، دریافت ساب‌لینک و ذخیرهٔ تنظیمات همگی با روش جدید بازنویسی شدند. فرم تنظیمات پنل هم با فیلدهای نسخهٔ جدید هماهنگ شد.",
+                            Icons.Default.CloudSync
+                        ),
+                        ChangelogItem(
+                            "دکمهٔ جدید «دریافت کانفیگ رایگان» در بخش اتصال",
+                            "بالای دکمهٔ + یک ویزارد چندمرحله‌ای اضافه شد: اول تعداد کانفیگ‌های در دسترس را از چند منبع عمومی نشان می‌دهد، بعد شما تعداد دلخواه را انتخاب می‌کنید، سیستم کانفیگ‌ها را با یک تست دو مرحله‌ای (فیلتر سریع شبکه + تست واقعی اتصال با Xray، همان دقتی که «دیلی واقعی» دارد) بررسی می‌کند و فقط کانفیگ‌های واقعاً متصل را برمی‌گرداند. یک دکمهٔ «همین تعداد کافیه» هم هست که هر لحظه می‌توانید جستجو را متوقف و به همان‌ها بسنده کنید. کانفیگ‌ها با نام‌های رندوم mlmvpnXXXX داخل پوشهٔ «کانفیگ‌های رایگان» در تب Manual قرار می‌گیرند و اگر کانفیگی را از قبل داشته باشید، دوباره اضافه نمی‌شود (به شما می‌گوید چند تا تکراری بود).",
+                            Icons.Default.Bolt
+                        ),
+                        ChangelogItem(
+                            "پرچم واقعی کشور روی هر کانفیگ، بدون نیاز به اتصال کامل",
+                            "حین تست «دیلی واقعی»، اگر کانفیگی متصل شد و پرچمش هنوز مشخص نبود، یک بار (فقط همان یک بار، بعداً از حافظه خوانده می‌شود) از همان تونل واقعی کشور خروجی واقعی سرور استعلام و روی کارت کانفیگ نمایش داده می‌شود؛ دیگر لازم نیست حتماً به کانفیگ وصل شوید تا پرچمش را ببینید.",
+                            Icons.Default.Flag
+                        ),
+                        ChangelogItem(
+                            "رفع ناهماهنگی پرچم بالای دکمه اتصال",
+                            "پرچم بالای دکمه اتصال از دیتابیس جغرافیایی خودِ Cloudflare (فیلد loc در cdn-cgi/trace) خوانده می‌شد که گاهی با واقعیت فرق داشت (مثلاً یک آی‌پی آمریکایی را کانادا نشان می‌داد). حالا از همان منبع پرچم کانفیگ‌ها استفاده می‌کند، پس همیشه با هم و با سایت‌هایی مثل ip.me هماهنگ است.",
+                            Icons.Default.Sync
                         )
                     )
                 ),
@@ -602,6 +622,26 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed the hamburger drawer menu getting cut off on short screens",
                             "On some phones the emergency options at the bottom of the side menu were unreachable. The drawer content now scrolls fully on short screens.",
                             Icons.Default.Menu
+                        ),
+                        ChangelogItem(
+                            "Updated the bundled BPB panel to v5.1.1",
+                            "The BPB panel in the Cloud section was upgraded from the old v4.2.2 to v5.1.1. Since that version changed the deployment model entirely (per-account settings are now baked directly into the worker's own code instead of Cloudflare env variables like before), deploy, panel login, subscription fetching, and settings save were all rewritten for the new approach. The settings form was also updated to match the new version's fields.",
+                            Icons.Default.CloudSync
+                        ),
+                        ChangelogItem(
+                            "New \"Get free configs\" button in the Connection tab",
+                            "A multi-step wizard above the + button: it first shows how many configs are available across a few public sources, you pick how many you want, and the system tests them in two stages (a fast reachability filter, then a real Xray-proxied connection test -- the same accuracy as \"Real Delay\") and only keeps genuinely working ones. A \"this many is enough\" button lets you stop the search early and keep what's found so far. Configs land under a \"Free Configs\" folder in the Manual tab with random mlmvpnXXXX names, and anything you already have is skipped instead of duplicated (it tells you how many were already yours).",
+                            Icons.Default.Bolt
+                        ),
+                        ChangelogItem(
+                            "Real per-config country flags, no full connection required",
+                            "During the \"Real Delay\" test, if a config connects and its flag isn't known yet, the app queries the config's real exit country through that same live tunnel (once -- cached afterward, no repeat lookups) and shows it on the card. No need to fully connect anymore just to see a config's real flag.",
+                            Icons.Default.Flag
+                        ),
+                        ChangelogItem(
+                            "Fixed a mismatched flag above the Connect button",
+                            "The flag above the Connect button came from Cloudflare's own geoIP database (the `loc` field in cdn-cgi/trace), which occasionally disagreed with reality (e.g. showing Canada for a US exit IP). It now uses the same source as the per-config flags, so both always agree with each other and with sites like ip.me.",
+                            Icons.Default.Sync
                         )
                     )
                 ),

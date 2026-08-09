@@ -35,13 +35,20 @@ fun BpbSettingsModal(
     var allowLANConnection by remember { mutableStateOf(initialSettings?.optBoolean("allowLANConnection", false) ?: false) }
     var enableIPv6 by remember { mutableStateOf(initialSettings?.optBoolean("enableIPv6", false) ?: false) }
 
-    var vlConfigs by remember { mutableStateOf(initialSettings?.optBoolean("VLConfigs", true) ?: true) }
-    var trConfigs by remember { mutableStateOf(initialSettings?.optBoolean("TRConfigs", true) ?: true) }
+    // BPB Worker Panel v5 replaced the two VLConfigs/TRConfigs booleans with a single comma-joined
+    // "protocols" string (e.g. "vless,trojan"); v4.2.2's separate booleans are read as a fallback
+    // only for settings fetched from an older deployed worker.
+    val initialProtocols = initialSettings?.optString("protocols", "")
+        ?.takeIf { it.isNotEmpty() }
+        ?.split(",")
+        ?.toSet()
+    var vlConfigs by remember { mutableStateOf(initialProtocols?.contains("vless") ?: (initialSettings?.optBoolean("VLConfigs", true) ?: true)) }
+    var trConfigs by remember { mutableStateOf(initialProtocols?.contains("trojan") ?: (initialSettings?.optBoolean("TRConfigs", true) ?: true)) }
 
     val allTlsPorts = listOf("443", "8443", "2053", "2083", "2087", "2096")
     val allNonTlsPorts = listOf("80", "8080", "8880", "2052", "2082", "2086", "2095")
 
-    // Worker v4.2.2 stores ports as a single integer array (e.g. [443, 8443, 80])
+    // Ports are still a single combined integer array in v5's KvSettings (e.g. [443, 8443, 80]).
     val defaultPorts = initialSettings?.optJSONArray("ports")?.let { arr ->
         List(arr.length()) { arr.optInt(it, 0).toString() }
     }?.toSet()
@@ -49,13 +56,7 @@ fun BpbSettingsModal(
     var selectedTlsPorts by remember { mutableStateOf(defaultPorts?.intersect(allTlsPorts.toSet()) ?: setOf("443")) }
     var selectedNonTlsPorts by remember { mutableStateOf(defaultPorts?.intersect(allNonTlsPorts.toSet()) ?: emptySet()) }
 
-    var proxyIPMode by remember { mutableStateOf(initialSettings?.optString("proxyIPMode", "") ?: "proxyip") }
-    var selectedProxyIp by remember { mutableStateOf(initialSettings?.optJSONArray("proxyIPs")?.let { if (it.length() > 0) it.optString(0) else "" } ?: (proxyIpsList.firstOrNull()?.first ?: "")) }
-    var selectedPrefix by remember { mutableStateOf(initialSettings?.optJSONArray("prefixes")?.let { if (it.length() > 0) it.optString(0) else "" } ?: (nat64Prefixes.firstOrNull()?.first ?: "")) }
     var cleanIp by remember { mutableStateOf(initialSettings?.optJSONArray("cleanIPs")?.let { if (it.length() > 0) it.optString(0) else "" } ?: "") }
-
-    var proxyIpExpanded by remember { mutableStateOf(false) }
-    var prefixExpanded by remember { mutableStateOf(false) }
 
     val primaryColor = Color(0xFF8AB4F8)
     val switchColors = SwitchDefaults.colors(
@@ -151,122 +152,39 @@ fun BpbSettingsModal(
 
                     Divider(color = Color.DarkGray)
 
-                    // Proxy IP Mode
-                    SectionTitle(stringResource(R.string.bpb_proxy_ip_title))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { proxyIPMode = "proxyip" }) {
-                            RadioButton(selected = proxyIPMode == "proxyip", onClick = { proxyIPMode = "proxyip" }, colors = RadioButtonDefaults.colors(selectedColor = primaryColor, unselectedColor = Color.Gray))
-                            Text("Proxy IP", color = Color.White, fontSize = 14.sp)
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { proxyIPMode = "prefix" }) {
-                            RadioButton(selected = proxyIPMode == "prefix", onClick = { proxyIPMode = "prefix" }, colors = RadioButtonDefaults.colors(selectedColor = primaryColor, unselectedColor = Color.Gray))
-                            Text("NAT64", color = Color.White, fontSize = 14.sp)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    if (proxyIPMode == "proxyip") {
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            OutlinedTextField(
-                                value = selectedProxyIp,
-                                onValueChange = { selectedProxyIp = it },
-                                label = { Text(stringResource(R.string.bpb_proxy_ips_domains)) },
-                                trailingIcon = {
-                                    IconButton(onClick = { proxyIpExpanded = true }) {
-                                        Icon(if (proxyIpExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.bpb_select_ip))
-                                    }
-                                },
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    unfocusedTextColor = Color.White, 
-                                    focusedTextColor = Color.White,
-                                    focusedBorderColor = primaryColor,
-                                    focusedLabelColor = primaryColor,
-                                    cursorColor = primaryColor
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            DropdownMenu(
-                                expanded = proxyIpExpanded,
-                                onDismissRequest = { proxyIpExpanded = false },
-                                modifier = Modifier.fillMaxWidth(0.9f)
-                            ) {
-                                proxyIpsList.forEach { (ip, name) ->
-                                    DropdownMenuItem(
-                                        text = { Column { Text(ip, fontWeight = FontWeight.Bold); Text(name, fontSize = 10.sp, color = Color.Gray) } },
-                                        onClick = {
-                                            selectedProxyIp = ip
-                                            proxyIpExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            OutlinedTextField(
-                                value = selectedPrefix,
-                                onValueChange = { selectedPrefix = it },
-                                label = { Text(stringResource(R.string.bpb_nat64_prefixes)) },
-                                trailingIcon = {
-                                    IconButton(onClick = { prefixExpanded = true }) {
-                                        Icon(if (prefixExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.bpb_select_prefix))
-                                    }
-                                },
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    unfocusedTextColor = Color.White, 
-                                    focusedTextColor = Color.White,
-                                    focusedBorderColor = primaryColor,
-                                    focusedLabelColor = primaryColor,
-                                    cursorColor = primaryColor
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            DropdownMenu(
-                                expanded = prefixExpanded,
-                                onDismissRequest = { prefixExpanded = false },
-                                modifier = Modifier.fillMaxWidth(0.9f)
-                            ) {
-                                nat64Prefixes.forEach { (prefix, name) ->
-                                    DropdownMenuItem(
-                                        text = { Column { Text(prefix, fontWeight = FontWeight.Bold); Text(name, fontSize = 10.sp, color = Color.Gray) } },
-                                        onClick = {
-                                            selectedPrefix = prefix
-                                            prefixExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    // Proxy IP / NAT64 prefix are no longer part of the editable per-request
+                    // KvSettings in BPB v5 -- they live in EMBEDED_SETTINGS, baked into the worker
+                    // at deploy time (see CloudManager.addAccount-adjacent deploy code), and can only
+                    // be changed by redeploying. Nothing to show here anymore.
                 }
 
                 // Confirm Button
                 Button(
                     onClick = {
-                        val json = JSONObject()
+                        // BPB v5's PanelSettings has dozens of fields we don't expose UI for
+                        // (remoteDNS, logLevel, fragmentMode, ECH, warp*, block*, ...); server-side
+                        // validation crashes if any of them are missing. So we start from the
+                        // worker's own current settings (already complete -- it's the exact object
+                        // the GET /panel/settings endpoint returned) and only overwrite the fields
+                        // this screen actually edits, instead of building a partial object by hand.
+                        val json = initialSettings?.let { JSONObject(it.toString()) } ?: JSONObject()
+
                         json.put("allowLANConnection", allowLANConnection)
                         json.put("enableIPv6", enableIPv6)
-                        json.put("VLConfigs", vlConfigs)
-                        json.put("TRConfigs", trConfigs)
-                        
-                        // Worker v4.2.2 expects a single combined integer array "ports"
+
+                        // v5 uses a single comma-joined "protocols" string instead of the old
+                        // VLConfigs/TRConfigs booleans.
+                        val protocols = listOfNotNull(
+                            "vless".takeIf { vlConfigs },
+                            "trojan".takeIf { trConfigs }
+                        ).joinToString(",")
+                        json.put("protocols", protocols)
+
                         val portsArray = JSONArray()
                         selectedTlsPorts.forEach { portsArray.put(it.toInt()) }
                         selectedNonTlsPorts.forEach { portsArray.put(it.toInt()) }
                         json.put("ports", portsArray)
 
-                        json.put("proxyIPMode", proxyIPMode)
-                        if (proxyIPMode == "proxyip") {
-                            val arr = JSONArray()
-                            if (selectedProxyIp.isNotBlank()) arr.put(selectedProxyIp)
-                            json.put("proxyIPs", arr)
-                        } else {
-                            val arr = JSONArray()
-                            if (selectedPrefix.isNotBlank()) arr.put(selectedPrefix)
-                            json.put("prefixes", arr)
-                        }
-                        
                         val cleanArr = JSONArray()
                         if (cleanIp.isNotBlank()) cleanArr.put(cleanIp)
                         json.put("cleanIPs", cleanArr)

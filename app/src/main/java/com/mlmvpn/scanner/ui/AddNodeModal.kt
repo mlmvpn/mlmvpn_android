@@ -46,7 +46,7 @@ import java.net.URLEncoder
 import java.util.UUID
 
 enum class AddNodeFormType {
-    NONE, VLESS, VMESS, TROJAN, SHADOWSOCKS, SOCKS, HTTP, DEFAULT_SNI, SUB_LINK
+    NONE, VLESS, VMESS, TROJAN, SHADOWSOCKS, SOCKS, HTTP, DEFAULT_SNI, SUB_LINK, FREE_CONFIG
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -183,6 +183,10 @@ fun AddNodeModal(
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             item {
+                                FreeConfigLauncherButton { currentForm = AddNodeFormType.FREE_CONFIG }
+                                Spacer(modifier = Modifier.height(16.dp))
+                            }
+                            item {
                                 Text("Quick Add", color = TextMuted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 4.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                                     AddOptionCard(Modifier.weight(1f), Icons.Default.QrCodeScanner, stringResource(R.string.nodes_add_qrcode)) {
@@ -269,6 +273,15 @@ fun AddNodeModal(
                                 onDismiss()
                             }
                         )
+                    } else if (form == AddNodeFormType.FREE_CONFIG) {
+                        FreeConfigWizard(
+                            onImport = { nodes ->
+                                onNodesAdded(nodes)
+                                Toast.makeText(context, "${nodes.size} کانفیگ رایگان به بخش اتصال منتقل شد", Toast.LENGTH_SHORT).show()
+                                onDismiss()
+                            },
+                            onClose = { currentForm = AddNodeFormType.NONE }
+                        )
                     } else {
                         // Manual Entry Form
                         ManualEntryForm(
@@ -316,6 +329,7 @@ fun getTitleForForm(form: AddNodeFormType): String {
         AddNodeFormType.HTTP -> stringResource(R.string.nodes_add_manual_http)
         AddNodeFormType.DEFAULT_SNI -> stringResource(R.string.add_node_default_sni)
         AddNodeFormType.SUB_LINK -> "افزودن لینک سابسکریپشن"
+        AddNodeFormType.FREE_CONFIG -> "دریافت کانفیگ رایگان"
         else -> ""
     }
 }

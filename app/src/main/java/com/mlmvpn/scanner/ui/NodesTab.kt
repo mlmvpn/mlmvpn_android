@@ -250,35 +250,24 @@ fun NodesTab() {
                             .proxy(proxy)
                             .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
                             .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-                            .dns(object : okhttp3.Dns {
-                                override fun lookup(hostname: String): List<java.net.InetAddress> {
-                                    if (hostname == "cloudflare.com") {
-                                        val v4 = java.net.InetAddress.getByName("1.1.1.1")
-                                        val v6 = java.net.InetAddress.getByName("2606:4700:4700::1111")
-                                        return if (attempts % 2 == 0) listOf(v4, v6) else listOf(v6, v4)
-                                    }
-                                    return okhttp3.Dns.SYSTEM.lookup(hostname)
-                                }
-                            })
                             .build()
-                        val request = okhttp3.Request.Builder().url("https://cloudflare.com/cdn-cgi/trace").build()
+                        // Was Cloudflare's /cdn-cgi/trace `loc=` field -- that's Cloudflare's OWN
+                        // geoIP database for the tunnel's exit IP, which disagreed with reality for
+                        // some exit IPs (reported: showed Canada for an IP that ip.me/every other
+                        // geoIP source calls the US). Switched to the same api.ip.sb/geoip lookup
+                        // CountryLookup.kt (per-node flags) already uses, so both flags in the app
+                        // -- this one and the per-node one in the node list -- always agree with
+                        // each other and with third-party checkers like ip.me.
+                        val request = okhttp3.Request.Builder().url("https://api.ip.sb/geoip").build()
                         val response = client.newCall(request).execute()
                         if (response.isSuccessful) {
                             val bodyText = response.body?.string() ?: ""
-                            // Diagnostic: log the tunnel EXIT as Cloudflare sees it. For a leak check,
-                            // ip= must be the server's exit IP (not your real ISP IP) and loc= the
-                            // server's country. Fetched THROUGH the local proxy, so it reflects the tunnel.
-                            val exitIp = bodyText.split("\n").find { it.startsWith("ip=") }?.substringAfter("ip=")?.trim()
-                            val exitColo = bodyText.split("\n").find { it.startsWith("colo=") }?.substringAfter("colo=")?.trim()
-                            val exitLoc = bodyText.split("\n").find { it.startsWith("loc=") }?.substringAfter("loc=")?.trim()
-                            android.util.Log.d("ConnCheck", "tunnel exit → ip=$exitIp loc=$exitLoc colo=$exitColo")
-                            val locLine = bodyText.split("\n").find { it.startsWith("loc=") }
-                            if (locLine != null) {
-                                val country = locLine.substringAfter("loc=").trim()
-                                if (country.isNotEmpty() && country != "XX") {
-                                    activeRealCountry = country
-                                    success = true
-                                }
+                            val json = org.json.JSONObject(bodyText)
+                            val country = json.optString("country_code", "")
+                            android.util.Log.d("ConnCheck", "tunnel exit → ip=${json.optString("ip")} country=$country")
+                            if (country.isNotEmpty() && country != "XX") {
+                                activeRealCountry = country.uppercase()
+                                success = true
                             }
                         }
                     } catch (e: Exception) {
@@ -660,11 +649,20 @@ fun NodesTab() {
                             } catch (e: Exception) {}
 
                             val measureSemaphore = kotlinx.coroutines.sync.Semaphore(8) // Cloudflare/DPI might block if >3 concurrent handshakes
+                            // Country lookup is much heavier (spins up its own CoreController + SOCKS
+                            // proxy, see CountryLookup.kt) than the lightweight measureOutboundDelay
+                            // ping above, so it gets its own small concurrency cap and runs as a
+                            // separate fire-and-forget coroutine per node -- NOT inside `deferreds`,
+                            // so it never blocks the delay test's own completion/progress. It only
+                            // ever runs once per node: the result is cached on countryCode, and every
+                            // later delay test for that node skips this block entirely.
+                            val countryLookupSemaphore = kotlinx.coroutines.sync.Semaphore(3)
 
                             val deferreds = validConfigs.mapIndexed { i, config ->
                                 async(kotlinx.coroutines.Dispatchers.IO) {
                                     measureSemaphore.acquire()
                                     var delayStr = "Timeout"
+                                    var succeeded = false
                                     try {
                                         val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
                                         val delayMs = kotlinx.coroutines.withTimeoutOrNull(10000L) {
@@ -672,6 +670,7 @@ fun NodesTab() {
                                         } ?: 0L
                                         if (delayMs > 0) {
                                             delayStr = "${delayMs}ms"
+                                            succeeded = true
                                         }
                                     } catch (e: kotlinx.coroutines.CancellationException) {
                                         throw e
@@ -687,6 +686,37 @@ fun NodesTab() {
                                         currentList[originalIndex] = currentList[originalIndex].copy(delay = delayStr)
                                         nodes = currentList
                                         delayProgress++
+                                    }
+
+                                    if (succeeded && nodes.getOrNull(originalIndex)?.countryCode == null) {
+                                        // Launched on the composable's own scope, not this async's --
+                                        // structured concurrency would otherwise make deferreds.awaitAll()
+                                        // below wait for every country lookup too, defeating the point.
+                                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                            countryLookupSemaphore.acquire()
+                                            try {
+                                                val localPort = 21000 + (originalIndex % 900)
+                                                val nodeUriSnapshot = nodes.getOrNull(originalIndex)?.uri ?: return@launch
+                                                val country = com.mlmvpn.scanner.utils.CountryLookup.resolveCountry(context, nodeUriSnapshot, localPort)
+                                                if (country != null) {
+                                                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                        val idx = nodes.indexOfFirst { it.uri == nodeUriSnapshot }
+                                                        if (idx >= 0) {
+                                                            val currentList = nodes.toMutableList()
+                                                            currentList[idx] = currentList[idx].copy(countryCode = country)
+                                                            nodes = currentList
+                                                            nodeManager.nodes.clear()
+                                                            nodeManager.nodes.addAll(nodes)
+                                                            nodeManager.saveNodes()
+                                                        }
+                                                    }
+                                                }
+                                            } catch (e: Exception) {
+                                                android.util.Log.d("BatchTest", "Country lookup failed: ${e.message}")
+                                            } finally {
+                                                countryLookupSemaphore.release()
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -2133,15 +2163,19 @@ fun NodeCard(
                             }
                         } else {
                             val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(node.uri)
-                            val badgeText = if (config?.address == "127.0.0.1" && node.engineType != "NHN") "SNI" else when (node.engineType) {
-                                "EDG" -> "EDG"
-                                "NHN" -> "NHN"
-                                "MLM" -> "MLM"
+                            val isFreeConfig = node.engineType == "Manual" &&
+                                node.groupTitle == com.mlmvpn.scanner.engines.freeconfig.FreeConfigEngine.GROUP_NAME
+                            val badgeText = if (config?.address == "127.0.0.1" && node.engineType != "NHN") "SNI" else when {
+                                isFreeConfig -> "رایگان"
+                                node.engineType == "EDG" -> "EDG"
+                                node.engineType == "NHN" -> "NHN"
+                                node.engineType == "MLM" -> "MLM"
                                 else -> "BPB"
                             }
-                            val badgeColor = if (config?.address == "127.0.0.1" && node.engineType != "NHN") Primary else when (node.engineType) {
-                                "NHN" -> GreenOk
-                                "MLM" -> Color(0xFFAB47BC)
+                            val badgeColor = if (config?.address == "127.0.0.1" && node.engineType != "NHN") Primary else when {
+                                isFreeConfig -> Color(0xFF7C3AED)
+                                node.engineType == "NHN" -> GreenOk
+                                node.engineType == "MLM" -> Color(0xFFAB47BC)
                                 else -> Primary
                             }
                             Box(modifier = Modifier.background(badgeColor.copy(alpha = 0.15f), RoundedCornerShape(6.dp)).border(1.dp, badgeColor.copy(alpha=0.3f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) {
