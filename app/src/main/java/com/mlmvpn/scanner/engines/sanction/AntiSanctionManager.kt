@@ -137,12 +137,6 @@ object AntiSanctionManager {
         val config = VpnConfig.parseUri(vless) ?: return null
         val domains = routingDomains(context)
         if (domains.isEmpty()) return null
-        // Temporary diagnostic: a live device trace showed some sanctioned domains (e.g.
-        // microsoft.com) correctly routing to proxy while another (flaticon.com) did not, with
-        // no visible structural difference in how they were dispatched -- logging the exact list
-        // actually being used settles whether the domain is even present as expected, instead of
-        // guessing further from routing-decision logs alone. Remove once root-caused.
-        android.util.Log.d("AntiSanction", "buildConfig: sanctionedDomains (${domains.size}) = $domains")
         return XrayJsonGenerator.generateAntiSanctionConfig(
             config = config,
             localPort = localPort,
@@ -171,7 +165,7 @@ object AntiSanctionManager {
         }
         // Geo-block: TLS ok but HTTP 403/451
         if (https.first == 403 || https.first == 451) {
-            return@withContext Report(domain, State.SANCTIONED, "تحریم — با روشن کردن این بخش از کلادفلر باز می‌شود ✅")
+            return@withContext Report(domain, State.SANCTIONED, "تحریم — دکمه «افزودن» را بزنید تا از کلادفلر باز شود ✅")
         }
         // TCP ok but TLS reset → SNI filtering
         if (tcp.first && https.first == null && https.second == "reset") {

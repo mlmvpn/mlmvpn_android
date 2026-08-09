@@ -366,6 +366,19 @@ private fun DomainCheckerCard(onAdded: () -> Unit) {
                     Column {
                         Text(r.domain, color = color, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         Text(r.note, color = Muted, fontSize = 12.sp)
+                        // "استعلام" only classifies the domain -- it does NOT add it to the
+                        // routing list on its own. Without this, users read the "will open by
+                        // turning this on" message, turn the feature on, and are confused when
+                        // the site still doesn't open because they never pressed "افزودن".
+                        if (r.state == AntiSanctionManager.State.SANCTIONED &&
+                            !AntiSanctionManager.getDomains(context).contains(r.domain)
+                        ) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "⚠️ این دامنه هنوز به لیست اضافه نشده — فقط استعلام گرفتید. برای دور زدن واقعی تحریم، حتماً دکمه «افزودن» را هم بزنید.",
+                                color = Red, fontSize = 11.sp, fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }

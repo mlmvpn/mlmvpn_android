@@ -259,12 +259,7 @@ object XrayJsonGenerator {
         mtu: Int = 1280
     ): String {
         val json = JSONObject()
-        // "debug" (not "warning") specifically for this config: the last two rounds of fixes
-        // showed *some* fakedns-resolved connections correctly routing to "proxy" while others
-        // to the exact same domain kept going "direct" for reasons not visible at "warning"
-        // level (which domain each fake IP mapped to and which rule matched isn't logged there).
-        // Revert to "warning" once this is root-caused -- debug logging is noisy.
-        json.put("log", JSONObject().put("loglevel", "debug"))
+        json.put("log", JSONObject().put("loglevel", "warning"))
 
         // Inbounds (tun injected later by MyVpnService, with its own sniffing that already
         // includes "fakedns" -- see the DNS section below for why routing does NOT rely on TLS

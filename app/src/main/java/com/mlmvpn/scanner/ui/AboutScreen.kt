@@ -271,6 +271,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Storage
                         ),
                         ChangelogItem(
+                            "شفاف‌سازی دکمه «استعلام» در DNS ضد تحریم شخصی",
+                            "دکمه «استعلام» فقط دامنه را دسته‌بندی می‌کند و هیچ‌وقت خودش دامنه را به لیست مسیریابی اضافه نمی‌کرد، ولی پیام «تحریم» طوری خوانده می‌شد انگار همین که قابلیت را روشن کنید کافی است. کاربر استعلام می‌گرفت، «تحریم» می‌دید، قابلیت را روشن می‌کرد، و گیج می‌شد چرا سایت بازهم باز نمی‌شود — چون دکمه‌ی جداگانه‌ی «افزودن» را نزده بود. حالا پیام صریحاً می‌گوید «افزودن» را بزنید، و اگر دامنه‌ای تحریمی باشد ولی هنوز در لیست نباشد، یک هشدار قرمز واضح این را نشان می‌دهد.",
+                            Icons.Default.Warning
+                        ),
+                        ChangelogItem(
                             "رفع باز نشدن سایت‌های تحریمی (خطای ۴۰۳) در «DNS ضد تحریم شخصی»",
                             "سایت‌های تحریمی که خودِ ابزار استعلام همین بخش هم «تحریم» تشخیص می‌داد، بازهم باز نمی‌شدند و ۴۰۳ می‌دادند — دقیقاً انگار قابلیت روشن نبود. علت (با گرفتن لاگ زنده از گوشی واقعی پیدا شد): مسیریابی دامنه‌ها کاملاً به تشخیص SNI از TLS ClientHello وابسته بود که برای سایت‌های دارای Encrypted Client Hello (ECH، این روزها پیش‌فرض کروم) کاملاً از کار می‌افتد چون SNI رمزنگاری‌شده قابل خواندن نیست؛ نتیجه این‌که هر اتصال تحریمی به قانون مستقیم می‌افتاد. یک استخر DNS جعلی (fakedns) اضافه شد، ولی بررسی دوم با لاگ زنده دیگری نشان داد resolve به آی‌پی جعلی خودش درست کار می‌کند اما برگرداندن آن آی‌پی به نام دامنه در لحظه مسیریابی روی این نسخه از هسته Xray قابل‌اعتماد نبود. الان مسیریابی ترافیک تحریمی مستقیماً روی بازه آی‌پی استخر جعلی (198.18.0.0/15) تطبیق داده می‌شود، بدون نیاز به آن مرحله برگردان دامنه.",
                             Icons.Default.Dns
@@ -702,6 +707,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed MLM/Nahan deploys getting permanently stuck on a D1 database error",
                             "MLM (and Nahan) deploys could get permanently stuck failing at \"Failed to create D1 Database\", with no fix short of manually deleting old databases in the Cloudflare dashboard. Root cause: every deploy attempt -- including retries of a failed one -- provisioned a brand-new D1 database and never reused or cleaned up earlier ones, so a handful of retries would quietly eat into the account's D1 database quota until none was left to create. Deploys now reuse the account's existing database (or an orphaned one from a previous attempt) instead of always creating a new one. If the account's 10-database Free-plan limit is genuinely full of databases from other tools, the error now lists every existing database's name so you know exactly what to delete.",
                             Icons.Default.Storage
+                        ),
+                        ChangelogItem(
+                            "Clarified the \"check domain\" button in the personal anti-sanction DNS",
+                            "The check button only classifies a domain -- it never added it to the routing list on its own, but its \"sanctioned\" message read as if turning the feature on would be enough. Users would check a domain, see it's sanctioned, turn the feature on, and be confused when the site still didn't open because they never pressed the separate \"Add\" button. The message now says to press Add, and if a domain comes back sanctioned but isn't in your list yet, a red warning makes that explicit.",
+                            Icons.Default.Warning
                         ),
                         ChangelogItem(
                             "Fixed sanctioned sites (403 errors) still not opening in the personal anti-sanction DNS",
