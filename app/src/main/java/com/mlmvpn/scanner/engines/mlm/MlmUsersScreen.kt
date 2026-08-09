@@ -53,7 +53,20 @@ fun MlmUsersScreen(
     fun loadUsers() {
         isLoading = true
         scope.launch {
-            val fetchedUsers = apiManager.getUsers(account)
+            var fetchedUsers = apiManager.getUsers(account)
+            // A brand-new workers.dev route can 404 with Cloudflare's own edge error 1042
+            // ("worker not found yet") for a few seconds right after it's first enabled --
+            // this is not our worker code running, it's Cloudflare's routing not having
+            // propagated yet. Retry a couple of times before surfacing it as a real error.
+            var attempt = 0
+            while (fetchedUsers == null &&
+                apiManager.lastGetUsersError?.let { it.startsWith("HTTP 404") && it.contains("1042") } == true &&
+                attempt < 3
+            ) {
+                attempt++
+                kotlinx.coroutines.delay(3000L)
+                fetchedUsers = apiManager.getUsers(account)
+            }
             if (fetchedUsers != null) {
                 users = fetchedUsers
             } else {
