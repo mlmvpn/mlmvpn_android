@@ -221,8 +221,8 @@ fun CloudTab(onNavigateToScanner: () -> Unit = {}) {
                             onClick = {
                                 val trimmedEmail = email.trim()
                                 val trimmedApi = api.trim()
-                                if (trimmedEmail.isNotEmpty() && trimmedApi.isNotEmpty()) {
-                                    if (accounts.any { it.email == trimmedEmail || it.token == trimmedApi }) {
+                                if (trimmedApi.isNotEmpty()) {
+                                    if (accounts.any { (trimmedEmail.isNotEmpty() && it.email == trimmedEmail) || it.token == trimmedApi }) {
                                         android.widget.Toast.makeText(context, context.getString(R.string.cloud_account_already_added), android.widget.Toast.LENGTH_SHORT).show()
                                         return@Button
                                     }
@@ -239,7 +239,7 @@ fun CloudTab(onNavigateToScanner: () -> Unit = {}) {
                                     }
                                 }
                             },
-                            enabled = !isAdding && email.trim().isNotEmpty() && api.trim().isNotEmpty(),
+                            enabled = !isAdding && api.trim().isNotEmpty(),
                             modifier = Modifier.fillMaxWidth().height(48.dp),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Primary, disabledContainerColor = Primary.copy(alpha = 0.5f))
