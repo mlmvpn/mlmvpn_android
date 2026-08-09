@@ -138,8 +138,12 @@ class MlmDeployer(private val context: Context) {
 
             val metadata = JSONObject().apply {
                 put("main_module", "worker.js")
-                val currentDate = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-                put("compatibility_date", currentDate)
+                // Fixed past date, matching every other deployer in this app (Nahan/SubGen/EDG/DNS/GST).
+                // This used to be computed from the device's local date/timezone -- Cloudflare rejects a
+                // compatibility_date in the future (UTC), and for timezones ahead of UTC (e.g. Iran,
+                // UTC+3:30) the local calendar date rolls over before UTC's does, so between ~00:00 and
+                // 03:30 local time the computed date was tomorrow in UTC and every upload failed.
+                put("compatibility_date", "2024-03-03")
                 val bindings = org.json.JSONArray().apply {
                     put(JSONObject().apply {
                         put("type", "d1")

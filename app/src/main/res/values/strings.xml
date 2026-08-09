@@ -7,6 +7,7 @@
     <string name="cloud_email_address">Email Address</string>
     <string name="cloud_account_already_added">This account is already added!</string>
     <string name="cloud_save_and_connect">Save &amp; Connect</string>
+    <string name="cloud_api_key_hint">Scoped API Token: email not required. Global API Key: email is required.</string>
     <string name="cloud_deploying">Deploying</string>
     <string name="cloud_deployed">Deployed</string>
     <string name="cloud_deploy_bpb">Deploy BPB</string>

@@ -173,6 +173,14 @@ class CloudManager private constructor(private val context: Context) {
             val req1 = requestBuilder.url(verifyUrl).get().build()
             client.newCall(req1).execute().use { response ->
                 if (!response.isSuccessful) {
+                    // A Global API Key (unlike a scoped Token) is only valid paired with its
+                    // account email -- sent alone it always fails verification with a generic
+                    // error that gives no hint why. Since we tried it as a Bearer token (the
+                    // scoped-token path) and that failed, tell the user to add the email instead
+                    // of surfacing Cloudflare's opaque body.
+                    if (!isCfat && email.isEmpty()) {
+                        return@withContext Pair(false, "این یک Global API Key به نظر می‌رسد -- برای این نوع کلید، ایمیل حساب کلودفلر هم الزامی است. لطفاً فیلد ایمیل را هم پر کنید.")
+                    }
                     val body = response.body?.string()
                     return@withContext Pair(false, "Invalid API Token: $body")
                 }
@@ -520,33 +528,15 @@ class CloudManager private constructor(private val context: Context) {
                 if (!response.isSuccessful) return@withContext Pair(false, "Failed to upload worker: $body")
             }
 
-            // 5. Inject initial proxy settings (v4.2.2 format)
-            onProgress(60, "Injecting proxy settings...")
-            val proxySettingsStr = JSONObject().apply {
-                put("remoteDNS", "https://8.8.8.8/dns-query")
-                put("localDNS", "8.8.8.8")
-                put("antiSanctionDNS", "178.22.122.100")
-                put("enableIPv6", true)
-                put("allowLANConnection", false)
-                put("proxyIPMode", "proxyip")
-                put("proxyIPs", org.json.JSONArray().apply { put("bpb.yousef.isegaro.com") })
-                put("prefixes", org.json.JSONArray())
-                put("cleanIPs", org.json.JSONArray())
-                put("VLConfigs", true)
-                put("TRConfigs", true)
-                put("ports", org.json.JSONArray().apply { put(443) })
-                put("fingerprint", "chrome")
-                put("bypassIran", false)
-                put("blockAds", false)
-                put("blockPorn", false)
-                put("panelVersion", "4.2.2")
-            }.toString()
-            val setProxyReq = Request.Builder()
-                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/storage/kv/namespaces/$namespaceId/values/proxySettings")
-                .headers(authHeaders)
-                .put(proxySettingsStr.toRequestBody("application/json".toMediaTypeOrNull()))
-                .build()
-            client.newCall(setProxyReq).execute().use {}
+            // 5. Proxy settings are intentionally NOT pre-seeded here anymore. BPB Worker Panel
+            // v5.1.1 changed the KvSettings schema substantially (e.g. proxyIPs/VLConfigs/TRConfigs
+            // from the old v4.2.2 format are gone; replaced by cleanIPs/protocols/fragmentMode/etc,
+            // dozens of new fields). Hand-rolling a settings blob here means it silently drifts out
+            // of sync every time upstream BPB changes its schema. The worker's own getDataset()
+            // already does the right thing on first load: if no `proxySettings` key exists in KV, it
+            // writes the panel's own in-code defaults (see src/settings/settings.ts upstream), which
+            // are correct for whatever worker.js version is actually bundled. So we just leave the KV
+            // key unset and let the worker initialize itself on its first request.
 
             // 6. Enable Subdomain
             onProgress(80, "Enabling subdomain routing...")

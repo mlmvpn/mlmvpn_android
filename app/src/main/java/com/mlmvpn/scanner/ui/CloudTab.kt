@@ -216,6 +216,12 @@ fun CloudTab(onNavigateToScanner: () -> Unit = {}) {
                                 disabledTextColor = TextMuted
                             )
                         )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.cloud_api_key_hint),
+                            color = TextMuted,
+                            fontSize = 11.sp
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(
                             onClick = {

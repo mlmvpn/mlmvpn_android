@@ -118,6 +118,10 @@ The debug APK is written to `app/build/outputs/apk/debug/`.
 > Install [Git LFS](https://git-lfs.com/) and run `git lfs pull` after
 > cloning if those files show up as small pointer files.
 
+### Changelog
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the full version history (bilingual).
+
 ### Contributing
 
 Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for
@@ -237,6 +241,10 @@ cd mlmvpn_android
 > فایل‌های داده (`geoip.dat`، `geosite.dat`) حجیم هستند و با **Git LFS**
 > ردیابی می‌شوند. پس از clone کردن، [Git LFS](https://git-lfs.com/) را نصب
 > کرده و دستور `git lfs pull` را اجرا کنید.
+
+### لیست تغییرات
+
+برای مشاهده تاریخچه کامل نسخه‌ها (دوزبانه) به [`CHANGELOG.md`](CHANGELOG.md) مراجعه کنید.
 
 ### مشارکت در پروژه
 

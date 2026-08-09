@@ -218,6 +218,36 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
         if (isFa) {
             listOf(
                 ChangelogVersion(
+                    "نسخه 1.2.1",
+                    listOf(
+                        ChangelogItem(
+                            "بازبینی سورس و انتشار عمومی روی گیت‌هاب",
+                            "کد کامل اپ اندروید تحت لایسنس GPLv3 روی گیت‌هاب منتشر شد تا هرکس بتواند بررسی، مشارکت یا نسخه شخصی خودش را بسازد.",
+                            Icons.Default.Code
+                        ),
+                        ChangelogItem(
+                            "بخش گیم: جایگزینی سرور اول/دوم با موتور Aether",
+                            "دو سرور ثابت قدیمی وایرگارد امارات (که یکی‌شان اصلاً از قبل غیرفعال بود) از تب گیم حذف شدند. حالا بوستر بازی برای اتصال تونل کامل از موتور Aether استفاده می‌کند که خودش سالم‌ترین مسیر را از میان چند پروتکل پیدا می‌کند، نه یک سرور ثابت.",
+                            Icons.Default.SportsEsports
+                        ),
+                        ChangelogItem(
+                            "رفع پیام گمراه‌کننده هنگام افزودن اکانت کلودفلر",
+                            "وقتی از Global API Key بدون وارد کردن ایمیل استفاده می‌شد، برنامه پیام مبهم «Invalid API Token» نشان می‌داد. حالا پیام واضح می‌گوید که برای این نوع کلید، ایمیل هم لازم است؛ راهنمای متنی هم زیر فیلد اضافه شد.",
+                            Icons.Default.BugReport
+                        ),
+                        ChangelogItem(
+                            "رفع خطای «آپلود ورکر MLM ناموفق بود»",
+                            "تاریخ سازگاری (compatibility date) ورکر MLM به‌اشتباه از ساعت گوشی محاسبه می‌شد؛ برای کاربران در تایم‌زون‌های جلوتر از UTC (مثل ایران)، بین نیمه‌شب تا ۳:۳۰ بامداد این تاریخ یک روز جلوتر از سرور کلادفلر می‌افتاد و آپلود رد می‌شد. این مقدار حالا مثل بقیهٔ ورکرهای برنامه، ثابت و امن است.",
+                            Icons.Default.CloudUpload
+                        ),
+                        ChangelogItem(
+                            "رفع بریدگی منوی کشویی همبرگری در صفحه‌های کوتاه",
+                            "روی برخی گوشی‌ها گزینه‌های اضطراری در پایین منوی کناری قابل مشاهده یا لمس نبودند. محتوای منو حالا در صفحه‌های کوتاه هم به‌طور کامل قابل اسکرول است.",
+                            Icons.Default.Menu
+                        )
+                    )
+                ),
+                ChangelogVersion(
                     "نسخه 1.2.0",
                     listOf(
                         ChangelogItem(
@@ -545,6 +575,36 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
             )
         } else {
             listOf(
+                ChangelogVersion(
+                    "Version 1.2.1",
+                    listOf(
+                        ChangelogItem(
+                            "Source review and public release on GitHub",
+                            "The full Android app source is now published under GPLv3 on GitHub, so anyone can review it, contribute, or build their own version.",
+                            Icons.Default.Code
+                        ),
+                        ChangelogItem(
+                            "Game tab: Server 1/2 replaced with the Aether engine",
+                            "The two hardcoded legacy UAE WireGuard servers (one of which was already dead) were removed from the Game tab. Full-tunnel game boosting now uses the Aether engine, which picks the healthiest path across several protocols instead of a single fixed server.",
+                            Icons.Default.SportsEsports
+                        ),
+                        ChangelogItem(
+                            "Fixed misleading error when adding a Cloudflare account",
+                            "Using a Global API Key without an email used to show a vague \"Invalid API Token\" error. It now clearly explains that this key type requires an email, with a hint added under the field too.",
+                            Icons.Default.BugReport
+                        ),
+                        ChangelogItem(
+                            "Fixed \"Failed to upload MLM worker\" error",
+                            "The MLM worker's compatibility date was computed from the phone's local clock; for timezones ahead of UTC (like Iran), between midnight and 3:30 AM local time this date landed a day ahead of Cloudflare's server date and the upload was rejected. It is now a fixed, safe date like every other worker in the app.",
+                            Icons.Default.CloudUpload
+                        ),
+                        ChangelogItem(
+                            "Fixed the hamburger drawer menu getting cut off on short screens",
+                            "On some phones the emergency options at the bottom of the side menu were unreachable. The drawer content now scrolls fully on short screens.",
+                            Icons.Default.Menu
+                        )
+                    )
+                ),
                 ChangelogVersion(
                     "Version 1.2.0",
                     listOf(

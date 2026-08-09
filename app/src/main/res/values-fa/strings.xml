@@ -7,6 +7,7 @@
     <string name="cloud_email_address">آدرس ایمیل</string>
     <string name="cloud_account_already_added">این اکانت قبلاً اضافه شده است!</string>
     <string name="cloud_save_and_connect">ذخیره و اتصال</string>
+    <string name="cloud_api_key_hint">Scoped API Token: نیازی به ایمیل نیست. Global API Key: ایمیل الزامی است.</string>
     <string name="cloud_deploying">در حال استقرار</string>
     <string name="cloud_deployed">مستقر شد</string>
     <string name="cloud_deploy_bpb">دیپلوی BPB</string>
