@@ -267,7 +267,7 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                         ),
                         ChangelogItem(
                             "رفع گیر کردن دائمی دیپلوی MLM/نهان روی خطای دیتابیس D1",
-                            "دیپلوی MLM (و نهان) گاهی برای همیشه روی خطای «Failed to create D1 Database» گیر می‌کرد و تنها راه‌حل حذف دستی دیتابیس‌های قدیمی از پنل کلودفلر بود. علت: هر بار دیپلوی — حتی هر بار تلاش دوباره بعد از شکست — یک دیتابیس D1 کاملاً تازه می‌ساخت و قدیمی‌ها را پاک نمی‌کرد؛ چند بار تلاش دوباره کافی بود تا سقف تعداد دیتابیس D1 حساب پر شود. حالا دیپلوی از دیتابیس موجود حساب (یا یک دیتابیس رهاشده از تلاش قبلی) استفاده مجدد می‌کند.",
+                            "دیپلوی MLM (و نهان) گاهی برای همیشه روی خطای «Failed to create D1 Database» گیر می‌کرد و تنها راه‌حل حذف دستی دیتابیس‌های قدیمی از پنل کلودفلر بود. علت: هر بار دیپلوی — حتی هر بار تلاش دوباره بعد از شکست — یک دیتابیس D1 کاملاً تازه می‌ساخت و قدیمی‌ها را پاک نمی‌کرد؛ چند بار تلاش دوباره کافی بود تا سقف تعداد دیتابیس D1 حساب پر شود. حالا دیپلوی از دیتابیس موجود حساب (یا یک دیتابیس رهاشده از تلاش قبلی) استفاده مجدد می‌کند؛ و اگر سقف ۱۰ دیتابیسی پلن رایگان واقعاً با دیتابیس‌های ابزارهای دیگر پر شده باشد، پیام خطا اسم دقیق همهٔ آن‌ها را نشان می‌دهد تا بدانید کدام را حذف کنید.",
                             Icons.Default.Storage
                         ),
                         ChangelogItem(
@@ -665,7 +665,7 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                         ),
                         ChangelogItem(
                             "Fixed MLM/Nahan deploys getting permanently stuck on a D1 database error",
-                            "MLM (and Nahan) deploys could get permanently stuck failing at \"Failed to create D1 Database\", with no fix short of manually deleting old databases in the Cloudflare dashboard. Root cause: every deploy attempt -- including retries of a failed one -- provisioned a brand-new D1 database and never reused or cleaned up earlier ones, so a handful of retries would quietly eat into the account's D1 database quota until none was left to create. Deploys now reuse the account's existing database (or an orphaned one from a previous attempt) instead of always creating a new one.",
+                            "MLM (and Nahan) deploys could get permanently stuck failing at \"Failed to create D1 Database\", with no fix short of manually deleting old databases in the Cloudflare dashboard. Root cause: every deploy attempt -- including retries of a failed one -- provisioned a brand-new D1 database and never reused or cleaned up earlier ones, so a handful of retries would quietly eat into the account's D1 database quota until none was left to create. Deploys now reuse the account's existing database (or an orphaned one from a previous attempt) instead of always creating a new one. If the account's 10-database Free-plan limit is genuinely full of databases from other tools, the error now lists every existing database's name so you know exactly what to delete.",
                             Icons.Default.Storage
                         ),
                         ChangelogItem(

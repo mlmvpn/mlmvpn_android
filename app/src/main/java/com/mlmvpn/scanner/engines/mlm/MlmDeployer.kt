@@ -96,13 +96,15 @@ class MlmDeployer(private val context: Context) {
             onProgress(40, "Setting up D1 Database...")
             var databaseId = account.mlmDbId?.takeIf { it.isNotEmpty() } ?: ""
 
-            var listErrorInfo = ""
             var createErrorInfo = ""
+            var existingDbNames: List<String> = emptyList()
 
             if (databaseId.isEmpty()) {
                 // Look for a previously-created mlm_db_* database on this account before
                 // provisioning a new one, in case an earlier failed/interrupted deploy already
-                // created one that never got saved to account.mlmDbId.
+                // created one that never got saved to account.mlmDbId. Also remember every
+                // existing database's name so that if we're out of quota, we can tell the user
+                // exactly what's using it instead of a generic "delete something in the dashboard".
                 val listReq = Request.Builder()
                     .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/d1/database?per_page=100")
                     .headers(authHeaders)
@@ -113,19 +115,17 @@ class MlmDeployer(private val context: Context) {
                         val listJson = JSONObject(listBody)
                         if (listJson.optBoolean("success")) {
                             val results = listJson.getJSONArray("result")
+                            val names = mutableListOf<String>()
                             for (i in 0 until results.length()) {
                                 val entry = results.getJSONObject(i)
-                                if (entry.optString("name").startsWith("mlm_db_")) {
+                                names.add(entry.optString("name"))
+                                if (databaseId.isEmpty() && entry.optString("name").startsWith("mlm_db_")) {
                                     databaseId = entry.getString("uuid")
-                                    break
                                 }
                             }
-                        } else if (!listRes.isSuccessful) {
-                            listErrorInfo = listBody.take(300)
+                            existingDbNames = names
                         }
-                    } catch (e: Exception) {
-                        listErrorInfo = "parse error: ${e.message} / body: ${listBody.take(300)}"
-                    }
+                    } catch (e: Exception) { }
                 }
             }
 
@@ -144,19 +144,28 @@ class MlmDeployer(private val context: Context) {
                         if (response.isSuccessful && json.optBoolean("success")) {
                             databaseId = json.getJSONObject("result").getString("uuid")
                         } else {
-                            createErrorInfo = body.take(300)
+                            val errors = json.optJSONArray("errors")
+                            createErrorInfo = if (errors != null && errors.length() > 0) {
+                                errors.getJSONObject(0).optString("message", body.take(200))
+                            } else body.take(200)
                         }
                     } catch (e: Exception) {
-                        createErrorInfo = "parse error: ${e.message} / body: ${body.take(300)}"
+                        createErrorInfo = body.take(200)
                     }
                 }
             }
 
             if (databaseId.isEmpty()) {
-                return@withContext Pair(
-                    false,
-                    "Failed to create D1 Database.\nCreate error: $createErrorInfo\nList error: $listErrorInfo"
-                )
+                val quotaHit = createErrorInfo.contains("System limit reached", ignoreCase = true) ||
+                    createErrorInfo.contains("databases per account", ignoreCase = true)
+                val msg = if (quotaHit) {
+                    "Your Cloudflare account has reached its D1 database limit (max 10 on the Free plan), and none of the existing ones belong to MLM VPN, so a new one can't be created.\n\n" +
+                        "Existing databases on this account:\n" + existingDbNames.joinToString("\n") { "- $it" } + "\n\n" +
+                        "Delete one you don't need at dash.cloudflare.com -> Workers & Pages -> D1, then try deploying again."
+                } else {
+                    "Failed to create D1 Database: $createErrorInfo"
+                }
+                return@withContext Pair(false, msg)
             }
 
             // 3. Upload Worker
