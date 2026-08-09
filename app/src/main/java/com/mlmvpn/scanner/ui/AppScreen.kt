@@ -228,40 +228,55 @@ fun AppScreen() {
         drawerContent = {
             ModalDrawerSheet(
                 drawerContainerColor = surfaceColor,
-                modifier = Modifier
-                    .width(280.dp)
-                    .verticalScroll(rememberScrollState())
+                modifier = Modifier.width(280.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                // BoxWithConstraints gives the drawer's real available height. The inner Column
+                // is scrollable AND has that height as a MINIMUM (not fixed): on a tall screen,
+                // where the menu items are shorter than the screen, the column is pinned to full
+                // height and the weighted spacer between the two item groups expands to fill the
+                // leftover space, pushing the emergency section to the bottom instead of leaving
+                // a dead gap under it. On a short screen, where items don't fit, the column grows
+                // past that minimum, the spacer collapses to ~0, and everything just scrolls with
+                // items packed together -- no artificial gap, nothing cut off.
+                BoxWithConstraints {
+                    val minHeight = maxHeight
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .heightIn(min = minHeight)
                     ) {
-                        Text(stringResource(R.string.drawer_main_menu), color = primaryColor, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        IconButton(onClick = { scope.launch { drawerState.close() } }) {
-                            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.common_close), tint = mutedColor)
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(stringResource(R.string.drawer_main_menu), color = primaryColor, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                IconButton(onClick = { scope.launch { drawerState.close() } }) {
+                                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.common_close), tint = mutedColor)
+                                }
+                            }
                         }
+                        Divider(color = borderColor)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        CustomDrawerItem(icon = Icons.Default.Settings, text = stringResource(R.string.drawer_settings), onClick = { scope.launch { drawerState.close() }; openTab("settings") })
+                        CustomDrawerItem(icon = Icons.Default.DataUsage, text = stringResource(R.string.drawer_usage), onClick = { scope.launch { drawerState.close() }; openTab("usage") })
+                        CustomDrawerItem(icon = Icons.Default.LocationOn, text = stringResource(R.string.drawer_fixed_ip), onClick = { scope.launch { drawerState.close() }; openTab("fixed_ip") })
+                        CustomDrawerItem(icon = Icons.Default.Dns, text = stringResource(R.string.drawer_workers_list), onClick = { scope.launch { drawerState.close() }; openTab("workers_list") })
+                        CustomDrawerItem(icon = Icons.Default.Shield, text = "DNS ضد تحریم شخصی", onClick = { scope.launch { drawerState.close() }; activeModal = "antisanction" })
+                        CustomDrawerItem(icon = Icons.Default.Link, text = stringResource(R.string.subgen_drawer_menu), onClick = { scope.launch { drawerState.close() }; openTab("sublink") })
+                        CustomDrawerItem(icon = Icons.Default.Book, text = stringResource(R.string.drawer_tutorial), onClick = { scope.launch { drawerState.close() }; openTab("tutorial") })
+                        CustomDrawerItem(icon = Icons.Default.Info, text = stringResource(R.string.drawer_about), onClick = { scope.launch { drawerState.close() }; openTab("about") })
+
+                        Spacer(modifier = Modifier.weight(1f).heightIn(min = 16.dp))
+                        Divider(color = com.mlmvpn.scanner.emergency.EmergencyColors.GoogleRed.copy(alpha = 0.3f))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        EmergencyDrawerItem(stringResource(R.string.drawer_emergency_1), Icons.Default.Warning, onClick = { scope.launch { drawerState.close() }; activeModal = "emergency_vercel" })
+                        EmergencyDrawerItem(stringResource(R.string.drawer_emergency_2), Icons.Default.FlashOn, onClick = { scope.launch { drawerState.close() }; activeModal = "emergency_2" })
+                        EmergencyDrawerItem(stringResource(R.string.drawer_emergency_3), Icons.Default.Security, onClick = { scope.launch { drawerState.close() }; activeModal = "emergency_3" })
+                        Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
-                Divider(color = borderColor)
-                Spacer(modifier = Modifier.height(16.dp))
-                CustomDrawerItem(icon = Icons.Default.Settings, text = stringResource(R.string.drawer_settings), onClick = { scope.launch { drawerState.close() }; openTab("settings") })
-                CustomDrawerItem(icon = Icons.Default.DataUsage, text = stringResource(R.string.drawer_usage), onClick = { scope.launch { drawerState.close() }; openTab("usage") })
-                CustomDrawerItem(icon = Icons.Default.LocationOn, text = stringResource(R.string.drawer_fixed_ip), onClick = { scope.launch { drawerState.close() }; openTab("fixed_ip") })
-                CustomDrawerItem(icon = Icons.Default.Dns, text = stringResource(R.string.drawer_workers_list), onClick = { scope.launch { drawerState.close() }; openTab("workers_list") })
-                CustomDrawerItem(icon = Icons.Default.Shield, text = "DNS ضد تحریم شخصی", onClick = { scope.launch { drawerState.close() }; activeModal = "antisanction" })
-                CustomDrawerItem(icon = Icons.Default.Link, text = stringResource(R.string.subgen_drawer_menu), onClick = { scope.launch { drawerState.close() }; openTab("sublink") })
-                CustomDrawerItem(icon = Icons.Default.Book, text = stringResource(R.string.drawer_tutorial), onClick = { scope.launch { drawerState.close() }; openTab("tutorial") })
-                CustomDrawerItem(icon = Icons.Default.Info, text = stringResource(R.string.drawer_about), onClick = { scope.launch { drawerState.close() }; openTab("about") })
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                Divider(color = com.mlmvpn.scanner.emergency.EmergencyColors.GoogleRed.copy(alpha = 0.3f))
-                Spacer(modifier = Modifier.height(8.dp))
-                EmergencyDrawerItem(stringResource(R.string.drawer_emergency_1), Icons.Default.Warning, onClick = { scope.launch { drawerState.close() }; activeModal = "emergency_vercel" })
-                EmergencyDrawerItem(stringResource(R.string.drawer_emergency_2), Icons.Default.FlashOn, onClick = { scope.launch { drawerState.close() }; activeModal = "emergency_2" })
-                EmergencyDrawerItem(stringResource(R.string.drawer_emergency_3), Icons.Default.Security, onClick = { scope.launch { drawerState.close() }; activeModal = "emergency_3" })
-                Spacer(modifier = Modifier.height(16.dp))
             }
         }
     ) {
@@ -428,71 +443,79 @@ fun AppScreen() {
             // one evenly spaced strip instead of two differently-pitched groups.
             val slotsPerSide = maxOf(leftItems.size, rightItems.size)
 
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
-                Surface(
-                    color = surfaceColor.copy(alpha = 0.85f),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth().height(64.dp),
-                    shadowElevation = 8.dp
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                // Both halves must use the SAME per-icon width so icons stay the same size on
+                // both sides regardless of how many optional tabs (game/wireguard) are enabled.
+                // Giving each side's real items weight(1f) and padding the shorter side with an
+                // empty weight(1f) spacer (the previous approach) doesn't do that: weight divides
+                // a Row's width evenly among however many children IT has, so 2 real items in a
+                // 3-slot row each end up WIDER than 3 real items in the other 3-slot row, and the
+                // spacer -- appended after the real items -- lands at the outer edge instead of
+                // being distributed, visibly clustering that side's icons toward the centre
+                // button with a dead gap past them. Fixed-width slots plus centering each side's
+                // actual (unpadded) icon group fixes both: equal icon size everywhere, and a
+                // shorter side just centers its smaller group instead of leaving a lopsided gap.
+                val centerGap = 70.dp
+                val iconSlotWidth = (maxWidth - centerGap) / (slotsPerSide * 2)
+
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
+                    Surface(
+                        color = surfaceColor.copy(alpha = 0.85f),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().height(64.dp),
+                        shadowElevation = 8.dp
                     ) {
-                        // The two halves each take weight(1f), which is what puts the reserved
-                        // gap EXACTLY at the centre of the bar. Distributing all items in one
-                        // flat Row instead would place the gap after the left items — off-centre
-                        // whenever the sides differ in count (5 tabs => 3 left, 2 right), and the
-                        // centred button would then sit on top of the last left icon.
                         Row(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            leftItems.forEach { (icon, label, tab) ->
-                                CustomNavItem(
-                                    icon = icon,
-                                    text = label,
-                                    isActive = activeTab == tab,
-                                    onClick = { switchTab(tab) },
-                                    activeColor = if (tab == "game") Color(0xFF00E676) else primaryColor,
-                                    modifier = Modifier.weight(1f)
-                                )
+                            // The two halves each take weight(1f), which is what puts the reserved
+                            // gap EXACTLY at the centre of the bar. Distributing all items in one
+                            // flat Row instead would place the gap after the left items — off-centre
+                            // whenever the sides differ in count (5 tabs => 3 left, 2 right), and the
+                            // centred button would then sit on top of the last left icon.
+                            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    leftItems.forEach { (icon, label, tab) ->
+                                        CustomNavItem(
+                                            icon = icon,
+                                            text = label,
+                                            isActive = activeTab == tab,
+                                            onClick = { switchTab(tab) },
+                                            activeColor = if (tab == "game") Color(0xFF00E676) else primaryColor,
+                                            modifier = Modifier.width(iconSlotWidth)
+                                        )
+                                    }
+                                }
                             }
-                            repeat(slotsPerSide - leftItems.size) {
-                                Spacer(modifier = Modifier.weight(1f))
-                            }
-                        }
-                        // Reserves the footprint of the raised centre button.
-                        Spacer(modifier = Modifier.width(70.dp))
-                        Row(
-                            modifier = Modifier.weight(1f),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            rightItems.forEach { (icon, label, tab) ->
-                                CustomNavItem(
-                                    icon = icon,
-                                    text = label,
-                                    isActive = activeTab == tab,
-                                    onClick = { switchTab(tab) },
-                                    activeColor = if (tab == "game") Color(0xFF00E676) else primaryColor,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            repeat(slotsPerSide - rightItems.size) {
-                                Spacer(modifier = Modifier.weight(1f))
+                            // Reserves the footprint of the raised centre button.
+                            Spacer(modifier = Modifier.width(centerGap))
+                            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    rightItems.forEach { (icon, label, tab) ->
+                                        CustomNavItem(
+                                            icon = icon,
+                                            text = label,
+                                            isActive = activeTab == tab,
+                                            onClick = { switchTab(tab) },
+                                            activeColor = if (tab == "game") Color(0xFF00E676) else primaryColor,
+                                            modifier = Modifier.width(iconSlotWidth)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                }
 
-                CenterNavButton(
-                    isActive = activeTab == "vpngate",
-                    activeColor = primaryColor,
-                    onClick = { switchTab("vpngate") },
-                    // Lifts the button so roughly 40% of it sits proud of the bar — the
-                    // standard raised-FAB read, without detaching it from the surface.
-                    modifier = Modifier.offset(y = (-28).dp)
-                )
+                    CenterNavButton(
+                        isActive = activeTab == "vpngate",
+                        activeColor = primaryColor,
+                        onClick = { switchTab("vpngate") },
+                        // Lifts the button so roughly 40% of it sits proud of the bar — the
+                        // standard raised-FAB read, without detaching it from the surface.
+                        modifier = Modifier.offset(y = (-28).dp)
+                    )
+                }
             }
         }
         }

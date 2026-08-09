@@ -236,6 +236,16 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.SportsEsports
                         ),
                         ChangelogItem(
+                            "رفع نامتقارن‌بودن آیکون‌های نوار پایین",
+                            "وقتی تب‌های اختیاری گیم/وایرگارد باعث می‌شدند دو طرف نوار پایین تعداد آیکون متفاوتی داشته باشند (مثلاً ۳ چپ / ۲ راست)، آیکون‌های طرف کوچک‌تر به سمت دکمه وسط جمع می‌شدند با یک فاصله خالی بعدشان، و اندازه‌شان هم با طرف دیگر فرق داشت. حالا هر دو طرف از یک عرض ثابت و یکسان برای هر آیکون استفاده می‌کنند و گروه آیکون‌های واقعی‌شان (بدون جای خالی) در وسط نیمه خودشان قرار می‌گیرد — چه گیم و وایرگارد هردو فعال باشند، چه یکی، چه هیچ‌کدام.",
+                            Icons.Default.Apps
+                        ),
+                        ChangelogItem(
+                            "رفع فضای خالی مرده زیر منوی همبرگری روی گوشی‌های بلند",
+                            "منوی کشویی روی گوشی‌های بلند بین آخرین گزینه و پایین صفحه یک فضای خالی می‌گذاشت. حالا فاصله بین منوی اصلی و بخش اضطراری روی گوشی‌های بلند بزرگ می‌شود (بخش اضطراری به پایین صفحه می‌چسبد)، و روی گوشی‌های کوتاه که همه گزینه‌ها جا نمی‌شوند مثل قبل عادی و بدون فاصله اضافه اسکرول می‌شود.",
+                            Icons.Default.Menu
+                        ),
+                        ChangelogItem(
                             "رفع پیام گمراه‌کننده هنگام افزودن اکانت کلودفلر",
                             "وقتی از Global API Key بدون وارد کردن ایمیل استفاده می‌شد، برنامه پیام مبهم «Invalid API Token» نشان می‌داد. حالا پیام واضح می‌گوید که برای این نوع کلید، ایمیل هم لازم است؛ راهنمای متنی هم زیر فیلد اضافه شد.",
                             Icons.Default.BugReport
@@ -677,6 +687,16 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Game tab: Server 1/2 replaced with the Aether engine",
                             "The two hardcoded legacy UAE WireGuard servers (one of which was already dead) were removed from the Game tab. Full-tunnel game boosting now uses the Aether engine, which picks the healthiest path across several protocols instead of a single fixed server.",
                             Icons.Default.SportsEsports
+                        ),
+                        ChangelogItem(
+                            "Fixed the bottom nav bar's icons looking lopsided",
+                            "Whenever the optional Game/WireGuard tabs made the two sides hold a different number of icons (e.g. 3 left / 2 right), the shorter side's icons visibly clustered toward the centre button with a dead gap past them, and ended up a different size than the other side's. Both sides now use a fixed, identical per-icon width and centre their (unpadded) icon group within their half -- whether Game and WireGuard are both on, one is, or neither is.",
+                            Icons.Default.Apps
+                        ),
+                        ChangelogItem(
+                            "Fixed a dead empty gap under the hamburger drawer on tall phones",
+                            "The drawer left an empty gap between the last menu item and the bottom of the screen on tall phones. The gap between the main menu and the emergency section now expands on tall screens (pinning the emergency section to the bottom), while still scrolling normally with everything packed together on short screens where it doesn't all fit.",
+                            Icons.Default.Menu
                         ),
                         ChangelogItem(
                             "Fixed misleading error when adding a Cloudflare account",
