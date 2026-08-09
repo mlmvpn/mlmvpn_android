@@ -271,6 +271,16 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Storage
                         ),
                         ChangelogItem(
+                            "رفع خراب‌شدن سایت‌های غیرمرتبط با روشن‌کردن «DNS ضد تحریم شخصی»",
+                            "روشن‌کردن این بخش گاهی سایت‌هایی که اصلاً قرار نبود دست‌خورده باشند (مثل Gmail) را هم خراب می‌کرد. علت: resolver DNS این بخش به‌صورت ثابت روی UDP ساده 1.1.1.1:53 تنظیم شده بود — پروتکلی که در بسیاری از خطوط ایران فیلتر یا کند می‌شود، بدون هیچ راه جایگزین؛ برخلاف تنظیمات اصلی VPN که به همین دلیل قبلاً به DoH روی HTTPS تغییر کرده بود. حالا از همان روش DoH روی پورت 443 استفاده می‌کند.",
+                            Icons.Default.Dns
+                        ),
+                        ChangelogItem(
+                            "رفع شکست دائمی «ساخت وورکر» در DNS ضد تحریم شخصی",
+                            "این مرحله (همان دیپلوی EDG که جای دیگری هم استفاده می‌شود) می‌توانست دقیقاً به همان دلیلی که MLM و نهان داشتند، بعد از چند تلاش برای همیشه شکست بخورد: هر بار یک KV Namespace کاملاً تازه می‌ساخت و قدیمی‌ها را پاک نمی‌کرد. حالا از namespace موجود حساب (یا یکی رهاشده از تلاش قبلی) استفاده مجدد می‌کند؛ خطاها هم حالا متن واقعی پاسخ کلودفلر را نشان می‌دهند.",
+                            Icons.Default.CloudSync
+                        ),
+                        ChangelogItem(
                             "رفع گیر کردن/کرش دکمه «تست سلامت پینگ» در تب اسکنر",
                             "این دکمه روی گروه‌های ترکیبی/Mix (و به‌تبع آن بروزرسانی ساب‌اسکریپشن MLM با آی‌پی‌های سالم که به همین مسیر وابسته است) روی بعضی گوشی‌ها ممکن بود برای همیشه گیر کند یا اپ کرش کند. علت: این مسیر خاص، برخلاف تمام مسیرهای مشابه دیگر در اپ، فراخوانی مقداردهی اولیه هسته Xray را نداشت — یک خط کد به‌اشتباه کامنت شده بود. این‌که کار می‌کرد یا نه کاملاً به این بستگی داشت که آیا صفحه دیگری در همان نشست، هسته را قبلاً مقداردهی کرده باشد؛ همین باعث می‌شد برای بعضی کاربران همیشه کار کند و برای بعضی دیگر هرگز. خط گم‌شده بازگردانده شد.",
                             Icons.Default.BugReport
@@ -677,6 +687,16 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed MLM/Nahan deploys getting permanently stuck on a D1 database error",
                             "MLM (and Nahan) deploys could get permanently stuck failing at \"Failed to create D1 Database\", with no fix short of manually deleting old databases in the Cloudflare dashboard. Root cause: every deploy attempt -- including retries of a failed one -- provisioned a brand-new D1 database and never reused or cleaned up earlier ones, so a handful of retries would quietly eat into the account's D1 database quota until none was left to create. Deploys now reuse the account's existing database (or an orphaned one from a previous attempt) instead of always creating a new one. If the account's 10-database Free-plan limit is genuinely full of databases from other tools, the error now lists every existing database's name so you know exactly what to delete.",
                             Icons.Default.Storage
+                        ),
+                        ChangelogItem(
+                            "Fixed unrelated sites breaking when the personal anti-sanction DNS was turned on",
+                            "Turning this feature on could break sites that were never even supposed to be touched (e.g. Gmail). Root cause: its DNS resolver was hardcoded to plain UDP 1.1.1.1:53 -- a protocol commonly blocked or throttled on Iranian ISPs -- with no fallback, unlike the main VPN config which already resolves via DoH over HTTPS for exactly this reason. It now resolves via the same DoH-over-443 approach.",
+                            Icons.Default.Dns
+                        ),
+                        ChangelogItem(
+                            "Fixed the anti-sanction DNS worker deploy failing permanently on retries",
+                            "This step (the same EDG worker deploy used elsewhere) could fail permanently after a few retries for the same reason MLM/Nahan did: it always created a brand-new KV namespace and never reused or cleaned up earlier ones. It now reuses the account's existing namespace (or an orphaned one from a previous attempt); failures now show the real Cloudflare error too.",
+                            Icons.Default.CloudSync
                         ),
                         ChangelogItem(
                             "Fixed the Scanner tab's \"Ping Health Test\" button hanging or crashing",

@@ -113,7 +113,8 @@ fun AntiSanctionScreen(onBack: () -> Unit) {
             val (ok, msg) = cloud.deployEdgWorker(acct) { _, label -> deployStatus = label }
             deploying = false
             deployStatus = ""
-            toast(context, if (ok) "وورکر ساخته شد ✅" else "ساخت وورکر ناموفق: $msg")
+            if (ok) toast(context, "وورکر ساخته شد ✅")
+            else android.widget.Toast.makeText(context, "ساخت وورکر ناموفق: $msg", android.widget.Toast.LENGTH_LONG).show()
         }
     }
 

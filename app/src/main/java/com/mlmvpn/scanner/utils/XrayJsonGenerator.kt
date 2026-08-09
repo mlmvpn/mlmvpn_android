@@ -325,13 +325,31 @@ object XrayJsonGenerator {
         outbounds.put(JSONObject().apply { put("protocol", "dns"); put("tag", "dns-out") })
         json.put("outbounds", outbounds)
 
-        // Real DNS (no fakedns): resolve the worker host + everything else via backendDns.
-        json.put("dns", JSONObject().put("servers", JSONArray().put(backendDns)))
+        // Plain UDP:53 to backendDns (Cloudflare/Google resolvers) is commonly blocked or
+        // throttled on Iranian ISPs -- since this feature only tunnels a handful of sanctioned
+        // domains, that used to break DNS resolution for EVERYTHING while it was on, including
+        // domains that were never meant to be touched (e.g. Gmail). Resolve via DoH (HTTPS/443,
+        // which isn't blocked the way plain DNS is) instead, same fix already used for the main
+        // VPN config's xhttp path; backendDns is kept only as a fallback if DoH itself is
+        // unreachable.
+        val dnsServers = JSONArray()
+        dnsServers.put(JSONObject().apply {
+            put("address", "https://8.8.8.8/dns-query")
+            put("tag", "remote-dns")
+        })
+        dnsServers.put(backendDns)
+        json.put("dns", JSONObject().put("servers", dnsServers))
 
-        // Routing: DNS → dns-out; sanctioned domains → proxy; everything else → direct.
+        // Routing: DNS → dns-out; the DoH resolver's own HTTPS traffic → direct (it's just a
+        // lookup, not sanctioned data); sanctioned domains → proxy; everything else → direct.
         val rules = JSONArray()
         rules.put(JSONObject().apply {
             put("type", "field"); put("port", 53); put("outboundTag", "dns-out")
+        })
+        rules.put(JSONObject().apply {
+            put("type", "field")
+            put("inboundTag", JSONArray().put("remote-dns"))
+            put("outboundTag", "direct")
         })
         // The worker host itself must always be reached directly (never via itself).
         val workerHosts = setOf(config.address, config.wsHost, config.sni).filter { it.isNotEmpty() }

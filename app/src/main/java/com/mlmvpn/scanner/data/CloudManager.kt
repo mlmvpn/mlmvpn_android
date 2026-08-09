@@ -900,31 +900,63 @@ class CloudManager private constructor(private val context: Context) {
             val edgAdminPass = account.edgAdminPass.takeIf { !it.isNullOrEmpty() } ?: java.util.UUID.randomUUID().toString().substring(0, 8)
             val proxyIp = "proxyip.cmliussss.net"
 
-            // 3. Create KV Namespace
-            onProgress(40, "Creating KV Namespace...")
-            val kvTitle = "edg_${java.util.UUID.randomUUID().toString().substring(0, 8).replace("-", "")}"
-            val createKvReq = Request.Builder()
-                .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/storage/kv/namespaces")
-                .headers(authHeaders)
-                .post("{\"title\":\"$kvTitle\"}".toRequestBody("application/json".toMediaTypeOrNull()))
-                .build()
-            
-            var kvId = ""
-            try {
-                val kvRes = client.newCall(createKvReq).execute()
-                val kvBody = kvRes.body?.string() ?: ""
-                if (kvRes.isSuccessful) {
-                    val kvJson = org.json.JSONObject(kvBody)
-                    if (kvJson.optBoolean("success", false)) {
-                        kvId = kvJson.getJSONObject("result").getString("id")
+            // 3. Reuse the existing KV namespace if this account was already deployed before,
+            // instead of always provisioning a new one on every deploy/retry (same quota-leak
+            // pattern found and fixed for MLM/Nahan's D1 databases: unbounded retries would
+            // otherwise silently create a new orphaned namespace every time).
+            onProgress(40, "Setting up KV Namespace...")
+            var kvId = account.edgKvNamespaceId?.takeIf { it.isNotEmpty() } ?: ""
+            var kvErrorInfo = ""
+
+            if (kvId.isEmpty()) {
+                val listReq = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/storage/kv/namespaces?per_page=100")
+                    .headers(authHeaders)
+                    .get().build()
+                try {
+                    client.newCall(listReq).execute().use { listRes ->
+                        val listJson = org.json.JSONObject(listRes.body?.string() ?: "")
+                        if (listJson.optBoolean("success")) {
+                            val results = listJson.getJSONArray("result")
+                            for (i in 0 until results.length()) {
+                                val entry = results.getJSONObject(i)
+                                if (entry.optString("title").startsWith("edg_")) {
+                                    kvId = entry.getString("id")
+                                    break
+                                }
+                            }
+                        }
                     }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+                } catch (e: Exception) { }
             }
 
             if (kvId.isEmpty()) {
-                return@withContext Pair(false, "Failed to create KV namespace for EDG")
+                val kvTitle = "edg_${java.util.UUID.randomUUID().toString().substring(0, 8).replace("-", "")}"
+                val createKvReq = Request.Builder()
+                    .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/storage/kv/namespaces")
+                    .headers(authHeaders)
+                    .post("{\"title\":\"$kvTitle\"}".toRequestBody("application/json".toMediaTypeOrNull()))
+                    .build()
+
+                try {
+                    val kvRes = client.newCall(createKvReq).execute()
+                    val kvBody = kvRes.body?.string() ?: ""
+                    val kvJson = org.json.JSONObject(kvBody)
+                    if (kvRes.isSuccessful && kvJson.optBoolean("success", false)) {
+                        kvId = kvJson.getJSONObject("result").getString("id")
+                    } else {
+                        val errors = kvJson.optJSONArray("errors")
+                        kvErrorInfo = if (errors != null && errors.length() > 0) {
+                            errors.getJSONObject(0).optString("message", kvBody.take(200))
+                        } else kvBody.take(200)
+                    }
+                } catch (e: Exception) {
+                    kvErrorInfo = e.message ?: "unknown error"
+                }
+            }
+
+            if (kvId.isEmpty()) {
+                return@withContext Pair(false, "Failed to create KV namespace for EDG: $kvErrorInfo")
             }
 
             // Save KV namespace ID to account for EDG Settings
