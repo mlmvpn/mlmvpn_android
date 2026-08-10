@@ -149,6 +149,10 @@ fun NodesTab() {
     val distinctManualGroups = remember(nodes, emptyCustomGroups.toList()) {
         val groups = nodes.filter { it.engineType == "Manual" }.mapNotNull { it.groupTitle }.toMutableList()
         groups.addAll(emptyCustomGroups)
+        // The domain-fronting folder is always listed, even before setup: its whole flow (making
+        // the certificate, installing it, adding the config) happens inside the folder, so the
+        // folder has to be reachable while it is still empty.
+        groups.add(com.mlmvpn.scanner.mitm.MitmProfile.GROUP)
         groups.distinct().sorted()
     }
 
@@ -1323,7 +1327,15 @@ fun NodesTab() {
                         }
                     }
                 }
-                if (displayedNodes.isEmpty()) {
+                // Domain-fronting folder: the setup card sits above the config so the user can
+                // go from empty folder to a connectable node without leaving this screen.
+                if (selectedTabEngine == "Manual" &&
+                    selectedManualGroup == com.mlmvpn.scanner.mitm.MitmProfile.GROUP) {
+                    item { com.mlmvpn.scanner.ui.mitm.MitmSetupCard() }
+                }
+                if (displayedNodes.isEmpty() &&
+                    !(selectedTabEngine == "Manual" &&
+                        selectedManualGroup == com.mlmvpn.scanner.mitm.MitmProfile.GROUP)) {
                     item {
                         Column(
                             modifier = Modifier

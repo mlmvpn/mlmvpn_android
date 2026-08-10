@@ -221,6 +221,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                     "نسخه 1.2.1",
                     listOf(
                         ChangelogItem(
+                            "پوشه جدید «دامین‌فرانتینگ» — یوتیوب و اینستاگرام بدون هیچ سرور",
+                            "یک پوشه جدید در تب اتصال با کانفیگی که یوتیوب، اینستاگرام، واتس‌اپ، فیسبوک و ردیت را باز می‌کند، بدون هیچ سرور و ورکری. یعنی چیزی برای ساختن و پول دادن نیست و هرچقدر هم کاربر زیاد شود کند نمی‌شود، چون ترافیک از گوشی خودتان مستقیم می‌رود. راه‌اندازی کامل داخل همان پوشه است: برنامه خودش یک گواهی مخصوص همین گوشی می‌سازد، بعد با یک دکمه پنجره نصب گواهی اندروید را باز می‌کند، و بعد کانفیگ را داخل همان پوشه می‌گذارد تا انتخاب و وصل کنید. گواهی برای هر گوشی جداگانه ساخته می‌شود و هیچ‌جا فرستاده نمی‌شود؛ گواهی آماده و مشترک یعنی هر کسی می‌تواند ترافیک بقیه را بخواند، پس این کار عمداً انجام نشده. دو نکته: تأیید نصب گواهی را حتماً باید خودتان در صفحه سیستم بزنید (اندروید به هیچ برنامه‌ای اجازه نمی‌دهد)، و سایت‌ها را باید در مرورگر باز کنید — اپ یوتیوب و اینستاگرام با این روش کار نمی‌کنند.",
+                            Icons.Default.Shield
+                        ),
+                        ChangelogItem(
                             "پورت محلی حالا هم SOCKS و هم HTTP را قبول می‌کند",
                             "قبلاً پورت محلی فقط SOCKS بود و برنامه‌هایی که فقط پروکسی HTTP می‌شناسند نمی‌توانستند از آن استفاده کنند. حالا همان «پورت محلی» که در تنظیمات می‌بینید هر دو را قبول می‌کند.",
                             Icons.Default.SettingsEthernet
@@ -808,6 +813,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                 ChangelogVersion(
                     "Version 1.2.1",
                     listOf(
+                        ChangelogItem(
+                            "New \"Domain Fronting\" folder — YouTube and Instagram with no server at all",
+                            "A new folder in the connection tab carrying a config that opens YouTube, Instagram, WhatsApp, Facebook and Reddit with no server and no worker anywhere in the path. Nothing to deploy, nothing to pay for, and no shared bandwidth to saturate no matter how many people use it, because the traffic goes straight out from your own phone. The whole setup happens inside that folder: the app mints a certificate unique to your device, then one button opens Android's own certificate installer, then the config appears in the folder ready to select and connect. The certificate is generated per device and never leaves it — a shared certificate would let anyone holding it read everyone else's traffic, so that was deliberately not done. Two things to know: the final install confirmation has to be tapped by you on a system screen (Android grants no app that power), and the sites must be opened in a browser — the YouTube and Instagram apps do not work with this method.",
+                            Icons.Default.Shield
+                        ),
                         ChangelogItem(
                             "The local port now accepts both SOCKS and HTTP",
                             "The local port used to be SOCKS-only, so apps that only speak HTTP proxy couldn't use it. The same Local Port you see in Settings now accepts either.",
