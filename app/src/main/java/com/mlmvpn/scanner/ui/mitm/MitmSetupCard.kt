@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Refresh
@@ -75,25 +76,42 @@ fun MitmSetupCard() {
     var configReady by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
+    var guideExpanded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     /** Non-null once the certificate has been copied where Settings' file picker can reach it. */
     var exportedName by remember { mutableStateOf<String?>(null) }
 
-    fun refresh() {
-        certExists = MitmCertManager.exists(context)
-        certTrusted = certExists && MitmCertManager.isTrusted(context)
+    /** Bumped on every ON_RESUME to re-trigger the status read. */
+    var resumeTick by remember { mutableStateOf(0) }
+
+    suspend fun refresh() {
+        val hasCert = MitmCertManager.exists(context)
+        // The keystore lookup touches the filesystem, so keep it off the main thread.
+        val trusted = hasCert && withContext(Dispatchers.IO) { MitmCertManager.isTrusted(context) }
+        certExists = hasCert
+        certTrusted = trusted
         configReady = MitmProfile.isInstalled(context)
     }
 
-    // Re-check on resume: the certificate install happens in a system screen we do not control,
-    // so returning to the app is the only reliable moment to learn whether it succeeded.
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) refresh()
+            if (event == Lifecycle.Event.ON_RESUME) resumeTick++
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        refresh()
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(resumeTick) { refresh() }
+
+    // While the certificate exists but is not trusted yet, keep watching. Coming back from the
+    // Settings screen already triggers ON_RESUME, but on some OEM skins the install completes
+    // without the app being backgrounded at all, and the user should not have to restart the app
+    // (or even tap anything) for the step to tick over.
+    LaunchedEffect(certExists, certTrusted) {
+        while (certExists && !certTrusted) {
+            kotlinx.coroutines.delay(1500)
+            refresh()
+        }
     }
 
     val allDone = certExists && certTrusted && configReady
@@ -344,6 +362,125 @@ fun MitmSetupCard() {
             }
         }
 
+        // ---- per-brand install guide -----------------------------------------------
+        // Every OEM skin puts the CA-install entry somewhere different and renames it, so a
+        // single generic path would be wrong for most users. The search keyword at the end is the
+        // reliable escape hatch on any device.
+        Spacer(Modifier.height(10.dp))
+        val guideArrow by animateFloatAsState(if (guideExpanded) 180f else 0f, tween(200), label = "guideArrow")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { guideExpanded = !guideExpanded }
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.HelpOutline, null, tint = Primary, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "راهنمای نصب گواهی برای برندهای مختلف",
+                color = Primary, fontSize = 11.sp, fontWeight = FontWeight.Medium
+            )
+            Spacer(Modifier.weight(1f))
+            Icon(
+                Icons.Default.ExpandMore, null, tint = Primary,
+                modifier = Modifier.size(18.dp).rotate(guideArrow)
+            )
+        }
+
+        AnimatedVisibility(visible = guideExpanded, enter = expandVertically(), exit = shrinkVertically()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SurfaceDark.copy(alpha = 0.7f))
+                    .padding(12.dp)
+            ) {
+                Text(
+                    "سریع‌ترین راه در همه‌ی گوشی‌ها: در نوار جستجوی خودِ تنظیمات یکی از این‌ها را بنویسید:",
+                    color = TextPrimary, fontSize = 11.sp, lineHeight = 16.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("certificate", "گواهی", "credentials").forEach { kw ->
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Primary.copy(alpha = 0.15f))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(kw, color = Primary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "بعد گزینه‌ای شبیه «نصب گواهی» یا «Install a certificate» را بزنید و «گواهی CA / CA certificate» را انتخاب کنید. اگر اخطار داد، «Install anyway» را بزنید. در آخر فایل «${MitmCertManager.EXPORT_FILE_NAME}» را از پوشه Download انتخاب کنید.",
+                    color = TextMuted, fontSize = 10.sp, lineHeight = 15.sp
+                )
+
+                Spacer(Modifier.height(10.dp))
+                Box(Modifier.fillMaxWidth().height(1.dp).background(BorderDark))
+                Spacer(Modifier.height(10.dp))
+                Text("مسیر دستی بر اساس برند:", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+
+                BrandPath(
+                    "سامسونگ (One UI)",
+                    "تنظیمات ← بیومتریک و امنیت (Biometrics and security) ← تنظیمات امنیتی دیگر (Other security settings) ← نصب از حافظه دستگاه (Install from device storage) ← گواهی CA"
+                )
+                BrandPath(
+                    "شیائومی / ردمی / پوکو (MIUI و HyperOS)",
+                    "تنظیمات ← رمزها و امنیت (Passwords & security) ← امنیت سیستم / حریم خصوصی ← رمزگذاری و اطلاعات ورود (Encryption & credentials) ← نصب گواهی از حافظه"
+                )
+                BrandPath(
+                    "پیکسل و اندروید خام (۱۲ و بالاتر)",
+                    "تنظیمات ← امنیت و حریم خصوصی (Security & privacy) ← تنظیمات بیشتر امنیت (More security settings) ← رمزگذاری و اطلاعات ورود ← نصب گواهی ← گواهی CA"
+                )
+                BrandPath(
+                    "پیکسل و اندروید خام (۱۱)",
+                    "تنظیمات ← امنیت (Security) ← رمزگذاری و اطلاعات ورود (Encryption & credentials) ← نصب گواهی ← گواهی CA"
+                )
+                BrandPath(
+                    "هواوی و آنر (EMUI / MagicOS)",
+                    "تنظیمات ← امنیت (Security) ← تنظیمات بیشتر (More settings) ← رمزگذاری و اطلاعات ورود ← نصب گواهی از حافظه"
+                )
+                BrandPath(
+                    "آنر / اوپو / ریلمی / وان‌پلاس (ColorOS و OxygenOS)",
+                    "تنظیمات ← رمز و امنیت (Password & security) ← امنیت سیستم (System security) ← رمزگذاری و اطلاعات ورود ← نصب از حافظه"
+                )
+                BrandPath(
+                    "ویوو (Funtouch OS / OriginOS)",
+                    "تنظیمات ← تنظیمات بیشتر (More settings) ← امنیت و حریم خصوصی ← رمزگذاری و اطلاعات ورود ← نصب گواهی"
+                )
+                BrandPath(
+                    "موتورولا، نوکیا، ایسوس، سونی",
+                    "همان مسیر اندروید خام است — تنظیمات ← امنیت ← رمزگذاری و اطلاعات ورود ← نصب گواهی",
+                    isLast = true
+                )
+
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(Icons.Default.Info, null, tint = YellowWarn, modifier = Modifier.size(13.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "اگر گوشی شما رمز یا الگوی قفل صفحه ندارد، اندروید قبل از نصب گواهی از شما می‌خواهد یکی تنظیم کنید — این شرط خود اندروید است.",
+                        color = TextMuted, fontSize = 10.sp, lineHeight = 15.sp
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(Icons.Default.Language, null, tint = TextDim, modifier = Modifier.size(13.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "فایرفاکس گواهی‌های نصب‌شده توسط کاربر را به‌صورت پیش‌فرض قبول نمی‌کند. اگر با فایرفاکس کار می‌کنید: About Firefox ← پنج بار روی لوگو بزنید ← Settings ← Secret Settings ← گزینه «Use third party CA certificates» را روشن کنید.",
+                        color = TextDim, fontSize = 10.sp, lineHeight = 15.sp
+                    )
+                }
+            }
+        }
+
         // ---- details ---------------------------------------------------------------
         Spacer(Modifier.height(10.dp))
         val arrow by animateFloatAsState(if (expanded) 180f else 0f, tween(200), label = "arrow")
@@ -515,6 +652,15 @@ private fun ActionButton(
         Icon(icon, null, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(8.dp))
         Text(text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun BrandPath(brand: String, path: String, isLast: Boolean = false) {
+    Column(modifier = Modifier.padding(bottom = if (isLast) 0.dp else 9.dp)) {
+        Text(brand, color = TextPrimary, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(2.dp))
+        Text(path, color = TextMuted, fontSize = 10.sp, lineHeight = 15.sp)
     }
 }
 

@@ -105,25 +105,41 @@ object MitmCertManager {
     }
 
     /**
-     * Whether the OS currently trusts our certificate.
+     * Whether the OS currently trusts our certificate, answered live -- no app restart needed.
      *
-     * The default `TrustManagerFactory` on API 24+ is backed by system *and* user-added CAs
-     * (this app ships no `networkSecurityConfig`, so the platform default applies), which makes
-     * the accepted-issuer list an accurate answer to "did the install go through?". Compared by
-     * full encoded bytes rather than by subject name, so an unrelated CA with the same name
-     * cannot produce a false positive.
+     * Primary check is `AndroidCAStore`, the platform keystore that holds both the built-in CAs
+     * (`system:` aliases) and everything the user installed (`user:` aliases). It is re-read on
+     * every `load()`, so the moment the user finishes installing in Settings and comes back, this
+     * flips to true. `getCertificateAlias` matches on the certificate itself, so a same-named
+     * unrelated CA cannot produce a false positive, and it is a single lookup rather than a walk
+     * over ~150 system certificates.
+     *
+     * The fallback asks the platform trust manager to validate our certificate as its own chain:
+     * a self-signed root only validates if it is already a trust anchor. Kept because
+     * `AndroidCAStore` is not guaranteed present on every OEM build. Note that enumerating
+     * `acceptedIssuers` is deliberately *not* used -- on Android that list reflects the keystore
+     * the trust manager was initialised with and does not necessarily include user-added CAs,
+     * which is exactly the case that matters here.
      */
     fun isTrusted(context: Context): Boolean {
-        return try {
-            val ours = loadCert(context) ?: return false
+        val ours = loadCert(context) ?: return false
+
+        runCatching {
+            val ks = java.security.KeyStore.getInstance("AndroidCAStore")
+            ks.load(null)
+            if (ks.getCertificateAlias(ours) != null) return true
+        }
+
+        runCatching {
             val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
             tmf.init(null as java.security.KeyStore?)
-            tmf.trustManagers
-                .filterIsInstance<X509TrustManager>()
-                .any { tm -> tm.acceptedIssuers.any { it.encoded.contentEquals(ours.encoded) } }
-        } catch (_: Exception) {
-            false
+            for (tm in tmf.trustManagers.filterIsInstance<X509TrustManager>()) {
+                val ok = runCatching { tm.checkServerTrusted(arrayOf(ours), "RSA") }.isSuccess
+                if (ok) return true
+            }
         }
+
+        return false
     }
 
     fun loadCert(context: Context): X509Certificate? = try {
