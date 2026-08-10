@@ -221,6 +221,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                     "نسخه 1.2.1",
                     listOf(
                         ChangelogItem(
+                            "اتصال سریع‌تر و مطمئن‌تر با pin کردن IP سرور",
+                            "دامنه‌ی سرور هر کانفیگ حالا قبل از استارت شدن هسته توسط خود اپ resolve می‌شود و IP هایش داخل کانفیگ ثبت می‌شود، و اتصال چند IP را هم‌زمان امتحان می‌کند و اولی که جواب داد را نگه می‌دارد. این بیشترین اثر را روی کانفیگ‌های پنل ابری دارد، چون همه‌شان به یک دامنه کلادفلر اشاره می‌کنند که به ده‌ها IP مختلف resolve می‌شود و بخشی از آن‌ها همیشه از ایران کند یا مسدودند. قبلاً هسته این IP ها را یکی‌یکی امتحان می‌کرد، پس یک IP بد یعنی چند ثانیه معطلی یا شکست اتصال روی کانفیگی که سالم بود. resolve از طریق DoH انجام می‌شود تا به دی‌ان‌اس اپراتور وابسته نباشد، و اگر به هر دلیلی شکست بخورد اتصال دقیقاً مثل قبل انجام می‌شود. نتیجه: دیلی کمتر و نرخ اتصال بالاتر (سرعت دانلود بعد از وصل شدن تغییری نمی‌کند).",
+                            Icons.Default.Dns
+                        ),
+                        ChangelogItem(
                             "دو کانفیگ پیش‌فرض جدید ایران (۷ و ۸)",
                             "برگرفته از نسخه v48 پروژه Serverless-for-Iran و کاملاً بدون تغییر. شش کانفیگ قبلی (نسخه v44) سر جای خودشان ماندند، پس این‌ها اضافه شده‌اند نه جایگزین. در v48 سایت‌هایی که ایران را تحریم کرده‌اند (گیت‌هاب، مایکروسافت، OpenAI و…) مستقیم رد می‌شوند تا IP ایران را ببینند و خراب نشوند، خودِ سرور DNS از یک دامنه تمیز کلادفلر رزولو می‌شود، ترافیک TLS مسیر فرگمنت دومرحله‌ای اختصاصی گرفته، QUIC کاملاً بلاک می‌شود تا یوتیوب/تیک‌تاک روی مسیر مطمئن‌تر بیفتند، رنج‌های صفحه فیلترینگ بلاک شده‌اند، و IPv6 اولویت گرفته است. تفاوت ۷ و ۸ فقط فاصله بین فرگمنت‌هاست (۸ برای شبکه‌هایی که به فاصله کوتاه گیر می‌دهند). توجه: این کانفیگ‌ها حتماً به پورت محلی 10808 نیاز دارند.",
                             Icons.Default.Shield
@@ -783,6 +788,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                 ChangelogVersion(
                     "Version 1.2.1",
                     listOf(
+                        ChangelogItem(
+                            "Faster, more reliable connects by pinning the server IP",
+                            "A config's server domain is now resolved by the app before the core starts and its IPs are pinned into the config, and the connection races several IPs at once, keeping whichever answers first. This matters most for Cloudflare-panel configs, which all point at a Cloudflare domain that resolves to dozens of different IPs, some of which are always slow or blocked from Iran. Previously the core tried those IPs one at a time, so a single bad IP meant seconds of stalling or a failed connect on a config that was perfectly fine. Resolution goes over DoH so it doesn't depend on the ISP's DNS, and if it fails for any reason the connection proceeds exactly as before. Result: lower delay and a higher connect success rate (download speed after connecting is unchanged).",
+                            Icons.Default.Dns
+                        ),
                         ChangelogItem(
                             "Two new built-in Iran configs (#7 and #8)",
                             "Taken from upstream Serverless-for-Iran v48 and shipped completely untouched. The six existing configs (based on v44) stay exactly as they are, so these are additions rather than a replacement. In v48, services that sanction Iran (GitHub, Microsoft, OpenAI, ...) are routed direct so they still see an Iranian IP instead of being broken by the evasion path; the DNS resolver itself is fronted through a clean Cloudflare domain; TLS traffic gets a dedicated two-stage fragment path; QUIC is blocked outright so YouTube/TikTok fall onto the more reliable path; the filter-page IP ranges are blackholed; and IPv6 is now preferred. #7 vs #8 differ only in the delay between fragments (#8 is for networks whose DPI objects to short gaps). Note: these configs require Local Port 10808.",

@@ -419,6 +419,10 @@ class MyVpnService : VpnService() {
                                 Log.e("MyVpnService", "Hybrid: failed to parse tunnel URI")
                                 stopSelf()
                             } else {
+                                // Same pre-resolve as the plain VLESS path below; the hybrid
+                                // config's TCP leg dials the same kind of server domain.
+                                val pinnedHybridHosts =
+                                    com.mlmvpn.scanner.utils.DomainPreResolver.pinnedHostsFor(tunnelConfig)
                                 val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(
                                     config = tunnelConfig,
                                     localPort = localPort,
@@ -436,7 +440,8 @@ class MyVpnService : VpnService() {
                                     gameMode = true,
                                     warpHybrid = warpParams,
                                     dedicatedDnsUrl = dedicatedDnsUrl,
-                                    dedicatedDnsDomains = dedicatedDnsDomains
+                                    dedicatedDnsDomains = dedicatedDnsDomains,
+                                    pinnedHostIps = pinnedHybridHosts
                                 )
                                 currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd)
                                 val success = currentEngine?.start(this@MyVpnService, jsonConfig, localPort) ?: false
@@ -622,6 +627,18 @@ class MyVpnService : VpnService() {
                         
                         Log.d("MyVpnService", "VLESS Config: addr=${config.address}:${config.port} sni=${config.sni} host=${config.wsHost} path=${config.wsPath}")
 
+                        // Resolve the server domain here, before the core starts, and pin the
+                        // answer into the config (see DomainPreResolver). Skipped entirely for a
+                        // bare-IP address, and an empty result just generates the config the old
+                        // way -- so this can never block a connection that would otherwise work.
+                        val pinnedHosts = com.mlmvpn.scanner.utils.DomainPreResolver.pinnedHostsFor(config)
+                        if (pinnedHosts.isNotEmpty()) {
+                            com.mlmvpn.scanner.engines.gst.GstLog.i(
+                                "MyVpnService",
+                                "pre-resolved ${config.address} -> ${pinnedHosts[config.address]?.joinToString()}"
+                            )
+                        }
+
                         // Auto-start RSTA Spoof if this is an SNI config (routes through local RSTA proxy)
                         val isSniConfig = config.address == "127.0.0.1" && config.port == 40443
                         if (isSniConfig) {
@@ -662,7 +679,8 @@ class MyVpnService : VpnService() {
                             useFragment = false,
                             gameMode = isGameMode,
                             dedicatedDnsUrl = dedicatedDnsUrl,
-                            dedicatedDnsDomains = dedicatedDnsDomains
+                            dedicatedDnsDomains = dedicatedDnsDomains,
+                            pinnedHostIps = pinnedHosts
                         )
                         Log.d("MyVpnService", "Xray JSON config generated (${jsonConfig.length} chars)")
                         

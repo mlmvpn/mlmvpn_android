@@ -15,10 +15,11 @@ object XrayJsonGenerator {
         gameMode: Boolean = false,
         warpHybrid: org.json.JSONObject? = null,
         dedicatedDnsUrl: String? = null,
-        dedicatedDnsDomains: List<String> = emptyList()
+        dedicatedDnsDomains: List<String> = emptyList(),
+        pinnedHostIps: Map<String, List<String>> = emptyMap()
     ): String {
         val json = JSONObject()
-        
+
         // Log
         val log = JSONObject()
         // "info" surfaces per-connection dialing / connection-opened / RTT lines in GoLog
@@ -148,6 +149,29 @@ object XrayJsonGenerator {
             streamSettings.put("xhttpSettings", xhttpSettings)
         }
 
+        // The server address was already resolved by DomainPreResolver and its IPs are pinned
+        // into dns.hosts below, so tell the outbound to dial by IP ("ForceIP" resolves through
+        // xray's own DNS, which now answers instantly from that hosts entry -- no lookup on the
+        // connect path) and let happyEyeballs race the pinned addresses instead of walking them
+        // one at a time. That racing is the point: a workers.dev domain resolves to many
+        // Cloudflare edge IPs and some are throttled or dead from Iran at any moment, so trying
+        // the first one serially is what turns into a multi-second stall or a failed connect.
+        //
+        // prioritizeIPv6 stays false and only A records are pinned: plenty of Iranian mobile
+        // networks advertise broken IPv6, and preferring it there would trade one stall for
+        // another.
+        if (pinnedHostIps[config.address]?.isNotEmpty() == true) {
+            streamSettings.put("sockopt", JSONObject().apply {
+                put("domainStrategy", "ForceIP")
+                put("happyEyeballs", JSONObject().apply {
+                    put("tryDelayMs", 300)
+                    put("prioritizeIPv6", false)
+                    put("interleave", 2)
+                    put("maxConcurrentTry", 6)
+                })
+            })
+        }
+
         mainOutbound.put("streamSettings", streamSettings)
         mainOutbound.put("tag", "proxy")
         outbounds.put(mainOutbound)
@@ -191,6 +215,19 @@ object XrayJsonGenerator {
         servers.put("fakedns")
 
         dns.put("servers", servers)
+        // Pin the pre-resolved server IPs. `hosts` is consulted before any entry in `servers`,
+        // which also hardens the outbound against the fakedns entry above ever handing it a
+        // 198.18.x.x fake address for its own server domain.
+        if (pinnedHostIps.isNotEmpty()) {
+            val hostsObj = JSONObject()
+            pinnedHostIps.forEach { (host, ips) ->
+                if (ips.isEmpty()) return@forEach
+                // A single-element array is valid here, but xray accepts a bare string too and
+                // that keeps the generated config easier to read in the log.
+                hostsObj.put(host, if (ips.size == 1) ips[0] else JSONArray().apply { ips.forEach { put(it) } })
+            }
+            if (hostsObj.length() > 0) dns.put("hosts", hostsObj)
+        }
         json.put("dns", dns)
         
         val fakedns = JSONObject()
