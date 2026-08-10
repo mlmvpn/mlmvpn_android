@@ -22,10 +22,12 @@ object XrayJsonGenerator {
 
         // Log
         val log = JSONObject()
-        // "info" surfaces per-connection dialing / connection-opened / RTT lines in GoLog
-        // (needed to diagnose MLM/xhttp lag); "warning" hid them. Drop back to "warning"
-        // once diagnosis is done if the extra log volume is a concern.
-        log.put("loglevel", "info")
+        // Was "info" while diagnosing MLM/xhttp lag, which its own comment said to revert once
+        // done. At "info" the core writes several lines per connection through JNI -- a single
+        // page load is 50-150 connections -- so this was a constant CPU/IO tax on every session
+        // for diagnostics nobody reads in a release build. "warning" is also what upstream
+        // v2rayNG and the Serverless configs default to.
+        log.put("loglevel", "warning")
         json.put("log", log)
 
         // Inbounds
@@ -33,7 +35,10 @@ object XrayJsonGenerator {
         val socksInbound = JSONObject().apply {
             put("port", localPort)
             put("listen", if (allowLan) "0.0.0.0" else "127.0.0.1")
-            put("protocol", "socks")
+            // "mixed" serves SOCKS *and* HTTP on the same port, so an app that only speaks HTTP
+            // proxy can use the Local Port the user was given instead of needing to know about
+            // the second port below. The tag stays "socks" because routing rules reference it.
+            put("protocol", "mixed")
             put("tag", "socks")
             put("settings", JSONObject().apply {
                 put("auth", "noauth")
@@ -67,6 +72,11 @@ object XrayJsonGenerator {
         // connected-country flag fetch have a proxy to reach the internet THROUGH the tunnel.
         // Without it those requests hit a refused 127.0.0.1:<port+10000> (log spam) and the
         // country flag above the connect button never appears -- the regression being fixed here.
+        //
+        // Kept even though the inbound above is now "mixed" and would serve HTTP on localPort
+        // too: localPort+10000 is a convention shared with the GST engine (GstEngine listens
+        // there itself), so the app's probes target it regardless of which engine is connected.
+        // Dropping it here would only work for Xray sessions and break the GST ones.
         val httpInbound = JSONObject().apply {
             put("port", localPort + 10000)
             put("listen", "127.0.0.1")
@@ -366,7 +376,8 @@ object XrayJsonGenerator {
         inbounds.put(JSONObject().apply {
             put("port", localPort)
             put("listen", "127.0.0.1")
-            put("protocol", "socks")
+            // "mixed" (SOCKS + HTTP on one port), same as the main config -- see generateConfig.
+            put("protocol", "mixed")
             put("tag", "socks")
             put("settings", JSONObject().apply { put("auth", "noauth"); put("udp", true) })
             put("sniffing", JSONObject().apply {

@@ -221,6 +221,16 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                     "نسخه 1.2.1",
                     listOf(
                         ChangelogItem(
+                            "پورت محلی حالا هم SOCKS و هم HTTP را قبول می‌کند",
+                            "قبلاً پورت محلی فقط SOCKS بود و برنامه‌هایی که فقط پروکسی HTTP می‌شناسند نمی‌توانستند از آن استفاده کنند. حالا همان «پورت محلی» که در تنظیمات می‌بینید هر دو را قبول می‌کند.",
+                            Icons.Default.SettingsEthernet
+                        ),
+                        ChangelogItem(
+                            "کاهش مصرف CPU و باتری با کم کردن حجم لاگ هسته",
+                            "سطح لاگ هسته برای عیب‌یابی یک مشکل قدیمی بالا برده شده بود و یادش رفته بود پایین بیاید. در آن حالت هسته برای هر اتصال چند خط لاگ می‌نوشت و باز کردن یک صفحه ساده ۵۰ تا ۱۵۰ اتصال دارد — یعنی مصرف دائمی پردازنده و نوشتن روی حافظه در تمام مدت اتصال، برای اطلاعاتی که در نسخه نهایی به کار کسی نمی‌آید.",
+                            Icons.Default.BatteryChargingFull
+                        ),
+                        ChangelogItem(
                             "سبک‌تر شدن تست دیلی واقعی",
                             "تست دیلی برای هر کانفیگ یک نمونه‌ی تازه از هسته بالا می‌آورد (در یک لاگ زنده ۱۵ بار در ۶ ثانیه) و به هر کدام کانفیگ کامل اتصال داده می‌شد: سرورهای DNS، استخر fake-DNS، کل جدول روتینگ و یک درگاه محلی دوم — که هیچ‌کدام در اندازه‌گیری یک آدرس استفاده نمی‌شوند. ضمناً همه‌ی تست‌ها یک پورت محلی ثابت می‌گرفتند، پس تست‌های هم‌زمان همه یک پورت را توصیف می‌کردند؛ حالا هر تست پورت خودش را می‌گیرد. تست سلامت اسکنر و تست دیلی اسکنر کلودفلر هم به همین مسیر منتقل شدند. اگر این سبک‌سازی به هر دلیلی جواب نداد، همان کانفیگ کامل قبلی استفاده می‌شود تا تست خراب نشود.",
                             Icons.Default.Timer
@@ -798,6 +808,16 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                 ChangelogVersion(
                     "Version 1.2.1",
                     listOf(
+                        ChangelogItem(
+                            "The local port now accepts both SOCKS and HTTP",
+                            "The local port used to be SOCKS-only, so apps that only speak HTTP proxy couldn't use it. The same Local Port you see in Settings now accepts either.",
+                            Icons.Default.SettingsEthernet
+                        ),
+                        ChangelogItem(
+                            "Lower CPU and battery use from less core logging",
+                            "The core's log level had been raised to debug an old issue and never lowered again. At that level the core wrote several lines per connection, and opening a single page is 50-150 connections -- constant CPU and storage use for the whole session, for information nobody reads in a release build.",
+                            Icons.Default.BatteryChargingFull
+                        ),
                         ChangelogItem(
                             "Lighter real-delay test",
                             "The delay test starts a fresh core per config (15 times in 6 seconds in one live log) and each was handed the full connection config: DNS servers, the fake-DNS pool, the whole routing table and a second local inbound -- none of which a single-URL measurement uses. Every test also took the same fixed local port, so concurrent tests all described the same port; each now gets its own. The scanner's health test and the Cloudflare scanner's delay test moved onto the same path. If the trimming ever fails, the previous full config is used so the test can't break because of it.",
