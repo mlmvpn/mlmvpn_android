@@ -47,16 +47,21 @@ internal suspend fun IncomingManager.trySendTCPKeepAlive() {
 internal suspend fun IncomingManager.trySendUDPKeepAlive() {
     if (System.currentTimeMillis() > nextUDPKeepAlive) {
         bridge.udpTerminal!!.sendData(ByteBuffer.allocate(0))
+        kittoku.mvc.debug.Telemetry.udpKeepAlivesSent.incrementAndGet()
 
         nextUDPKeepAlive = System.currentTimeMillis() + UDP_KEEP_ALIVE_MIN_INTERVAL + bridge.random.nextInt(UDP_KEEP_ALIVE_INTERVAL_DIFF)
     }
 }
 
 internal suspend fun IncomingManager.trySendUDPInquireNATT() {
+    // The rendezvous host may never have resolved (see initializeNATTAddress). That only costs
+    // NAT-T assistance, so skip the inquiry and leave the direct UDP path running.
+    val natt = bridge.udpAccelerationConfig!!.nattAddress ?: return
+
     if (System.currentTimeMillis() > nextUDPInquireNATT) {
         DatagramPacket(
             "B".toByteArray(Charsets.US_ASCII),
-            1, bridge.udpAccelerationConfig!!.nattAddress, UDP_NATT_PORT
+            1, natt, UDP_NATT_PORT
         ).also {
             bridge.udpTerminal!!.sendPacket(it)
         }

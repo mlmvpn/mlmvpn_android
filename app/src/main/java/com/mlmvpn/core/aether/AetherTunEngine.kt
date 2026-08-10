@@ -289,7 +289,11 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
             fragment = o.optBoolean("fragment", false),
             fragmentSize = if (o.has("fragmentSize")) o.optInt("fragmentSize") else null,
             fragmentDelay = if (o.has("fragmentDelay")) o.optInt("fragmentDelay") else null,
-            noize = o.optString("noize", "firewall"),
+            // Empty default, NOT "firewall": that name only exists in MASQUE's profile table.
+            // Forcing it on a WireGuard run made aethernoize fall through to balanced and
+            // silently discard whatever the user actually picked. Empty lets AetherOptions
+            // resolve the right default for the protocol.
+            noize = o.optString("noize", ""),
             keepalive = o.optInt("keepalive", 5),
             noProfileRetry = o.optBoolean("noProfileRetry", false),
             quickReconnect = o.optBoolean("quickReconnect", true),
@@ -333,6 +337,11 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
             AetherScan.TURBO -> 45_000L
             AetherScan.BALANCED -> 120_000L
             AetherScan.THOROUGH -> 300_000L
+            // Ironclad's own deadline is also 180s, but every candidate costs a real tunnel
+            // and real traffic (prober.rs:200 — 15s per probe, 3 successes required, no early
+            // exit), so it reaches that deadline far more often than stealth does. Listed
+            // explicitly rather than left to `else` so it is obvious this was considered.
+            AetherScan.IRONCLAD -> 180_000L
             else -> 180_000L
         } + TIMEOUT_HEADROOM_MS
 
@@ -355,6 +364,49 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
          * Serialize options into the String that IVpnEngine.start carries. Tagged with
          * `type` so MyVpnService can route it the same way it routes GST configs.
          */
+        /**
+         * The Aether profile the Game tab uses, for BOTH the AUTO race and the explicit
+         * "Aether" button.
+         *
+         * It lives here rather than in GameBoosterManager because it was previously written
+         * out twice — once in the manager for the race and once inline in GameTab for the
+         * button — and the two had already drifted: the button path shipped plain MASQUE/TURBO
+         * and never picked up any game tuning at all. One definition, both call sites.
+         *
+         * Tuned for latency rather than throughput:
+         *  - **h3 (QUIC), never h2.** MASQUE over HTTP/2 is TCP, so the game's UDP would ride
+         *    inside a reliable ordered stream: one lost packet head-of-line-blocks every
+         *    packet behind it, and the tunnel's retransmits fight the game's own. HTTP/3 keeps
+         *    datagrams as datagrams the whole way.
+         *  - **TURBO scanning, despite this being the latency-sensitive path.** BALANCED and
+         *    IRONCLAD were both tried here first, on the reasoning that a booster should rank
+         *    endpoints by RTT rather than take the first hit. Device logs on a filtered line
+         *    say otherwise: IRONCLAD fails 100% of candidates ("tunnel exited before
+         *    data-plane validation" — it builds a real tunnel per candidate and the network
+         *    kills each one), and BALANCED found its single working candidate 4s in, then
+         *    spent the remaining 118s of its deadline hunting for six that do not exist. On a
+         *    network where roughly one endpoint in three hundred survives, ranking is a
+         *    fiction — there is nothing to rank. TURBO reaches the same endpoint in seconds.
+         *  - **`light` obfuscation.** Anything heavier prepends junk to every datagram, which
+         *    on a 60-tick game loop is latency and bandwidth spent on the hot path. `light`
+         *    still disguises the handshake, which is what DPI fingerprints.
+         *  - **5s keepalive.** Carrier NATs drop idle UDP mappings in as little as 30s, and a
+         *    dropped mapping mid-match costs a full reconnect.
+         */
+        fun buildGameConfig(
+            protocol: AetherProtocol = AetherProtocol.MASQUE,
+            scan: AetherScan = AetherScan.TURBO,
+        ): String = buildConfig(
+            AetherOptions(
+                protocol = protocol,
+                scan = scan,
+                transport = "h3",
+                noize = "light",
+                keepalive = 5,
+                ipFamily = AetherIp.V4,
+            )
+        )
+
         fun buildConfig(opts: AetherOptions): String = JSONObject().apply {
             put("type", CONFIG_TYPE)
             put("protocol", opts.protocol.name)

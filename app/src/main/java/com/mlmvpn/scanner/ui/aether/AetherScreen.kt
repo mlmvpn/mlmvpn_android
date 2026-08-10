@@ -127,7 +127,22 @@ fun AetherScreen() {
     var wgRetry by remember { mutableStateOf(true) }
     var keepalive by remember { mutableStateOf(5) }
 
-    // Shared
+    // Shared.
+    //
+    // TURBO for every protocol.
+    //
+    // IRONCLAD was briefly the WireGuard default here, on the reasoning that it verifies a
+    // real data plane per candidate and so cannot pick a peer that handshakes and then
+    // carries nothing. Device logs killed that idea: on a filtered Iranian line EVERY
+    // ironclad candidate fails with "tunnel exited before data-plane validation" — it builds
+    // a full tunnel per candidate and the network tears each one down before the HTTP check
+    // can run, for MASQUE and WireGuard alike. A mode that never returns an endpoint is worse
+    // than one that occasionally picks a bad one, so it stays available but never automatic.
+    //
+    // The same logs also show BALANCED is a poor default here: it found its one and only
+    // working candidate 4s into the scan and then burned the remaining 118s of its deadline
+    // looking for the six it will never find. TURBO takes that same endpoint and is connected
+    // in seconds.
     var scanMode by remember { mutableStateOf(AetherScan.TURBO) }
     var ipFamily by remember { mutableStateOf(AetherIp.V4) }
     var quick by remember { mutableStateOf(true) }
@@ -181,8 +196,21 @@ fun AetherScreen() {
     /** A run the user ended themselves must not be "recovered" from. */
     var userStopped by remember { mutableStateOf(false) }
 
+    /**
+     * True only for a session THIS screen started.
+     *
+     * The engine is a process-wide singleton, so this screen's state collector also sees
+     * sessions the Game tab starts — a device log caught it reacting to a Game-tab WireGuard
+     * boost while still holding its own stale context (`tab=MASQUE transport=h2
+     * triedH2=true`). The auto-retry below can call resetIdentity() and doConnect(); firing
+     * either against someone else's session would wipe the identity mid-boost and redial with
+     * the wrong protocol. Ownership is the guard.
+     */
+    var screenOwnsSession by remember { mutableStateOf(false) }
+
     fun doConnect() {
         userStopped = false
+        screenOwnsSession = true
         val opts = AetherOptions(
             protocol = activeTab,
             scan = scanMode,
@@ -252,7 +280,8 @@ fun AetherScreen() {
                 "transport=$transport tab=$activeTab triedH2=$triedH2Fallback triedId=$triedIdentityReset"
         )
         wasRunning = state.running
-        if (!ended || state.connected || userStopped) return@LaunchedEffect
+        // screenOwnsSession: never "recover" a session another screen started — see its doc.
+        if (!ended || state.connected || userStopped || !screenOwnsSession) return@LaunchedEffect
 
         when {
             // Cloudflare accepted the TLS connection and refused the session: the stored
@@ -342,8 +371,12 @@ fun AetherScreen() {
             running = state.running,
             onOpenAdvanced = { showAdvanced = true },
             onReset = {
-                val n = engine.resetIdentity()
-                Toast.makeText(context, "هویت‌ها پاک شد ($n فایل)", Toast.LENGTH_SHORT).show()
+                // Spell out the split. "۲ فایل" after a single connect reads like the app
+                // enrolled twice; "۱ هویت + ۱ حافظه‌ی سرور" says what actually happened.
+                val r = engine.resetIdentityDetailed()
+                val msg = if (r.total == 0) "چیزی برای پاک کردن نبود"
+                          else "${r.identities} هویت و ${r.caches} حافظه‌ی سرور پاک شد"
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             },
         )
 
@@ -493,11 +526,19 @@ private fun QuickSettings(
         QuickRow("حالت اسکن") {
             MiniSegmented(
                 // The enum's displayFa is a full sentence — fine in a dropdown, far too long
-                // for a segment. These are the same three modes, named short.
+                // for a segment. Same modes, named short.
+                //
+                // IRONCLAD is offered but never defaulted. It is the only mode that pushes
+                // real traffic through each candidate before accepting it, which is the right
+                // idea — but it does so by building a full tunnel per candidate, and on a
+                // filtered line the network tears each one down before the check completes,
+                // so every candidate fails and the scan returns nothing. Useful on a clean
+                // connection, useless on the ones this app exists for.
                 options = listOf(
                     AetherScan.TURBO.name to "توربو",
                     AetherScan.BALANCED.name to "متعادل",
                     AetherScan.THOROUGH.name to "کامل",
+                    AetherScan.IRONCLAD.name to "تضمینی",
                 ),
                 selected = scan.name,
                 enabled = !running,

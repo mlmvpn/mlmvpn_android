@@ -71,7 +71,9 @@ class AetherScanService : Service() {
                     transport = intent.getStringExtra(EXTRA_TRANSPORT) ?: "h3",
                     fragment = intent.getBooleanExtra(EXTRA_FRAGMENT, false),
                     keepalive = intent.getIntExtra(EXTRA_KEEPALIVE, 5),
-                    noize = intent.getStringExtra(EXTRA_NOIZE) ?: "firewall",
+                    // See AetherOptions.noize: "firewall" is a MASQUE-only profile name and
+                    // is silently ignored by WireGuard. Empty = the protocol's own default.
+                    noize = intent.getStringExtra(EXTRA_NOIZE) ?: "",
                     quickReconnect = intent.getBooleanExtra(EXTRA_QUICK, true),
                     verbose = intent.getBooleanExtra(EXTRA_VERBOSE, false),
                 )

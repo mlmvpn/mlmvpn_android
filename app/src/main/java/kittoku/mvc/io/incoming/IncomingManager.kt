@@ -1,6 +1,7 @@
 package kittoku.mvc.io.incoming
 
 import kittoku.mvc.SharedBridge
+import kittoku.mvc.debug.Telemetry
 import kittoku.mvc.client.ARPClient
 import kittoku.mvc.client.DhcpClient
 import kittoku.mvc.client.SoftEtherClient
@@ -87,6 +88,10 @@ internal class IncomingManager(internal val bridge: SharedBridge) {
                     }
 
                     if (isToMePacket(buffer, bridge.assignedIpAddress) && !isDhcpPacket(buffer)) {
+                        // Counted here rather than inside processDataPacket(), which serves
+                        // both channels and would attribute UDP arrivals to TCP.
+                        Telemetry.tcpRxBytes.addAndGet(frameSize.toLong())
+                        Telemetry.tcpRxFrames.incrementAndGet()
                         processDataPacket(frameSize, buffer)
                         return@repeat
                     }

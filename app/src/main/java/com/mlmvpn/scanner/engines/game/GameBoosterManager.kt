@@ -26,6 +26,50 @@ class GameBoosterManager(private val context: Context) {
         private const val PING_DEGRADED_MS = 250L
         private const val PING_FAIL_THRESHOLD = 3
 
+        /** Pref keys for the Game tab's Aether choices. */
+        const val PREF_AETHER_PROTOCOL = "aether_protocol"
+        const val PREF_AETHER_SCAN = "aether_scan"
+
+        /**
+         * Scan mode for the Game tab's Aether boost. TURBO by default: it takes the first
+         * endpoint that passes, which on a filtered line is realistically the only one that
+         * will pass at all, and it gets there in seconds instead of two minutes. BALANCED is
+         * offered for users on a cleaner line, where several endpoints do survive and picking
+         * the lowest-RTT one is a real win for ping.
+         *
+         * IRONCLAD is deliberately NOT offered here: device logs show it failing every
+         * candidate on a filtered line, and a boost button that never completes is worse than
+         * one that picks an imperfect endpoint.
+         */
+        fun gameAetherScan(context: Context): com.mlmvpn.core.aether.AetherScan =
+            when (
+                context.getSharedPreferences("game_booster_prefs", Context.MODE_PRIVATE)
+                    .getString(PREF_AETHER_SCAN, null)
+            ) {
+                "BALANCED" -> com.mlmvpn.core.aether.AetherScan.BALANCED
+                else -> com.mlmvpn.core.aether.AetherScan.TURBO
+            }
+
+        /**
+         * Which Aether protocol the Game tab runs.
+         *
+         * MASQUE unless the user opted into WireGuard. WireGuard is the lower-overhead data
+         * plane of the two — no HTTP framing on the datagram path — so where it works it
+         * should measure better for gaming, which is exactly why it is worth being able to
+         * pick. It is opt-in rather than default because it is also the mode with the
+         * endpoint-selection weakness documented on
+         * [com.mlmvpn.core.aether.AetherProtocol], and a boost button should not default to
+         * the mode that might silently carry nothing.
+         */
+        fun gameAetherProtocol(context: Context): com.mlmvpn.core.aether.AetherProtocol =
+            when (
+                context.getSharedPreferences("game_booster_prefs", Context.MODE_PRIVATE)
+                    .getString(PREF_AETHER_PROTOCOL, null)
+            ) {
+                "WG" -> com.mlmvpn.core.aether.AetherProtocol.WG
+                else -> com.mlmvpn.core.aether.AetherProtocol.MASQUE
+            }
+
         // AETHER RTT signal for the AUTO race: a plain TCP probe to Cloudflare's anycast edge.
         // Aether itself has no fixed host -- it discovers a healthy WARP-pool endpoint at connect
         // time -- so there is nothing meaningful to "connect and measure" the way the old UAE
@@ -103,22 +147,15 @@ class GameBoosterManager(private val context: Context) {
             return dnsResult
         }
 
-        // UAE-Dedicated-DNS-only mode: same shape as Cloudflare DNS but resolved through our own
-        // UAE DoH server (item ج). Until that endpoint is live, testUaeDnsOnly() returns null and
-        // we surface FAILED so the user knows the UAE DNS server isn't ready yet.
+        // UAE_DNS is retired: the UAE server it resolved through has been shut down, so there
+        // is no endpoint left to talk to. Removed from the UI and from the AUTO race; the enum
+        // value survives only so persisted selections and exhaustive when-branches still
+        // compile, exactly as with DIRECT/TUNNEL/WARP. A stored selection lands here and is
+        // reported as unavailable rather than silently testing a dead host.
         if (mode == BoostMode.UAE_DNS) {
-            Log.d("GameBoosterManager", "--- UAE Dedicated DNS only mode ---")
-            coroutineContext.ensureActive()
-            val uaeResult = testUaeDnsOnly(server)
-            if (uaeResult != null) {
-                bestResult.value = uaeResult
-                allResults.value = listOf(uaeResult)
-                boosterState.value = BoosterState.IDLE
-            } else {
-                Log.d("GameBoosterManager", "UAE DNS only mode failed -- endpoint not available yet.")
-                boosterState.value = BoosterState.FAILED
-            }
-            return uaeResult
+            Log.w("GameBoosterManager", "UAE_DNS is retired (server decommissioned) — treating as unavailable")
+            boosterState.value = BoosterState.FAILED
+            return null
         }
 
         try {
@@ -153,21 +190,9 @@ class GameBoosterManager(private val context: Context) {
                 }
             }
 
-            // --- Candidate 2: UAE Dedicated DNS (our own server) ---
-            // Depends on item (ج): the DoH resolver on the UAE server. testUaeDnsOnly() returns null
-            // until that endpoint is wired, so AUTO simply skips it for now without failing.
-            if (mode == BoostMode.AUTO) {
-                Log.d("GameBoosterManager", "--- AUTO: Testing UAE Dedicated DNS ---")
-                coroutineContext.ensureActive()
-                val uaeDns = testUaeDnsOnly(server)
-                if (uaeDns != null) {
-                    results.add(uaeDns)
-                    allResults.value = results.sortedBy { it.pingMs }
-                    Log.d("GameBoosterManager", "AUTO UAE DNS: ping=${uaeDns.pingMs}ms (${uaeDns.details})")
-                } else {
-                    Log.d("GameBoosterManager", "AUTO UAE DNS: endpoint not available yet -- skipped.")
-                }
-            }
+            // Candidate 2 used to be the UAE Dedicated DNS resolver. That server has been
+            // decommissioned, so the candidate is gone from the race entirely — testing a host
+            // that no longer answers only added a timeout to every AUTO run.
 
             // --- Candidate 3: Aether (coarse Cloudflare-reachability RTT, no real gateway scan) ---
             // Aether has no fixed host to connect-and-measure the way the old UAE WireGuard trial
@@ -412,50 +437,6 @@ class GameBoosterManager(private val context: Context) {
     }
 
     /**
-     * UAE Dedicated DNS (item ج): resolve the game hostnames through our OWN DoH resolver on the
-     * UAE server, then build the same local pass-through DNS-boost Xray config as Cloudflare DNS.
-     *
-     * STUB: returns null until the UAE server's DoH endpoint (TCP 443, item ج) is deployed and its
-     * URL wired in here. Kept as a real seam so AUTO and the explicit UAE_DNS mode already call it;
-     * once ج lands, fill in the resolve-via-UAE-DoH + generateDnsBoostConfig body (mirror
-     * testDedicatedDnsOnly, mode = BoostMode.UAE_DNS, nodeId = "uae_dns_only").
-     */
-    private suspend fun testUaeDnsOnly(server: GameServer): BoostResult? {
-        // Resolve each game hostname through our own pinned UAE resolver (UaeDnsResolver), then pin
-        // the returned IPs as static hosts for the whole session -- same local pass-through DNS-boost
-        // VPN as the Cloudflare path, but Xray talks to no DoH here (it can't pin our self-signed
-        // cert), so we pass staticHosts only and leave dedicatedDnsUrl null.
-        val hostToIps = linkedMapOf<String, List<String>>()
-        for (endpoint in server.testEndpoints) {
-            val resolved = UaeDnsResolver.resolve(endpoint)
-            if (resolved.isNotEmpty()) hostToIps[endpoint] = resolved
-        }
-        val ips = hostToIps.values.flatten().toSet()
-        if (ips.isEmpty()) {
-            Log.w("GameBoosterManager", "UAE DNS only: resolver returned no IPs (server down or pin mismatch)")
-            return null
-        }
-        val (avgPing, jitter) = GamePingTester.averagePing(ips.toList(), server.port, proxyPort = null)
-        val cfg = XrayJsonGenerator.generateDnsBoostConfig(
-            localPort = 10808,
-            dnsServers = emptyList(), // real fallback resolvers (1.1.1.1/8.8.8.8) added by the generator
-            dedicatedDnsUrl = null,
-            dedicatedDnsDomains = server.testEndpoints,
-            staticHosts = hostToIps
-        )
-        Log.d("GameBoosterManager", "UAE DNS only: ping=${avgPing}ms over ${ips.size} IPs")
-        return BoostResult(
-            mode = BoostMode.UAE_DNS,
-            pingMs = if (avgPing > 0) avgPing else 0L,
-            jitterMs = if (avgPing > 0) jitter else 0L,
-            nodeId = "uae_dns_only",
-            nodeName = "DNS امارات",
-            nodeUri = cfg,
-            details = "DNS اختصاصی امارات"
-        )
-    }
-
-    /**
      * Aether latency signal for the AUTO race. Unlike the old UAE WireGuard trial, Aether has no
      * single fixed host to probe -- it picks a healthy endpoint from Cloudflare's WARP pool itself,
      * dynamically, at connect time (see [com.mlmvpn.core.aether.AetherEngine]). Running a real scan
@@ -491,19 +472,130 @@ class GameBoosterManager(private val context: Context) {
     }
 
     /**
-     * Builds the JSON config MyVpnService dispatches on to start a full-device Aether tunnel
-     * (see [com.mlmvpn.core.aether.AetherTunEngine], routed by MyVpnService whenever
-     * `type == "aether"`). MASQUE/TURBO mirrors the app's default Aether settings: MASQUE is the
-     * only protocol that reliably carries traffic today, and TURBO connects to the first healthy
-     * endpoint instead of holding out for the best one, which is the right trade-off for a boost
-     * button the user expects to react in seconds, not minutes.
+     * Measure and publish the un-boosted baseline ping for [server].
+     *
+     * runBoostTest() does this inline as part of its flow, but the Game tab's Aether button
+     * never goes through runBoostTest — it assembles its own BoostResult and connects straight
+     * away — so [originalPing] stayed at its -1 sentinel and the comparison card permanently
+     * read "نامشخص (مسدود)". Exposed separately so that path can call it explicitly.
+     *
+     * MUST be called before the tunnel comes up, or it measures the tunnel rather than the
+     * line it is supposed to be the baseline for.
      */
-    private fun buildAetherConfig(): String = com.mlmvpn.core.aether.AetherTunEngine.buildConfig(
-        com.mlmvpn.core.aether.AetherOptions(
-            protocol = com.mlmvpn.core.aether.AetherProtocol.MASQUE,
-            scan = com.mlmvpn.core.aether.AetherScan.TURBO,
+    suspend fun measureBaselinePing(server: GameServer) {
+        val (ping, _) = GamePingTester.averagePing(
+            endpoints = server.testEndpoints,
+            port = server.port,
+            proxyPort = null,
         )
-    )
+        originalPing.value = if (ping > 0) ping else -1L
+        Log.d("GameBoosterManager", "Baseline ping (pre-boost): ${originalPing.value}ms")
+    }
+
+    /** Live Persian description of what the Aether boost is doing, for the button/progress UI. */
+    val boostProgress = MutableStateFlow<String?>(null)
+
+    private var aetherWatchJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Follow the Aether engine to a real verdict and publish it.
+     *
+     * The engine already exposes exactly the right signal — [com.mlmvpn.core.aether.AetherState]
+     * carries the connect stage, its Persian label, and a `connected` flag that is only true
+     * once the SOCKS listener is up behind a validated data plane. This mirrors it onto
+     * [boosterState] / [boostProgress] so the Game tab can show the same stage list the Aether
+     * screen does instead of a green button that means nothing.
+     *
+     * The timeout matches the scan mode's own budget plus headroom, so a legitimately slow
+     * «متعادل» sweep is not cut off early.
+     */
+    private fun awaitAetherBoost() {
+        val engine = com.mlmvpn.core.aether.AetherEngine.get(context)
+        val budgetMs = when (gameAetherScan(context)) {
+            com.mlmvpn.core.aether.AetherScan.BALANCED -> 180_000L
+            else -> 90_000L
+        }
+
+        aetherWatchJob?.cancel()
+        aetherWatchJob = kotlinx.coroutines.CoroutineScope(Dispatchers.Default).launch {
+            val startedAt = System.currentTimeMillis()
+            boostProgress.value = "در حال راه‌اندازی موتور…"
+
+            // The engine has NOT started yet when this runs.
+            //
+            // connectWithBestResult only asks MyVpnService to start; the service spins the
+            // engine up on its own thread ~300ms later. Until then engine.state still holds
+            // the PREVIOUS session's terminal value — STOPPED — and the terminal check below
+            // matched it instantly, declaring the boost failed 3ms after the tap. The engine
+            // then started and connected normally, so the user saw a dead button on the first
+            // tap and a "VPN already running" conflict on the second.
+            //
+            // Terminal states are therefore ignored until this session has been observed
+            // running at least once. If that never happens the loop still ends, via the
+            // startup deadline below rather than by trusting stale state.
+            var engineSeenRunning = false
+            val startupDeadlineMs = 20_000L
+
+            while (System.currentTimeMillis() - startedAt < budgetMs) {
+                val s = engine.state.value
+                if (s.running) engineSeenRunning = true
+
+                if (!engineSeenRunning) {
+                    if (System.currentTimeMillis() - startedAt > startupDeadlineMs) {
+                        Log.w("GameBoosterManager", "aether engine never started within ${startupDeadlineMs}ms")
+                        boostProgress.value = null
+                        boosterState.value = BoosterState.FAILED
+                        return@launch
+                    }
+                    boostProgress.value = "در حال راه‌اندازی موتور…"
+                    delay(250)
+                    continue
+                }
+
+                if (s.connected) {
+                    Log.i("GameBoosterManager",
+                        "aether boost connected after ${System.currentTimeMillis() - startedAt}ms " +
+                            "server=${s.server} rtt=${s.rtt}")
+                    boostProgress.value = null
+                    boosterState.value = BoosterState.BOOSTED
+                    return@launch
+                }
+
+                // A terminal engine state means there is nothing left to wait for. Reporting
+                // it immediately beats letting the user stare at a spinner until the timeout.
+                if (!s.running && s.stage != com.mlmvpn.core.aether.AetherStage.IDLE &&
+                    s.stage != com.mlmvpn.core.aether.AetherStage.STARTING
+                ) {
+                    Log.w("GameBoosterManager", "aether boost ended without connecting: ${s.stage} ${s.stageFa}")
+                    boostProgress.value = null
+                    boosterState.value = BoosterState.FAILED
+                    return@launch
+                }
+
+                // The engine's own Persian stage label, so the Game tab and the Aether screen
+                // never disagree about what is happening.
+                boostProgress.value = s.stageFa
+                delay(500)
+            }
+
+            Log.w("GameBoosterManager", "aether boost timed out after ${budgetMs}ms")
+            boostProgress.value = null
+            boosterState.value = BoosterState.FAILED
+        }
+    }
+
+    /**
+     * Config for the Game tab's Aether boost. The profile itself (h3, scan mode, light
+     * obfuscation, short keepalive) lives in AetherTunEngine.buildGameConfig, which the
+     * explicit Aether button also calls — one definition, both call sites.
+     */
+    private fun buildAetherConfig(): String {
+        val protocol = gameAetherProtocol(context)
+        val scan = gameAetherScan(context)
+        Log.i("GameBoosterManager", "aether game profile: protocol=${protocol.env} scan=${scan.env}")
+        return com.mlmvpn.core.aether.AetherTunEngine.buildGameConfig(protocol, scan)
+    }
+
 
     private suspend fun testDirectBoost(server: GameServer): BoostResult? {
         // Highest priority: the user's own Dedicated DNS worker (ECS region-steered). If it
@@ -701,7 +793,11 @@ class GameBoosterManager(private val context: Context) {
         // once = SIGABRT). Legitimate mode switches and the 5s health-monitor fallback are unaffected.
         val now = System.currentTimeMillis()
         if (now - lastConnectAt < 2000) {
+            // Silent before, which meant a swallowed tap was indistinguishable from a broken
+            // button. The state is restored so the UI cannot be left mid-spinner over a connect
+            // that was never started.
             Log.w("GameBoosterManager", "connectWithBestResult ignored: debounced (too soon after previous connect)")
+            if (boosterState.value == BoosterState.CONNECTING) boosterState.value = BoosterState.IDLE
             return
         }
         lastConnectAt = now
@@ -767,22 +863,43 @@ class GameBoosterManager(private val context: Context) {
             // selections and exhaustive when-branches don't break. Both are no-ops here.
             BoostMode.AUTO, BoostMode.WARP -> {}
             BoostMode.AETHER -> {
-                // Aether is a full-device tunnel (TUN -> tun2proxy -> the Aether process's local
-                // SOCKS5, routed by MyVpnService whenever the config's "type" is "aether" -- see
-                // AetherTunEngine). Only NODE_URI + NODE_ID needed; no GAME_MODE / dedicated-DNS
-                // extras -- those turn on MyVpnService's game-mode routing + monitors, which fight
-                // a tunnel that owns its own TUN, the same reason the old WireGuard trial path
-                // avoided them. result.nodeUri is always set by this point ([buildAetherConfig]
-                // in the AUTO race, or built directly in GameTab for the explicit AETHER mode) --
-                // unlike the old WireGuard trial, Aether needs no separately-issued trial config.
-                Log.d("GameBoosterManager", "AETHER mode selected. Starting full-device Aether tunnel.")
+                // Aether routes TUN -> tun2proxy -> the Aether process's local SOCKS5 (dispatched
+                // by MyVpnService whenever the config's "type" is "aether" -- see AetherTunEngine).
+                //
+                // GAME_MODE / GAME_PACKAGE are now passed. They were previously omitted on the
+                // grounds that game-mode routing "fights a tunnel that owns its own TUN", but
+                // that is not what they do here: Aether's openTun callback calls the very same
+                // setupVpn(), and the only thing the game-mode prefs change inside it is the
+                // Builder gaining addAllowedApplication(gamePackage). Without them a boost meant
+                // routing the ENTIRE device through Cloudflare — every background app, every
+                // download — which is both slower for the game and not what a per-game booster
+                // is supposed to do. With them, only the selected game crosses the tunnel.
+                //
+                // The dedicated-DNS extras stay off: those drive Xray config generation, which
+                // has no part in this path.
+                Log.d("GameBoosterManager", "AETHER mode selected. Tunnelling only $gamePackage.")
                 val intent = Intent(context, MyVpnService::class.java).apply {
                     putExtra("NODE_URI", result.nodeUri)
                     putExtra("NODE_ID", result.nodeId)
+                    putExtra("GAME_MODE", true)
+                    putExtra("GAME_PACKAGE", gamePackage)
                 }
                 context.startService(intent)
 
-                boosterState.value = BoosterState.BOOSTED
+                // CONNECTING, not BOOSTED.
+                //
+                // Every other mode here reaches its destination the moment startService()
+                // returns, because a DNS boost or an Xray config is live as soon as the
+                // service is up. Aether is not: startService() only kicks off identity
+                // enrolment and a gateway scan that takes anywhere from 4 seconds on a cached
+                // endpoint to over two minutes on a cold «متعادل» sweep. Announcing BOOSTED
+                // there was simply false — the button went green while the scan had not even
+                // begun, and the user's traffic was still going out untouched.
+                //
+                // awaitAetherBoost() below watches the engine's own state and publishes the
+                // real answer when there is one.
+                boosterState.value = BoosterState.CONNECTING
+                awaitAetherBoost()
                 antiDpiRotationJob?.cancel()
                 antiDpiRotationJob = null
             }

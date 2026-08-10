@@ -43,7 +43,10 @@ enum class BoostMode {
     TUNNEL,        // (retired) Tunnel Turbo (VLESS/Trojan)
     WARP,          // (retired) WARP خودکار — سیستم چندموتوره (usque/warp-plus)
     DEDICATED_DNS, // DNS اختصاصی کلادفلر (ورکر شخصی + انتخاب کشور)
-    UAE_DNS,       // DNS اختصاصی امارات — روی سرور خودمان (رایگان/نامحدود)
+    // (retired) DNS اختصاصی امارات. The UAE server behind it was decommissioned, so the mode is
+    // gone from the UI and from the AUTO race. The value stays only so persisted selections and
+    // exhaustive when-branches keep compiling, same as DIRECT/TUNNEL/WARP above.
+    UAE_DNS,
     AETHER,        // موتور Aether — تونل کامل دستگاه (MASQUE/WireGuard/WARP-in-WARP)، بدون سرور ثابت
     AUTO           // Auto — بهترین بین کلادفلر/امارات/Aether بر اساس پینگ واقعی
 }

@@ -1,6 +1,7 @@
 package kittoku.mvc.teminal
 
 import kittoku.mvc.SharedBridge
+import kittoku.mvc.debug.Telemetry
 import kittoku.mvc.extension.move
 import kittoku.mvc.extension.padZeroByte
 import kittoku.mvc.extension.toIntAsUShort
@@ -74,16 +75,37 @@ internal class UDPTerminal(private val bridge: SharedBridge) {
     private val regexPort = Regex(UDP_NATT_PORT_REGEX)
 
     init {
+        // Bind to a REAL underlying interface, never a tunnel one.
+        //
+        // The original took the first non-loopback IPv4 address the enumeration happened to
+        // yield. On Android that set includes any live tun/ppp interface — this app's own VPN
+        // among them once a session is re-established. Binding the acceleration socket to the
+        // tunnel's own address pins the source address inside the tunnel, which no amount of
+        // VpnService.protect() can undo (protect fixes routing, not the bound source), so the
+        // datagrams either loop or never leave. Skipping tunnel interfaces makes the choice
+        // deterministic, and logging it means a wrong choice is visible instead of inferred.
         val address = run {
+            val candidates = mutableListOf<Pair<String, Inet4Address>>()
             NetworkInterface.getNetworkInterfaces().iterator().forEach { nic ->
                 nic.inetAddresses.iterator().forEach {
                     if (it is Inet4Address && !it.isAnyLocalAddress && !it.isLinkLocalAddress && !it.isLoopbackAddress) {
-                        return@run it
+                        candidates.add(nic.name to it)
                     }
                 }
             }
 
-            throw Exception("There is no available IP address.")
+            android.util.Log.d(
+                Telemetry.TAG,
+                "udp bind candidates: " + candidates.joinToString { "${it.first}=${it.second.hostAddress}" }
+            )
+
+            val physical = candidates.firstOrNull { (name, _) ->
+                !name.startsWith("tun") && !name.startsWith("ppp") && !name.startsWith("dummy")
+            }
+
+            (physical ?: candidates.firstOrNull())?.also {
+                android.util.Log.i(Telemetry.TAG, "udp bind chosen: ${it.first}=${it.second.hostAddress}")
+            }?.second ?: throw Exception("There is no available IP address.")
         }
 
         socket = DatagramSocket(0, address)
@@ -188,12 +210,13 @@ internal class UDPTerminal(private val bridge: SharedBridge) {
             return null
         }
 
-        if (incomingPacket.address == config.nattAddress) {
+        if (config.nattAddress != null && incomingPacket.address == config.nattAddress) {
             processNATTInformation()
             return null
         }
 
         if (incomingPacket.length < UDP_SOFTETHER_HEADER_SIZE) {
+            Telemetry.udpDropShort.incrementAndGet()
             return null
         }
 
@@ -203,17 +226,26 @@ internal class UDPTerminal(private val bridge: SharedBridge) {
             IvParameterSpec(incomingPacket.data, 0, CHACHA20_POLY1305_NONCE_SIZE)
         )
 
-        serverCipher.doFinal(
-            incomingPacket.data,
-            CHACHA20_POLY1305_NONCE_SIZE,
-            incomingPacket.length - CHACHA20_POLY1305_NONCE_SIZE,
-            decryptBuffer.array()
-        ).also {
-            decryptBuffer.position(0)
-            decryptBuffer.limit(it)
+        // A ChaCha20-Poly1305 tag mismatch throws. Left uncaught it kills the whole receive
+        // coroutine on the first corrupted or spoofed datagram, taking the UDP channel down
+        // with it and leaving no trace of why.
+        try {
+            serverCipher.doFinal(
+                incomingPacket.data,
+                CHACHA20_POLY1305_NONCE_SIZE,
+                incomingPacket.length - CHACHA20_POLY1305_NONCE_SIZE,
+                decryptBuffer.array()
+            ).also {
+                decryptBuffer.position(0)
+                decryptBuffer.limit(it)
+            }
+        } catch (e: Exception) {
+            Telemetry.udpDropDecrypt.incrementAndGet()
+            return null
         }
 
         if (decryptBuffer.int != config.clientCookie) {
+            Telemetry.udpDropCookie.incrementAndGet()
             return null
         }
 
@@ -225,6 +257,7 @@ internal class UDPTerminal(private val bridge: SharedBridge) {
             config.serverCurrentPort = incomingPacket.port
         } else {
             if (lastReceivedServerTick - serverTick >= UDP_PACKET_AVAILABLE_TIME) {
+                Telemetry.udpDropStale.incrementAndGet()
                 return null
             }
         }
@@ -235,19 +268,33 @@ internal class UDPTerminal(private val bridge: SharedBridge) {
             lastReceivedTick = currentTime
         }
 
-        config.status = if (currentTime - lastReceivedTick > UDP_KEEP_ALIVE_TIMEOUT) {
+        val newStatus = if (currentTime - lastReceivedTick > UDP_KEEP_ALIVE_TIMEOUT) {
             UDPStatus.CLOSED
         } else {
             UDPStatus.OPEN
         }
+        if (newStatus != config.status) {
+            Telemetry.logStatusChange(
+                config.status.name, newStatus.name,
+                "peer=${config.serverCurrentAddress?.hostAddress}:${config.serverCurrentPort}"
+            )
+        }
+        config.status = newStatus
+        Telemetry.udpStatus = newStatus.name
 
         val realDataSize = decryptBuffer.short.toIntAsUShort()
 
         decryptBuffer.move(1) // ignore flag
 
+        // Keep-alives carry no payload. They are counted separately because a stream of them
+        // with no data is precisely the "connected but carrying nothing" state.
         if (realDataSize <= 0) {
+            Telemetry.udpKeepAlivesRecv.incrementAndGet()
             return null
         }
+
+        Telemetry.udpRxBytes.addAndGet(realDataSize.toLong())
+        Telemetry.udpRxPackets.incrementAndGet()
 
         decryptBuffer.limit(decryptBuffer.position() + realDataSize)
 

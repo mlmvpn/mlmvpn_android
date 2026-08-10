@@ -25,6 +25,7 @@ class NodeManager private constructor(context: Context) {
         /** Built-in configs that must never be deletable by any UI path. */
         fun isProtected(node: VpnNode): Boolean = node.id.startsWith("default_mlmvpn_")
     }
+    private val appContext: Context = context.applicationContext
     private val prefs: SharedPreferences = context.getSharedPreferences("vpn_nodes_prefs", Context.MODE_PRIVATE)
     
     var nodes: MutableList<VpnNode> = java.util.Collections.synchronizedList(mutableListOf<VpnNode>())
@@ -210,6 +211,32 @@ class NodeManager private constructor(context: Context) {
                 engineType = "Manual",
                 groupTitle = IRAN_GROUP
             ))
+        }
+
+        // Configs #7/#8 are the upstream Serverless-for-Iran v48 files (@patterniha), shipped
+        // byte-for-byte as assets and injected untouched -- their whole value is in NOT being
+        // edited by us. They differ from the v44-derived profiles above in strategy, not just
+        // parameters: whitelisted geosites (github/openai/microsoft/...) go direct so
+        // sanctioned services still see an Iranian IP, DoH is domain-fronted via
+        // challenges.cloudflare.com, TLS gets a dedicated two-stage fragment outbound, QUIC is
+        // blocked outright instead of noised, and the filter-page ranges are blackholed.
+        // low vs high delay differ only in the inter-fragment `delays` array.
+        // If an asset ever fails to load we simply skip it, so #1-#6 stay intact as a fallback.
+        listOf(
+            Triple("serverless_v48_low_delay.json",  "کانفیگ ایران ۷ (جدید) — سرورلس v48 دیلی کم",  7),
+            Triple("serverless_v48_high_delay.json", "کانفیگ ایران ۸ (جدید) — سرورلس v48 دیلی بالا", 8)
+        ).forEach { (asset, label, num) ->
+            try {
+                val raw = appContext.assets.open(asset).bufferedReader().use { it.readText() }
+                nodes.add(num - 1, VpnNode(
+                    id = "default_mlmvpn_$num",
+                    name = label,
+                    uri = raw,
+                    type = "JSON",
+                    engineType = "Manual",
+                    groupTitle = IRAN_GROUP
+                ))
+            } catch (_: Exception) { }
         }
     }
 }

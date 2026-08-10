@@ -32,8 +32,26 @@ data class AetherOptions(
     val noProfileRetry: Boolean = false,           // AETHER_WG_NO_PROFILE_RETRY
     val staleSecs: Int = 120,                      // AETHER_WG_STALE_SECS
 
-    /** Obfuscation: firewall | balanced | off | aggressive | light. */
-    val noize: String = "firewall",
+    /**
+     * Obfuscation profile.
+     *
+     * There are TWO separate profile tables in the engine and they do not accept the same
+     * names:
+     *   - MASQUE reads noize.rs, whose set includes "firewall" (and defaults to it).
+     *   - WireGuard and gool read aethernoize.rs, whose set is off | light | balanced |
+     *     aggressive. It has NO "firewall", and its `from_profile` silently falls through to
+     *     balanced for anything it does not recognise.
+     *
+     * A single hardcoded "firewall" was therefore a no-op on WireGuard: the user could pick
+     * "aggressive" in the UI and still get balanced, because the value was overwritten before
+     * it reached the engine. Empty means "let the protocol's own default apply", which
+     * [toEnv] resolves.
+     */
+    val noize: String = "",
+
+    /** WG / gool data-plane validation and reconnect timeouts (Windows parity). */
+    val wgValidateSecs: Int? = null,               // AETHER_WG_VALIDATE_SECS
+    val wgReconnectSecs: Int? = null,              // AETHER_WG_RECONNECT_SECS
 
     val quickReconnect: Boolean = true,            // AETHER_QUICK_RECONNECT
     val verbose: Boolean = false,                  // RUST_LOG=debug
@@ -69,7 +87,15 @@ data class AetherOptions(
         out["AETHER_IP"] = ipFamily.env
         out["AETHER_QUICK_RECONNECT"] = if (quickReconnect) "1" else "0"
         out["AETHER_CONFIG"] = "$dataDir/aether.toml"
-        if (noize.isNotEmpty()) out["AETHER_NOIZE"] = noize
+        // Resolve against the right table for this protocol (see the `noize` doc). Sending a
+        // MASQUE-only name to WireGuard silently degrades to balanced and makes the setting
+        // look broken; sending nothing at all lets each protocol use its own default.
+        val resolvedNoize = when {
+            noize.isNotEmpty() -> noize
+            protocol == AetherProtocol.MASQUE -> "firewall"
+            else -> "balanced"
+        }
+        out["AETHER_NOIZE"] = resolvedNoize
 
         if (protocol == AetherProtocol.MASQUE) {
             if (transport == "h2") out["AETHER_MASQUE_HTTP2"] = "1"
@@ -100,6 +126,8 @@ data class AetherOptions(
             // healthy tunnel reconnecting every 12s and never carrying a single request.
             // Verified on device: at 120s the same endpoint loads pages normally.
             out["AETHER_WG_STALE_SECS"] = staleSecs.toString()
+            wgValidateSecs?.let { out["AETHER_WG_VALIDATE_SECS"] = it.toString() }
+            wgReconnectSecs?.let { out["AETHER_WG_RECONNECT_SECS"] = it.toString() }
         }
         if (!peer.isNullOrBlank()) out["AETHER_PEER"] = peer
         if (!wgPeer.isNullOrBlank()) out["AETHER_WG_PEER"] = wgPeer
@@ -120,26 +148,29 @@ enum class AetherProtocol(
     val env: String,
     val displayFa: String,
     /**
-     * Whether the protocol gets a tab. Both non-MASQUE modes are hidden today:
+     * Whether the protocol gets a tab.
      *
-     *   - gool: its inner tunnel talks to the same Cloudflare edge as the outer one, which
-     *     the edge drops, so it never carries traffic.
-     *   - wg: the tunnel handshakes and the UI goes green, but the peer never returns any
-     *     data; the core's own watchdog gives up on a ~123s cycle
-     *     ("wireguard tunnel stale: no valid data from peer; reconnecting") and reconnects
-     *     forever. Curiously the wg_prober's handshake + data-plane check passes on the
-     *     very same endpoint, so the fault is between the prober and the live tunnel —
-     *     unresolved, and not diagnosable from this repo: the shipped libaether.so carries
-     *     that watchdog but aether-src/ does not.
+     * WireGuard is visible again. The note that used to sit here said the stale watchdog was
+     * "not diagnosable from this repo: the shipped libaether.so carries that watchdog but
+     * aether-src/ does not" — that was simply wrong. It is `wireguard.rs:292-308`, and
+     * reading it explains the reported behaviour:
      *
-     * The engine paths stay in place so either can be re-enabled once fixed upstream.
-     * MASQUE is the only mode that actually carries traffic, so it is the only tab; TabRow
-     * hides itself entirely while that is true.
+     *   - `last_valid_rx` advances on ANY decapsulated packet, so the watchdog firing means
+     *     literally nothing decryptable arrived from the peer.
+     *   - The cheap handshake probe the scan uses can succeed against an endpoint whose data
+     *     plane is then dropped, which is exactly the reported "prober passes, live tunnel
+     *     carries nothing". [AetherScan.IRONCLAD] is the mode built for that case and was
+     *     never exposed on Android — it is now.
+     *   - The stage parser never matched the watchdog's own log line, so the UI stayed green
+     *     for the entire stale/reconnect cycle and the failure was invisible.
+     *
+     * gool stays hidden: its inner tunnel dials the same Cloudflare edge as the outer one and
+     * the edge drops it. That is an upstream property, not something this layer can fix.
      */
     val userVisible: Boolean = true,
 ) {
     MASQUE("masque", "MASQUE"),
-    WG("wg", "WireGuard", userVisible = false),
+    WG("wg", "WireGuard"),
     // Single-language label: the other two tabs are plain English, and the bilingual form
     // wrapped onto two lines and made the tab row look broken.
     WARP_IN_WARP("gool", "WARP-in-WARP", userVisible = false);
@@ -156,7 +187,18 @@ enum class AetherScan(val env: String, val displayFa: String) {
     THOROUGH("thorough", "کامل — کندتر، بهترین پینگ"),
 
     /** Slow and quiet — emission rate capped. Good for adversarial DPI. */
-    STEALTH("stealth", "مخفی — آرام و بی‌سروصدا");
+    STEALTH("stealth", "مخفی — آرام و بی‌سروصدا"),
+
+    /**
+     * Builds a REAL tunnel to each candidate and pushes real traffic through it before
+     * accepting it (prober.rs:200 — 15s per probe, 3 successes, no early exit).
+     *
+     * The engine has always supported this; Android simply never exposed it. That omission
+     * mattered most for WireGuard, whose failure mode is precisely a candidate that passes
+     * the cheap handshake probe and then carries nothing once it is the live tunnel — which
+     * is the case the other four modes cannot detect and this one is built to.
+     */
+    IRONCLAD("ironclad", "تضمینی — تست واقعی عبور داده روی هر سرور (کندترین)");
 }
 
 enum class AetherIp(val env: String, val displayFa: String) {

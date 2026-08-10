@@ -44,6 +44,9 @@ class SoftEtherEngine : IVpnEngine {
         /** SoftEther's SSL-VPN listener. 443 is the one VPN Gate always publishes. */
         private const val SSL_PORT = 443
 
+        /** Outer UDP datagram size for the acceleration channel. See the use site for why 1400. */
+        private const val UDP_OUTER_MTU = 1400
+
         /**
          * The client negotiates in three stages — SoftEther, DHCP, ARP — each with its own
          * 30 s budget. Anything under 90 s can cut the attempt off before the stage that is
@@ -98,12 +101,25 @@ class SoftEtherEngine : IVpnEngine {
                 // UDP acceleration is the user's call, and off by default.
                 //
                 // It is SoftEther's answer to TCP-in-TCP and is markedly faster where UDP gets
-                // through. On the network this was developed against it negotiates (UDP_STATUS
-                // reaches OPEN) and then carries nothing at all — 100% loss pinging 8.8.8.8,
-                // DNS stops resolving — so it cannot be the default. It also puts the data
-                // plane on a second, non-TLS channel, which is more conspicuous.
+                // through. It also puts the data plane on a second, non-TLS channel, which is
+                // more conspicuous — hence opt-in rather than automatic.
+                //
+                // The "negotiates then carries nothing" behaviour previously recorded here was
+                // not the network refusing UDP. It was OutgoingManager's UDP branch failing to
+                // return its buffer to the pool, so the tun reader starved after 32 packets
+                // while keep-alives kept the channel looking healthy. See the note there.
                 putBoolean(MvcPreference.UDP_ENABLE_ACCELERATION.name, udpAcceleration)
-                if (udpAcceleration) putString(MvcPreference.ETHERNET_MTU.name, "1500")
+
+                // 1400, not 1500. This value is the OUTER datagram size: SharedBridge derives
+                // the inner MTU from it by subtracting IPv4 + UDP + SoftEther + nonce + tag +
+                // Ethernet headers, so a full inner frame produces a wire packet of exactly
+                // this many bytes. At 1500 that is the theoretical Ethernet maximum with no
+                // room left, and any path with a smaller MTU — PPPoE at 1492, most mobile
+                // carriers at 1400-1450 — fragments or silently drops every full-size packet
+                // while small ones sail through. The result looks like random slowness rather
+                // than an MTU problem. 1400 clears every common path; the ~7% smaller payload
+                // costs far less than one retransmit per large packet.
+                if (udpAcceleration) putString(MvcPreference.ETHERNET_MTU.name, UDP_OUTER_MTU.toString())
                 putBoolean(MvcPreference.LOG_DO_SAVE_LOG.name, false)
             }.commit()
 

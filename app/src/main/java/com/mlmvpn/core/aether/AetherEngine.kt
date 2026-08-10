@@ -162,6 +162,20 @@ class AetherEngine private constructor(
         }
         log("[AETHER] SOCKS محلی: 127.0.0.1:$socksPort")
 
+        // Unconditional, and to logcat rather than only the in-app buffer: when a session has
+        // to be diagnosed from a logcat dump, the FIRST question is always "what was the
+        // engine actually told to do" — and the answer is not the UI state, it is the resolved
+        // environment. Protocol-specific defaults (noize, transport) are applied inside
+        // toEnv(), so reading the options object is not the same as reading this.
+        Log.i(PERF_TAG, "──────── aether session start ────────")
+        Log.i(PERF_TAG, "protocol=${options.protocol.env} scan=${options.scan.env} " +
+            "transport=${options.transport} ip=${options.ipFamily.env} socks=$socksPort")
+        env.filterKeys { it.startsWith("AETHER_") || it == "RUST_LOG" }
+            .toSortedMap()
+            .forEach { (k, v) -> Log.i(PERF_TAG, "  $k=$v") }
+        sessionStartedAt = System.currentTimeMillis()
+        startTelemetry()
+
         // Each stream on its own coroutine so a stall on one cannot pin the other. Read
         // line-by-line and dispatch into the parser. Lines that match the noise regex are
         // counted, not logged: at debug RUST_LOG level the engine emits thousands of them
@@ -305,12 +319,37 @@ class AetherEngine private constructor(
             // at most, and they are the ones that answer "where did the connect get stuck".
             if (!mirrorToLogcat) Log.i(tag, text)
             val (stage, fa) = rule
-            _state.value = _state.value.copy(stage = stage, stageFa = fa,
+
+            // Drop late progress lines that would move the UI backwards.
+            //
+            // The engine's tasks log independently, so "masque tunnel validated" can arrive
+            // after "socks5 server listening" even though it happened first. Applying it
+            // verbatim pushed a live tunnel from CONNECTED back to VALIDATE, and since
+            // `connected` is strictly `stage == CONNECTED`, the session then reported itself
+            // disconnected with its SOCKS port open and the TUN never opened. Only an explicit
+            // loss signal may move us back — see AetherStage.isRegression.
+            val cur = _state.value.stage
+            val stale = stage.progressRank in 0 until cur.progressRank && !stage.isRegression
+            if (stale) {
+                Log.d(PERF_TAG, "ignoring out-of-order stage $stage (already at $cur): $text")
+            }
+
+            // Detail is applied either way: a line can be stale as a STAGE and still carry the
+            // freshest server/rtt/profile we have seen. Only the stage itself is suppressed.
+            _state.value = _state.value.copy(
+                stage = if (stale) cur else stage,
+                stageFa = if (stale) _state.value.stageFa else fa,
                 server = detail.server ?: _state.value.server,
                 rtt = detail.rtt ?: _state.value.rtt,
                 profile = detail.profile ?: _state.value.profile,
                 socks = detail.socks ?: _state.value.socks,
-                connected = stage == AetherStage.CONNECTED || _state.value.connected,
+                // `|| _state.value.connected` used to be here, which made the flag one-way:
+                // once CONNECTED, no later stage could ever clear it. A tunnel that went
+                // stale and dropped back to scanning kept a green UI, kept tun2proxy dialling
+                // a SOCKS port with nothing behind it, and reported success while carrying
+                // nothing — the WireGuard "connects but no traffic" report is partly this.
+                // Any stage other than CONNECTED means the data path is gone; say so.
+                connected = (if (stale) cur else stage) == AetherStage.CONNECTED,
             )
         } else if (detail.server != null || detail.rtt != null || detail.profile != null || detail.socks != null) {
             // Not a stage change but the user wants to see something moving.
@@ -378,6 +417,9 @@ class AetherEngine private constructor(
      */
     fun stop() {
         val claimed = stopping.compareAndSet(false, true)
+        telemetryJob?.cancel()
+        telemetryJob = null
+        lastLoggedStage = null
         val proc = processRef.getAndSet(null)
         if (proc != null) {
             try { proc.destroy() } catch (_: Exception) {}
@@ -409,19 +451,44 @@ class AetherEngine private constructor(
     }
 
     /** Drop stored identities so the next start provisions fresh Cloudflare accounts. */
-    fun resetIdentity(): Int {
-        var removed = 0
+    fun resetIdentity(): Int = resetIdentityDetailed().total
+
+    /**
+     * Result of a reset, split by what the files actually were.
+     *
+     * The plain count was alarming and looked like a bug: one MASQUE session leaves TWO .toml
+     * files behind and the old message called all of them "identities", so a single connect
+     * appeared to have enrolled twice. It had not. The engine derives sibling paths from
+     * AETHER_CONFIG (main.rs `derive_sibling_path`), so a data dir accumulates:
+     *
+     *   aether-masque.toml           MASQUE identity
+     *   aether-masque-lastconn.toml  last known-good MASQUE gateway (a cache, not an account)
+     *   aether.toml                  WireGuard identity
+     *   aether-lastconn.toml         last known-good WireGuard endpoint
+     *   aether-secondary.toml        the inner identity, gool only
+     *
+     * Which is exactly why the count reads 2 after using one protocol and 5 after using all
+     * three. Reporting the split makes that legible instead of suspicious.
+     */
+    data class ResetResult(val identities: Int, val caches: Int) {
+        val total: Int get() = identities + caches
+    }
+
+    fun resetIdentityDetailed(): ResetResult {
+        var identities = 0
+        var caches = 0
         try {
             val dir = File(context.filesDir, "aether/data")
             if (dir.exists()) {
                 dir.listFiles()?.forEach { f ->
-                    if (f.name.endsWith(".toml")) {
-                        try { f.delete(); removed++ } catch (_: Exception) {}
+                    if (f.name.endsWith(".toml") && f.delete()) {
+                        if (f.name.contains("lastconn")) caches++ else identities++
                     }
                 }
             }
         } catch (_: Exception) {}
-        return removed
+        Log.i(PERF_TAG, "identity reset: $identities identity file(s), $caches gateway cache(s)")
+        return ResetResult(identities, caches)
     }
 
     /**
@@ -456,9 +523,77 @@ class AetherEngine private constructor(
         scope.cancel()
     }
 
+    // ── Session telemetry ───────────────────────────────────────────────────────────────
+    //
+    // One line every two seconds under its own tag, so a whole session can be captured with
+    // `adb logcat -s AetherPerf:*` and read end to end without the app's other chatter.
+    //
+    // What it exists to answer, in order of how often it comes up:
+    //   - did the stage ever reach CONNECTED, and did it STAY there (a value that flips back
+    //     to scan/reconnect is the tunnel dying and re-forming — invisible before this)
+    //   - which endpoint was chosen, and at what RTT
+    //   - is the SOCKS port actually accepting connections, or is it "connected" on paper only
+    //   - how many candidates were rejected and for what reason, aggregated
+
+    @Volatile private var sessionStartedAt = 0L
+    private var telemetryJob: kotlinx.coroutines.Job? = null
+    private var lastLoggedStage: String? = null
+
+    private fun startTelemetry() {
+        telemetryJob?.cancel()
+        telemetryJob = scope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(2000)
+                val s = _state.value
+                if (!s.running && s.stage != AetherStage.STARTING) break
+
+                val up = (System.currentTimeMillis() - sessionStartedAt) / 1000
+                val socksUp = socksPortAnswers()
+                val fails = synchronized(probeFailures) {
+                    probeFailures.entries.sortedByDescending { it.value }
+                        .take(3).joinToString { "${it.key}×${it.value}" }
+                }
+
+                Log.d(
+                    PERF_TAG,
+                    "t=${up}s stage=${s.stage} connected=${s.connected} socksOpen=$socksUp " +
+                        "server=${s.server ?: "-"} rtt=${s.rtt ?: "-"} profile=${s.profile ?: "-"}" +
+                        (if (fails.isNotEmpty()) " rejected[$fails]" else "")
+                )
+
+                // A stage change is the single most important event in a session; call it out
+                // separately so it survives any later log truncation.
+                if (s.stage.name != lastLoggedStage) {
+                    Log.i(PERF_TAG, ">>> stage ${lastLoggedStage ?: "-"} -> ${s.stage} (${s.stageFa}) at ${up}s")
+                    lastLoggedStage = s.stage.name
+                }
+
+                // "Connected" while nothing listens on the SOCKS port is the exact shape of a
+                // tunnel that reports success and carries nothing. Name it rather than leaving
+                // it to be inferred from two fields.
+                if (s.connected && !socksUp) {
+                    Log.w(PERF_TAG, "MISMATCH: state says connected but 127.0.0.1:$AETHER_SOCKS_PORT " +
+                        "refuses connections — nothing can actually route through this tunnel")
+                }
+            }
+            Log.i(PERF_TAG, "──────── aether session end ────────")
+        }
+    }
+
+    /** Cheap liveness probe: can anything connect to the engine's SOCKS listener right now? */
+    private fun socksPortAnswers(): Boolean = try {
+        java.net.Socket().use {
+            it.connect(java.net.InetSocketAddress("127.0.0.1", AETHER_SOCKS_PORT), 300)
+            true
+        }
+    } catch (_: Exception) { false }
+
     companion object {
         const val AETHER_SOCKS_PORT = 20810
         const val TAG = "AetherEngine"
+
+        /** Dedicated logcat tag for session telemetry: `adb logcat -s AetherPerf:*`. */
+        const val PERF_TAG = "AetherPerf"
         private const val MAX_LOG_BUFFER = 2000
 
         @Volatile private var INSTANCE: AetherEngine? = null

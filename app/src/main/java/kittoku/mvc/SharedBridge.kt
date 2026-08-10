@@ -80,7 +80,10 @@ internal class UDPAccelerationConfig(random: SecureRandom) {
     internal lateinit var serverKey: SecretKey
 
     private val nattHostname: String
-    internal lateinit var nattAddress: Inet4Address
+    // Nullable, not lateinit. The lookup is now allowed to fail or to still be running when
+    // the session starts, and `lateinit` would turn either into an
+    // UninitializedPropertyAccessException at the first incoming datagram.
+    internal var nattAddress: Inet4Address? = null
 
     internal val validServerPorts: List<Int>
         get() = mutableListOf<Int>().also {
@@ -121,8 +124,31 @@ internal class UDPAccelerationConfig(random: SecureRandom) {
         nattHostname = "x${hex[0]}.x${hex[1]}.dev.servers.nat-traversal.softether-network.net"
     }
 
-    internal fun initializeNATTAddress() {
-        nattAddress = Inet4Address.getByName(nattHostname) as Inet4Address
+    /**
+     * Resolve the NAT-traversal rendezvous host.
+     *
+     * This is a blocking DNS lookup for a random four-label hostname under
+     * softether-network.net, and it sat directly on the connect path: measured at 6.6s of a
+     * 14s connect, purely because the name is uncached and the resolver is being reached
+     * through a censored path. UDP acceleration does not depend on it — NAT-T only helps when
+     * both ends are behind NAT and the direct endpoint from the SoftEther session fails — so
+     * a slow or failed lookup must not delay, let alone abort, the connection.
+     *
+     * Returns true if the address is now known. A false simply means NAT-T assistance is
+     * unavailable this session; the direct UDP path is unaffected.
+     */
+    internal fun initializeNATTAddress(): Boolean {
+        return try {
+            nattAddress = Inet4Address.getByName(nattHostname) as Inet4Address
+            true
+        } catch (e: Exception) {
+            android.util.Log.w(
+                kittoku.mvc.debug.Telemetry.TAG,
+                "NAT-T host $nattHostname did not resolve (${e.javaClass.simpleName}); " +
+                    "continuing without NAT-T assistance"
+            )
+            false
+        }
     }
 }
 

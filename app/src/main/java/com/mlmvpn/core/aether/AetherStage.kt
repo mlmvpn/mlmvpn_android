@@ -34,6 +34,45 @@ enum class AetherStage(val fa: String) {
     FAILED("خطا"),
     CRASHED("کرش موتور");
 
+    /**
+     * Position along the happy path, or -1 for stages that are not on it.
+     *
+     * Needed because the engine's log lines DO NOT always arrive in causal order. `quic.rs`
+     * emits "masque tunnel validated" from the tunnel task while `main.rs` emits "socks5 server
+     * listening" from another; either can reach the pipe first. Observed both ways on the same
+     * device — the validated line landing 12ms AFTER the socks line dragged the stage from
+     * CONNECTED back to VALIDATE, and because `connected` is now strictly `stage == CONNECTED`
+     * (it used to be sticky, which hid this) the tunnel reported itself disconnected forever
+     * while its SOCKS port was wide open. The UI sat on "اعتبارسنجی عبور داده" and the TUN was
+     * never opened.
+     *
+     * A stage may therefore only move BACKWARD along this path via [isRegression] — an
+     * explicit loss-of-tunnel signal — never via a late progress line.
+     */
+    val progressRank: Int
+        get() = when (this) {
+            STARTING -> 0
+            IDENTITY -> 1
+            QUICKCHECK -> 2
+            SCAN -> 3
+            SELECTED -> 4
+            HANDSHAKE -> 5
+            TUNNEL -> 6
+            VALIDATE -> 7
+            CONNECTED -> 8
+            else -> -1
+        }
+
+    /**
+     * Does reaching this stage mean the tunnel was genuinely lost or never happened?
+     *
+     * These are the only transitions allowed to move the UI backwards. The engine always emits
+     * one of them before it restarts a connect cycle ("MASQUE tunnel closed; reconnecting"
+     * precedes the fresh hunt), so a real reconnect still walks the steps from the top.
+     */
+    val isRegression: Boolean
+        get() = this == RECONNECTING || this == FAILED || this == CRASHED || this == STOPPED
+
     /** Collapse semantics: provision≈identity, reconnecting≈tunnel, terminal stages don't advance. */
     fun forUi(): String? = when (this) {
         STARTING -> "identity"
@@ -118,6 +157,21 @@ object AetherStageParser {
             AetherStage.FAILED, "هیچ اندپوینت سالمی پیدا نشد"),
         Triple(Regex("""handshake failed""", RegexOption.IGNORE_CASE),
             AetherStage.FAILED, "دست‌دادن ناموفق"),
+
+        // The WireGuard watchdog (wireguard.rs:302) and its wrapper in main.rs. Neither line
+        // contains the word "reconnect", so the rule above walked straight past both — the
+        // stage stayed CONNECTED through the entire stale/rescan cycle and the only visible
+        // symptom was a green tunnel carrying nothing. This is THE line to watch for the WG
+        // mode: it names the peer and how long it had been silent.
+        Triple(Regex("""no valid data from peer|tunnel considered dead|wireguard tunnel stale""", RegexOption.IGNORE_CASE),
+            AetherStage.RECONNECTING, "پاسخی از سرور نرسید — اتصال مجدد"),
+        Triple(Regex("""no usable.*endpoint found""", RegexOption.IGNORE_CASE),
+            AetherStage.SCAN, "اندپوینت سالمی پیدا نشد — اسکن مجدد"),
+        Triple(Regex("""last known-good .* no longer responds|rescanning|scanning fresh""", RegexOption.IGNORE_CASE),
+            AetherStage.SCAN, "اسکن مجدد"),
+        // Catch-all, last: everything specific above keeps its own wording.
+        Triple(Regex("""tunnel (closed|ended|exited)""", RegexOption.IGNORE_CASE),
+            AetherStage.RECONNECTING, "تونل قطع شد — اتصال مجدد"),
     )
 
     // Per-packet chatter that drops to ~zero diagnostic value at debug level. Counting

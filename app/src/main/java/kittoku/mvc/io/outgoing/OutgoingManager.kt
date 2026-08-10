@@ -2,6 +2,7 @@ package kittoku.mvc.io.outgoing
 
 import androidx.preference.PreferenceManager
 import kittoku.mvc.SharedBridge
+import kittoku.mvc.debug.Telemetry
 import kittoku.mvc.extension.move
 import kittoku.mvc.preference.MvcPreference
 import kittoku.mvc.preference.accessor.setStringPrefValue
@@ -14,6 +15,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 
 
@@ -41,6 +43,23 @@ internal class OutgoingManager(internal val bridge: SharedBridge) {
     private val retrieveChannel = Channel<ByteBuffer>(BUFFER_POOL_SIZE)
     private val freeBuffers = Channel<ByteBuffer>(BUFFER_POOL_SIZE)
 
+    // Channel has no size query, and the pool running dry is the single most useful thing to
+    // see in a log when the tunnel stalls — so the count is tracked alongside it. Every path
+    // that returns a buffer goes through recycle(), which is also what makes a missing return
+    // visible instead of silent.
+    private val freeCount = AtomicInteger(0)
+
+    private suspend fun recycle(buffer: ByteBuffer) {
+        freeBuffers.send(buffer)
+        Telemetry.poolFree = freeCount.incrementAndGet()
+    }
+
+    private suspend fun takeFree(): ByteBuffer {
+        val b = freeBuffers.receive()
+        Telemetry.poolFree = freeCount.decrementAndGet()
+        return b
+    }
+
     internal fun launchJobMain() {
         jobMain = bridge.scope.launch(bridge.handler) {
             val minCapacity = TCP_SOFTETHER_HEADER_SIZE + ETHERNET_MAX_MTU
@@ -60,7 +79,26 @@ internal class OutgoingManager(internal val bridge: SharedBridge) {
                     }
 
                     if (currentUDPStatus == UDPStatus.OPEN) {
+                        val size = firstPacket.remaining()
                         bridge.udpTerminal!!.sendData(firstPacket)
+                        // THE buffer MUST go back to the pool here.
+                        //
+                        // Every other path returns it; this one used to `continue` straight
+                        // past. jobRetrieve takes a buffer out of `freeBuffers` before each
+                        // read from the tun, so with a 32-buffer pool the 33rd outgoing packet
+                        // found the pool empty and blocked there forever. The result was a VPN
+                        // that negotiated UDP, reported OPEN, kept answering keep-alives (they
+                        // allocate their own buffer and never touch the pool) and moved no user
+                        // traffic whatsoever — "UDP is on, nothing works; turn it off and it
+                        // works". Turning UDP off avoided it because the TCP branch below
+                        // always returned its buffers.
+                        //
+                        // sendData() has already copied the bytes into its own encrypt buffer
+                        // by the time it returns, so recycling here cannot corrupt the frame
+                        // in flight.
+                        recycle(firstPacket)
+                        Telemetry.udpTxBytes.addAndGet(size.toLong())
+                        Telemetry.udpTxPackets.incrementAndGet()
                         continue
                     }
                 }
@@ -68,18 +106,22 @@ internal class OutgoingManager(internal val bridge: SharedBridge) {
                 // finally TCP connection is needed
                 mainBuffer.clear()
                 mainBuffer.move(Int.SIZE_BYTES)
+                var payload = firstPacket.remaining().toLong()
                 addOutGoingPacket(firstPacket)
-                freeBuffers.send(firstPacket)
+                recycle(firstPacket)
                 var frameNum = 1
 
                 while (mainBuffer.remaining() >= minCapacity) {
                     val polled = retrieveChannel.tryReceive().getOrNull() ?: break
+                    payload += polled.remaining().toLong()
                     addOutGoingPacket(polled)
-                    freeBuffers.send(polled)
+                    recycle(polled)
                     frameNum += 1
                 }
 
                 sendOutgoingPacket(frameNum)
+                Telemetry.tcpTxBytes.addAndGet(payload)
+                Telemetry.tcpTxFrames.addAndGet(frameNum.toLong())
             }
         }
     }
@@ -87,10 +129,10 @@ internal class OutgoingManager(internal val bridge: SharedBridge) {
     internal fun launchJobRetrieve() {
         jobRetrieve = bridge.scope.launch(bridge.handler) {
             val bufferSize = bridge.internalEthernetMTU + ETHERNET_HEADER_SIZE
-            repeat(BUFFER_POOL_SIZE) { freeBuffers.send(ByteBuffer.allocate(bufferSize)) }
+            repeat(BUFFER_POOL_SIZE) { recycle(ByteBuffer.allocate(bufferSize)) }
 
             while (isActive) {
-                val buffer = freeBuffers.receive()
+                val buffer = takeFree()
                 bridge.ipTerminal!!.retrievePacket(buffer)
                 retrieveChannel.send(buffer)
             }

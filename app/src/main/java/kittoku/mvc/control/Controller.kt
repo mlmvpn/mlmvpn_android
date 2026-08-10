@@ -11,13 +11,18 @@ import kittoku.mvc.client.DHCP_NEGOTIATION_TIMEOUT
 import kittoku.mvc.client.DhcpClient
 import kittoku.mvc.client.SOFTETHER_NEGOTIATION_TIMEOUT
 import kittoku.mvc.client.SoftEtherClient
+import kittoku.mvc.debug.Telemetry
 import kittoku.mvc.debug.assertAlways
 import kittoku.mvc.io.incoming.IncomingManager
 import kittoku.mvc.io.outgoing.OutgoingManager
 import kittoku.mvc.preference.MvcPreference
 import kittoku.mvc.preference.accessor.setBooleanPrefValue
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -44,7 +49,25 @@ internal class Controller(private val bridge: SharedBridge) {
             logWriter = LogWriter(bridge)
         }
 
+        Telemetry.reset()
+        android.util.Log.i(
+            Telemetry.TAG,
+            "session start: udpAccel=${bridge.udpAccelerationConfig != null} " +
+                "innerMTU=${bridge.internalEthernetMTU} maxFrame=${bridge.maxInternalFrameSize}"
+        )
+
         launchJobMain()
+    }
+
+    private var jobTelemetry: Job? = null
+
+    private fun launchJobTelemetry() {
+        jobTelemetry = bridge.scope.launch(bridge.handler) {
+            while (isActive) {
+                delay(2000)
+                Telemetry.report()
+            }
+        }
     }
 
     private fun launchJobMain() {
@@ -54,8 +77,23 @@ internal class Controller(private val bridge: SharedBridge) {
 
             bridge.attachTCPTerminal()
 
-            bridge.udpAccelerationConfig?.also {
-                it.initializeNATTAddress()
+            bridge.udpAccelerationConfig?.also { config ->
+                // Resolve the NAT-T host CONCURRENTLY, not before continuing. Measured at 6.6s
+                // of a 14s connect on a censored resolver, for a lookup whose result is not
+                // needed until the first NAT-T inquiry — and not needed at all when the direct
+                // endpoint works, which is the common case. trySendUDPInquireNATT() skips
+                // itself until the address lands.
+                bridge.scope.launch(bridge.handler) {
+                    withContext(Dispatchers.IO) {
+                        val started = System.currentTimeMillis()
+                        val ok = config.initializeNATTAddress()
+                        android.util.Log.d(
+                            Telemetry.TAG,
+                            "NAT-T resolve ${if (ok) "ok" else "failed"} in " +
+                                "${System.currentTimeMillis() - started}ms"
+                        )
+                    }
+                }
                 bridge.attachUDPTerminal()
             }
 
@@ -146,6 +184,11 @@ internal class Controller(private val bridge: SharedBridge) {
                 incomingManager!!.launchJobUDP()
             }
 
+            // One line every two seconds is enough to watch a session live without drowning
+            // the log. Separate from logWriter, which writes to a file the user has to go and
+            // fetch; this is for `adb logcat -s MlmVpnPerf:D` while the phone is in hand.
+            launchJobTelemetry()
+
             logWriter?.report("VPN connection has been established")
             // MLMVPN: the one point where the tunnel is known to be carrying traffic.
             kittoku.mvc.service.SoftEtherVpnService.isConnected = true
@@ -199,6 +242,7 @@ internal class Controller(private val bridge: SharedBridge) {
                     cancelClients()
                     closeTerminals()
                     networkObserver?.close()
+                    jobTelemetry?.cancel()
                     jobMain?.cancel()
 
                     PreferenceManager.getDefaultSharedPreferences(bridge.service).also {

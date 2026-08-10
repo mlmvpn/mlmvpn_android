@@ -221,6 +221,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                     "نسخه 1.2.1",
                     listOf(
                         ChangelogItem(
+                            "دو کانفیگ پیش‌فرض جدید ایران (۷ و ۸)",
+                            "برگرفته از نسخه v48 پروژه Serverless-for-Iran و کاملاً بدون تغییر. شش کانفیگ قبلی (نسخه v44) سر جای خودشان ماندند، پس این‌ها اضافه شده‌اند نه جایگزین. در v48 سایت‌هایی که ایران را تحریم کرده‌اند (گیت‌هاب، مایکروسافت، OpenAI و…) مستقیم رد می‌شوند تا IP ایران را ببینند و خراب نشوند، خودِ سرور DNS از یک دامنه تمیز کلادفلر رزولو می‌شود، ترافیک TLS مسیر فرگمنت دومرحله‌ای اختصاصی گرفته، QUIC کاملاً بلاک می‌شود تا یوتیوب/تیک‌تاک روی مسیر مطمئن‌تر بیفتند، رنج‌های صفحه فیلترینگ بلاک شده‌اند، و IPv6 اولویت گرفته است. تفاوت ۷ و ۸ فقط فاصله بین فرگمنت‌هاست (۸ برای شبکه‌هایی که به فاصله کوتاه گیر می‌دهند). توجه: این کانفیگ‌ها حتماً به پورت محلی 10808 نیاز دارند.",
+                            Icons.Default.Shield
+                        ),
+                        ChangelogItem(
                             "بازبینی سورس و انتشار عمومی روی گیت‌هاب",
                             "کد کامل اپ اندروید تحت لایسنس GPLv3 روی گیت‌هاب منتشر شد تا هرکس بتواند بررسی، مشارکت یا نسخه شخصی خودش را بسازد.",
                             Icons.Default.Code
@@ -384,6 +389,66 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "رفع ناهماهنگی پرچم بالای دکمه اتصال",
                             "پرچم بالای دکمه اتصال از دیتابیس جغرافیایی خودِ Cloudflare (فیلد loc در cdn-cgi/trace) خوانده می‌شد که گاهی با واقعیت فرق داشت (مثلاً یک آی‌پی آمریکایی را کانادا نشان می‌داد). حالا از همان منبع پرچم کانفیگ‌ها استفاده می‌کند، پس همیشه با هم و با سایت‌هایی مثل ip.me هماهنگ است.",
                             Icons.Default.Sync
+                        ),
+                        ChangelogItem(
+                            "رفع کندی و لگ محسوس روی تونل Aether",
+                            "آداپتور تونل از MTU مشترک اپ یعنی ۱۴۲۰ استفاده می‌کرد که برای خروجی‌های VLESS/TCP انتخاب شده بود. ولی MASQUE روی UDP کار می‌کند و هر بسته را داخل QUIC می‌پیچد؛ با احتساب هدر کوتاه QUIC، تگ رمزنگاری، هدر فریم دیتاگرام و هدرهای UDP و IP، حدود ۸۰ بایت سربار اضافه می‌شود و بسته‌ی نهایی دقیقاً به سقف ۱۵۰۰ بایت اترنت می‌رسید، بدون ذره‌ای حاشیه. چون QUIC بیت «تکه‌تکه نکن» را می‌گذارد، روی خطوطی که MTU کمتری دارند (مثل ADSL/VDSL با ۱۴۹۲ که در ایران رایج است) هر بسته‌ی بزرگ به‌جای تکه‌شدن مستقیماً دور ریخته می‌شد. نتیجه: درخواست‌های کوچک سالم بودند ولی هر انتقال حجیم مدام از نو فرستاده می‌شد — همان چیزی که به‌صورت «وصل هست ولی لگ دارد» دیده می‌شد. حالا Aether یک MTU اختصاصی ۱۲۸۰ دارد (حداقل استاندارد IPv6 که روی هر مسیری قابل عبور است).",
+                            Icons.Default.Speed
+                        ),
+                        ChangelogItem(
+                            "رفع «متصل» ماندن اشتباه بعد از قطع‌شدن تونل",
+                            "پرچم اتصال یک‌طرفه بود: به‌محض یک بار متصل‌شدن، هیچ مرحله‌ی بعدی نمی‌توانست پاکش کند. تونلی که به هر دلیلی می‌مُرد و به اسکن برمی‌گشت، رابط کاربری را سبز نگه می‌داشت و مسیریابی همچنان به پورتی شماره می‌گرفت که پشتش چیزی نبود — یعنی اپ موفقیت گزارش می‌کرد در حالی که هیچ ترافیکی رد نمی‌شد. حالا هر مرحله‌ای غیر از «متصل» صراحتاً یعنی مسیر داده از بین رفته است.",
+                            Icons.Default.LinkOff
+                        ),
+                        ChangelogItem(
+                            "رفع گیرکردن روی مرحله «اعتبارسنجی عبور داده»",
+                            "موتور خطوط لاگ را از چند بخش مستقل می‌نویسد، پس پیام «تونل تأیید شد» گاهی چند میلی‌ثانیه دیرتر از «پراکسی آماده شد» می‌رسید، هرچند زودتر اتفاق افتاده بود. رابط کاربری این را به‌عنوان عقب‌گرد تفسیر می‌کرد و از «متصل» به «اعتبارسنجی» برمی‌گشت و همان‌جا می‌ماند — با تونلی که در واقع کاملاً سالم بود. حالا مراحل فقط با یک نشانه‌ی صریحِ قطع‌شدن می‌توانند عقب بروند، نه با یک پیام پیشرفتِ دیررسیده.",
+                            Icons.Default.Timeline
+                        ),
+                        ChangelogItem(
+                            "بخش گیم: پایان «بوست شد» جعلی",
+                            "دکمه بوست بلافاصله بعد از درخواست شروع سرویس، «بوست شد» اعلام می‌کرد. برای بقیه‌ی حالت‌ها درست بود، ولی Aether در آن لحظه تازه شروع به ثبت هویت و جستجوی سرور می‌کند و این کار از چند ثانیه تا دو دقیقه طول می‌کشد — یعنی دکمه سبز می‌شد در حالی که ترافیک هنوز دست‌نخورده از مسیر عادی می‌رفت. حالا مراحل واقعی اتصال با یک نشانگر زنده نمایش داده می‌شود و «بوست شد» فقط وقتی اعلام می‌شود که تونل واقعاً برقرار شده باشد.",
+                            Icons.Default.SportsEsports
+                        ),
+                        ChangelogItem(
+                            "بخش گیم: رفع بی‌اثر بودن کلیک اول روی دکمه بوست",
+                            "کلیک اول ظاهراً هیچ کاری نمی‌کرد ولی موتور را روشن می‌کرد، و کلیک دوم اخطار «یک VPN از قبل روشن است» می‌داد. دو علت داشت: ناظر وضعیت بلافاصله بعد از کلیک اجرا می‌شد، در حالی که موتور حدود یک‌سوم ثانیه بعد بالا می‌آید — پس مقدار باقی‌مانده از سشن قبلی («متوقف شده») را می‌خواند و بوست را همان لحظه ناموفق اعلام می‌کرد. ضمناً دکمه در تمام حالت‌ها کلیک‌پذیر بود، پس کلیک دوم موتوری را که خودش یک کلیک قبل روشن کرده بود «در حال اجرا» می‌دید. حالا ناظر منتظر می‌ماند تا موتور همین سشن واقعاً بالا بیاید، و دکمه در حین اتصال غیرفعال است.",
+                            Icons.Default.TouchApp
+                        ),
+                        ChangelogItem(
+                            "بخش گیم: نمایش درست پینگ لحظه‌ای و پینگ پایه",
+                            "در بوست گیم فقط بازیِ انتخاب‌شده وارد تونل می‌شود و خود اپ عمداً بیرون می‌ماند، ولی سنجش پینگ لحظه‌ای مستقیم اندازه می‌گرفت — یعنی مسیر خام اینترنت، درست برعکس چیزی که کارت ادعا می‌کرد نشان می‌دهد. روی خطوط فیلترشده آن مسیر معمولاً جواب نمی‌داد و عدد روی «در حال اندازه‌گیری» می‌ماند. حالا از داخل خود تونل سنجیده می‌شود. همچنین پینگ پایه («با اینترنت خودتان») هرگز برای Aether اندازه‌گیری نمی‌شد و همیشه «نامشخص» بود؛ حالا درست قبل از بالا آمدن تونل اندازه گرفته می‌شود.",
+                            Icons.Default.NetworkPing
+                        ),
+                        ChangelogItem(
+                            "بخش گیم: انتخاب پروتکل و حالت اسکن، و مسیریابی فقط برای بازی",
+                            "حالا می‌توانید بین MASQUE و WireGuard و بین حالت توربو و متعادل انتخاب کنید. پروفایل گیم برای کم‌ترین تأخیر تنظیم شده: اجبار به HTTP/3 روی QUIC (چون UDP بازی داخل یک تونل TCP دچار انسداد صف می‌شود)، مبهم‌سازی سبک برای کاهش سربار هر بسته، و keepalive کوتاه تا NAT اپراتور وسط بازی مسیر را نبندد. مهم‌تر اینکه بوست دیگر کل دستگاه را تونل نمی‌کند — فقط همان بازی انتخاب‌شده وارد تونل می‌شود.",
+                            Icons.Default.Tune
+                        ),
+                        ChangelogItem(
+                            "حذف «DNS امارات» از تب گیم",
+                            "سرور امارات از سرویس خارج شده است، پس این گزینه دیگر نمی‌توانست کاری بکند جز اضافه‌کردن یک وقفه‌ی بی‌فایده به هر بار اجرای حالت خودکار. از فهرست حالت‌ها و از مسابقه‌ی انتخاب خودکار حذف شد.",
+                            Icons.Default.DeleteSweep
+                        ),
+                        ChangelogItem(
+                            "شفاف‌سازی پیام پاک‌کردن هویت",
+                            "پیام قبلی همه‌ی فایل‌ها را «هویت» صدا می‌زد، پس بعد از یک بار اتصال «۲ فایل» گزارش می‌شد و این‌طور به‌نظر می‌رسید که اپ دو حساب ساخته است. در واقع هر پروتکل کنار هویتش یک حافظه‌ی کوچک از آخرین سرور سالم هم نگه می‌دارد که حساب نیست. حالا پیام این دو را جدا می‌شمارد.",
+                            Icons.Default.Info
+                        ),
+                        ChangelogItem(
+                            "بازگشت حالت WireGuard به فهرست پروتکل‌های Aether",
+                            "این حالت به این دلیل پنهان شده بود که تصور می‌شد علت قطع‌شدن‌های تکراری‌اش از داخل این پروژه قابل بررسی نیست. این تصور درست نبود و منبع مربوطه در همین مخزن موجود است. سه ایراد واقعی رفع شد: پیام‌های قطع‌شدن تونل در فهرست مراحل شناسایی نمی‌شدند (پس چرخه‌ی قطع و وصل کاملاً نامرئی بود)، پروفایل مبهم‌سازی انتخابی کاربر روی این پروتکل بی‌اثر بود چون نامی به موتور فرستاده می‌شد که این بخش نمی‌شناسد، و حالت اسکن «تضمینی» که برای همین وضعیت ساخته شده بود اصلاً در دسترس نبود.",
+                            Icons.Default.VpnKey
+                        ),
+                        ChangelogItem(
+                            "جلوگیری از تداخل صفحه Aether با بوست گیم",
+                            "موتور بین کل اپ مشترک است، پس بازیابی خودکار صفحه Aether سشن‌هایی را هم که تب گیم شروع کرده بود می‌دید. این بازیابی می‌تواند هویت را پاک کند و دوباره وصل شود — کاری که اگر وسط یک بوست گیم انجام می‌شد آن را از بین می‌برد. حالا هر صفحه فقط سشنی را که خودش شروع کرده بازیابی می‌کند.",
+                            Icons.Default.Shield
+                        ),
+                        ChangelogItem(
+                            "گزارش دقیق وضعیت اتصال برای عیب‌یابی",
+                            "یک گزارش زنده اضافه شد که تنظیمات واقعیِ ارسال‌شده به موتور، مرحله‌ی جاری، سرور انتخاب‌شده و در دسترس بودن واقعی پراکسی محلی را ثبت می‌کند. دو حالتی که تشخیصشان از بیرون سخت بود حالا صریحاً نام برده می‌شوند: وقتی وضعیت «متصل» است ولی پراکسی محلی جواب نمی‌دهد، و وقتی اسکن با شکست همه‌ی سرورها تمام می‌شود.",
+                            Icons.Default.BugReport
                         )
                     )
                 ),
@@ -719,6 +784,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                     "Version 1.2.1",
                     listOf(
                         ChangelogItem(
+                            "Two new built-in Iran configs (#7 and #8)",
+                            "Taken from upstream Serverless-for-Iran v48 and shipped completely untouched. The six existing configs (based on v44) stay exactly as they are, so these are additions rather than a replacement. In v48, services that sanction Iran (GitHub, Microsoft, OpenAI, ...) are routed direct so they still see an Iranian IP instead of being broken by the evasion path; the DNS resolver itself is fronted through a clean Cloudflare domain; TLS traffic gets a dedicated two-stage fragment path; QUIC is blocked outright so YouTube/TikTok fall onto the more reliable path; the filter-page IP ranges are blackholed; and IPv6 is now preferred. #7 vs #8 differ only in the delay between fragments (#8 is for networks whose DPI objects to short gaps). Note: these configs require Local Port 10808.",
+                            Icons.Default.Shield
+                        ),
+                        ChangelogItem(
                             "Source review and public release on GitHub",
                             "The full Android app source is now published under GPLv3 on GitHub, so anyone can review it, contribute, or build their own version.",
                             Icons.Default.Code
@@ -882,6 +952,66 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Fixed a mismatched flag above the Connect button",
                             "The flag above the Connect button came from Cloudflare's own geoIP database (the `loc` field in cdn-cgi/trace), which occasionally disagreed with reality (e.g. showing Canada for a US exit IP). It now uses the same source as the per-config flags, so both always agree with each other and with sites like ip.me.",
                             Icons.Default.Sync
+                        ),
+                        ChangelogItem(
+                            "Fixed noticeable lag and slowness on the Aether tunnel",
+                            "The tunnel adapter used the app-wide MTU of 1420, a value chosen for VLESS/TCP outbounds. MASQUE is UDP: every inner packet is wrapped in QUIC, and once the QUIC short header, the encryption tag, the datagram frame header and the outer UDP and IP headers are counted, that adds roughly 80 bytes -- putting a full-size packet exactly at the 1500-byte Ethernet ceiling with no headroom at all. QUIC sets the \"do not fragment\" bit, so on any path with a smaller MTU (such as the 1492 typical of ADSL/VDSL lines here) every large packet was dropped outright instead of being split. Small requests still worked while large transfers spent their time retransmitting -- exactly the \"connects fine but lags\" behaviour. Aether now uses a dedicated MTU of 1280, the IPv6 minimum, which is deliverable on any path.",
+                            Icons.Default.Speed
+                        ),
+                        ChangelogItem(
+                            "Fixed the tunnel wrongly staying \"connected\" after it died",
+                            "The connected flag was one-way: once set, no later stage could clear it. A tunnel that dropped and fell back to scanning kept the UI green and kept routing traffic at a port with nothing behind it -- the app reported success while carrying nothing. Any stage other than connected now explicitly means the data path is gone.",
+                            Icons.Default.LinkOff
+                        ),
+                        ChangelogItem(
+                            "Fixed getting stuck on the \"validating data flow\" step",
+                            "The engine writes its log from several independent parts, so \"tunnel validated\" sometimes arrived a few milliseconds after \"proxy ready\" even though it happened first. The UI read that as going backwards, dropped from connected to validating, and stayed there -- on a tunnel that was in fact perfectly healthy. Steps can now only move backwards on an explicit disconnect signal, never on a late progress message.",
+                            Icons.Default.Timeline
+                        ),
+                        ChangelogItem(
+                            "Game tab: no more fake \"Boosted\"",
+                            "The boost button announced success the moment the service was asked to start. That is accurate for the other modes, but Aether is only beginning to enrol an identity and hunt for a gateway at that point, which takes anywhere from a few seconds to two minutes -- so the button went green while traffic was still leaving untouched. The real connection steps are now shown live, and \"Boosted\" appears only once the tunnel is actually up.",
+                            Icons.Default.SportsEsports
+                        ),
+                        ChangelogItem(
+                            "Game tab: fixed the first tap on Boost doing nothing",
+                            "The first tap appeared to do nothing yet started the engine, and the second tap warned that a VPN was already running. Two causes: the status watcher ran immediately on tap while the engine only comes up about a third of a second later, so it read the leftover value from the previous session (\"stopped\") and declared the boost failed on the spot. On top of that the button accepted taps in every state, so the second tap found the engine it had itself started one tap earlier. The watcher now waits for this session's engine to actually come up, and the button is disabled while connecting.",
+                            Icons.Default.TouchApp
+                        ),
+                        ChangelogItem(
+                            "Game tab: live ping and baseline ping now report correctly",
+                            "A game boost puts only the selected game inside the tunnel and deliberately leaves the app itself outside, but the live ping was measured directly -- over the raw internet path, the opposite of what the card claims to show. On filtered lines that path usually did not answer at all, so the reading sat on \"measuring\". It is now measured through the tunnel itself. The baseline (\"on your own internet\") was also never measured for Aether and always read \"unknown\"; it is now taken just before the tunnel comes up.",
+                            Icons.Default.NetworkPing
+                        ),
+                        ChangelogItem(
+                            "Game tab: protocol and scan mode selection, and game-only routing",
+                            "You can now choose between MASQUE and WireGuard, and between turbo and balanced scanning. The game profile is tuned for latency: HTTP/3 over QUIC is enforced (a game's UDP inside a TCP tunnel suffers head-of-line blocking), obfuscation is kept light to reduce per-packet overhead, and the keepalive is short so a carrier NAT cannot drop the mapping mid-match. More importantly, a boost no longer tunnels the whole device -- only the selected game goes through.",
+                            Icons.Default.Tune
+                        ),
+                        ChangelogItem(
+                            "Removed \"UAE DNS\" from the Game tab",
+                            "The UAE server has been decommissioned, so the option could do nothing except add a pointless delay to every automatic run. It is gone from the mode list and from the automatic selection race.",
+                            Icons.Default.DeleteSweep
+                        ),
+                        ChangelogItem(
+                            "Clearer message when clearing identities",
+                            "The old message called every file an identity, so a single connection reported \"2 files\" and looked as though the app had created two accounts. In reality each protocol keeps a small record of its last working server alongside its identity, and that record is not an account. The message now counts the two separately.",
+                            Icons.Default.Info
+                        ),
+                        ChangelogItem(
+                            "WireGuard is back in the Aether protocol list",
+                            "The mode had been hidden on the belief that the cause of its repeated disconnects could not be investigated from within this project. That belief was wrong -- the relevant source is present in this repository. Three real faults were fixed: the tunnel's disconnect messages were not recognised by the step list (so the whole drop-and-reconnect cycle was invisible), the obfuscation profile chosen by the user had no effect on this protocol because a name the relevant part does not recognise was being sent to the engine, and the \"guaranteed\" scan mode built for exactly this situation was never offered at all.",
+                            Icons.Default.VpnKey
+                        ),
+                        ChangelogItem(
+                            "Stopped the Aether screen interfering with a game boost",
+                            "The engine is shared across the app, so the Aether screen's automatic recovery also saw sessions started by the Game tab. That recovery can clear the identity and reconnect -- which, run in the middle of a game boost, would destroy it. Each screen now only recovers a session it started itself.",
+                            Icons.Default.Shield
+                        ),
+                        ChangelogItem(
+                            "Detailed connection reporting for troubleshooting",
+                            "A live report was added that records the settings actually sent to the engine, the current step, the selected server, and whether the local proxy is genuinely reachable. The two states that were hardest to identify from the outside are now named explicitly: when the status says connected but the local proxy does not answer, and when a scan ends with every server having failed.",
+                            Icons.Default.BugReport
                         )
                     )
                 ),

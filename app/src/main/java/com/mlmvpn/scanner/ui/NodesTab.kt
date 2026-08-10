@@ -1272,6 +1272,57 @@ fun NodesTab() {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
+                // The built-in Iran configs are upstream Serverless-for-Iran files, injected
+                // untouched -- their inbound is hardcoded to 10808 and we deliberately do NOT
+                // rewrite it to the user's Local Port, because editing these configs is exactly
+                // what breaks them. So in proxy mode a changed Local Port silently points at a
+                // port nothing is listening on. Warn inside the group instead of guessing.
+                if (selectedTabEngine == "Manual" &&
+                    selectedManualGroup == com.mlmvpn.scanner.data.NodeManager.IRAN_GROUP) {
+                    item {
+                        val userPort = androidx.preference.PreferenceManager
+                            .getDefaultSharedPreferences(context)
+                            .getString("local_port", "10808") ?: "10808"
+                        val portIsWrong = userPort != "10808"
+                        val accent = if (portIsWrong) RedError else YellowWarn
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(accent.copy(alpha = 0.10f))
+                                .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                if (portIsWrong) Icons.Default.Error else Icons.Default.Info,
+                                contentDescription = null,
+                                tint = accent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    if (portIsWrong) "پورت محلی باید ۱۰۸۰۸ باشد"
+                                    else "پورت محلی را روی ۱۰۸۰۸ نگه دارید",
+                                    color = accent,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    if (portIsWrong)
+                                        "پورت محلی شما روی $userPort تنظیم شده. کانفیگ‌های ایران فقط با پورت ۱۰۸۰۸ کار می‌کنند و این کانفیگ‌ها عمداً دست‌نخورده باقی می‌مانند. از تنظیمات، پورت محلی را به ۱۰۸۰۸ برگردانید."
+                                    else
+                                        "این کانفیگ‌ها دقیقاً همان فایل‌های اصلی سرورلس هستند و پورت داخلی‌شان ۱۰۸۰۸ است. اگر پورت محلی را در تنظیمات تغییر دهید، در حالت پروکسی کار نمی‌کنند.",
+                                    color = TextMuted,
+                                    fontSize = 11.sp,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+                    }
+                }
                 if (displayedNodes.isEmpty()) {
                     item {
                         Column(

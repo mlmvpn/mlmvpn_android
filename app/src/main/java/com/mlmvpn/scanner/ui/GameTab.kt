@@ -103,6 +103,19 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
     var selectedRegion by remember { mutableStateOf(selectedGame?.defaultRegion ?: "ME") }
     var selectedMode by remember { mutableStateOf(BoostMode.AUTO) }
 
+    // Which Aether protocol a boost uses. Seeded from the pref so the choice survives leaving
+    // the tab, and written back on every change — GameBoosterManager reads the pref rather
+    // than this state, because the AUTO race builds its config without going through the UI.
+    var aetherProtocol by remember {
+        mutableStateOf(GameBoosterManager.gameAetherProtocol(context))
+    }
+    var aetherScan by remember {
+        mutableStateOf(GameBoosterManager.gameAetherScan(context))
+    }
+
+    // Real connect progress from the engine, or null when nothing is in flight.
+    val boostProgress by boosterManager.boostProgress.collectAsState()
+
     // If the DNS-only mode was selected but the worker got turned off/removed, fall back to AUTO
     // so the selector never points at a mode that's no longer offered.
     LaunchedEffect(hasDnsWorker, dnsEnabled) {
@@ -164,12 +177,30 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                 // inbound; the plain "already clean" Direct case has no VPN at all.
                 val isVpnBackedMode = bestResult?.mode == BoostMode.TUNNEL ||
                     ((bestResult?.mode == BoostMode.DIRECT ||
-                        bestResult?.mode == BoostMode.DEDICATED_DNS ||
-                        bestResult?.mode == BoostMode.UAE_DNS) && bestResult?.nodeUri != null)
-                val proxyPort = if (isVpnBackedMode) {
-                    val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
-                    prefs.getString("local_port", "10808")?.toIntOrNull() ?: 10808
-                } else null
+                        bestResult?.mode == BoostMode.DEDICATED_DNS) && bestResult?.nodeUri != null)
+                val proxyPort = when {
+                    // Aether must be measured through ITS OWN SOCKS listener, not directly.
+                    //
+                    // A game boost routes only the game package through the TUN
+                    // (addAllowedApplication), so this app is deliberately OUTSIDE the tunnel. A
+                    // direct ping from here therefore measured the raw ISP path — the opposite
+                    // of what the card claims to show — and on a filtered line those game
+                    // endpoints are usually unreachable that way, so it returned -1 and the UI
+                    // sat on "در حال اندازه‌گیری…" forever. Occasionally one endpoint answered
+                    // directly, which is why a number sometimes appeared.
+                    //
+                    // 20810 is the engine's fixed SOCKS port and GamePingTester already speaks
+                    // SOCKS5, so this measures the real tunneled round trip.
+                    bestResult?.mode == BoostMode.AETHER ->
+                        com.mlmvpn.core.aether.AetherEngine.AETHER_SOCKS_PORT
+
+                    isVpnBackedMode -> {
+                        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+                        prefs.getString("local_port", "10808")?.toIntOrNull() ?: 10808
+                    }
+
+                    else -> null
+                }
                 livePingJob = scope.launch {
                     boosterManager.startLivePingMonitor(server, proxyPort)
                 }
@@ -344,18 +375,13 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Game tab exposes exactly these modes now (DIRECT/TUNNEL retired -- no real ping
-                // reduction). AUTO races the DNS + WireGuard candidates by real ping.
-                // Game tab exposes exactly these modes now (DIRECT/TUNNEL retired -- no real ping
-                // reduction). AUTO races the DNS + Aether candidates by real (or estimated) ping.
-                // UAE_DNS talks to our own pinned resolver (uae-dns.service); Cloudflare DNS needs
-                // the user's own deployed worker. AETHER replaces the old two hardcoded UAE trial
-                // servers ("سرور اول"/"سرور دوم") with the Aether engine, which picks its own
-                // healthy endpoint from Cloudflare's WARP pool instead of one fixed host.
+                // The Game tab exposes exactly these modes. DIRECT and TUNNEL are retired (no
+                // real ping reduction); UAE_DNS is retired too — the UAE server it resolved
+                // through has been decommissioned, so offering it could only ever time out.
+                // AUTO races what remains: the user's Cloudflare DNS worker and Aether.
                 val modes = buildList {
                     add(BoostMode.AUTO to stringResource(R.string.game_mode_auto))
                     if (hasDnsWorker && dnsEnabled) add(BoostMode.DEDICATED_DNS to "DNS کلادفلر")
-                    add(BoostMode.UAE_DNS to "DNS امارات")
                     add(BoostMode.AETHER to "Aether")
                 }
                 modes.forEach { (mode, label) ->
@@ -480,7 +506,94 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                     ) {
                         Icon(Icons.Rounded.SportsEsports, contentDescription = null, tint = GameColors.GameGreen, modifier = Modifier.size(36.dp))
                         Spacer(Modifier.height(8.dp))
-                        Text("موتور Aether — تونل کامل دستگاه، بدون سرور ثابت. برای اتصال روی «شروع» بزنید.", color = GameColors.TextMuted, fontSize = 13.sp, textAlign = TextAlign.Center)
+                        Text("موتور Aether — فقط بازی انتخاب‌شده از تونل رد می‌شود. برای اتصال روی «شروع» بزنید.", color = GameColors.TextMuted, fontSize = 13.sp, textAlign = TextAlign.Center)
+
+                        // Protocol picker. WireGuard is the lower-overhead data plane — no HTTP
+                        // framing around each datagram — so for a latency-bound workload it is
+                        // worth being able to measure against MASQUE on the actual line rather
+                        // than assuming. MASQUE stays the default because it is the mode proven
+                        // to carry traffic here.
+                        Spacer(Modifier.height(12.dp))
+                        Text("پروتکل", color = GameColors.TextMuted, fontSize = 11.sp)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(
+                                com.mlmvpn.core.aether.AetherProtocol.MASQUE to "MASQUE (پیش‌فرض)",
+                                com.mlmvpn.core.aether.AetherProtocol.WG to "WireGuard",
+                            ).forEach { (proto, label) ->
+                                FilterChip(
+                                    selected = aetherProtocol == proto,
+                                    onClick = {
+                                        aetherProtocol = proto
+                                        context.getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
+                                            .edit()
+                                            .putString(GameBoosterManager.PREF_AETHER_PROTOCOL, proto.name)
+                                            .apply()
+                                    },
+                                    label = { Text(label, fontSize = 11.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = GameColors.GameGreen.copy(alpha = 0.2f),
+                                        selectedLabelColor = GameColors.GameGreen,
+                                    ),
+                                )
+                            }
+                        }
+                        // Scan mode. TURBO takes the first endpoint that works and is
+                        // connected in seconds; BALANCED keeps looking and picks the
+                        // lowest-RTT one, which is a real ping win on a line where more than
+                        // one endpoint survives — and wasted minutes on a line where none do.
+                        // The user's connection decides which is true, so the user chooses.
+                        Spacer(Modifier.height(10.dp))
+                        Text("حالت اسکن", color = GameColors.TextMuted, fontSize = 11.sp)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(
+                                com.mlmvpn.core.aether.AetherScan.TURBO to "توربو (سریع)",
+                                com.mlmvpn.core.aether.AetherScan.BALANCED to "متعادل (کم‌پینگ‌تر)",
+                            ).forEach { (mode, label) ->
+                                FilterChip(
+                                    selected = aetherScan == mode,
+                                    onClick = {
+                                        aetherScan = mode
+                                        context.getSharedPreferences("game_booster_prefs", android.content.Context.MODE_PRIVATE)
+                                            .edit()
+                                            .putString(GameBoosterManager.PREF_AETHER_SCAN, mode.name)
+                                            .apply()
+                                    },
+                                    label = { Text(label, fontSize = 11.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = GameColors.GameGreen.copy(alpha = 0.2f),
+                                        selectedLabelColor = GameColors.GameGreen,
+                                    ),
+                                )
+                            }
+                        }
+
+                        Text(
+                            "هر دو پروتکل روی UDP/QUIC اجرا می‌شوند — برای بازی لازم است.\n" +
+                                "توربو معمولاً چند ثانیه، متعادل تا دو دقیقه طول می‌کشد.",
+                            color = GameColors.TextMuted, fontSize = 10.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+
+                        // Live connect progress. Without this the button flipped to "بوست شد"
+                        // the instant the service was asked to start — before identity
+                        // enrolment, before the gateway scan, before any traffic moved.
+                        boostProgress?.let { stage ->
+                            Spacer(Modifier.height(12.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = GameColors.GameGreen,
+                                )
+                                Text(stage, color = GameColors.GameGreen, fontSize = 12.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -525,19 +638,32 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                     if (selectedMode == BoostMode.AETHER) {
                         // Aether needs no trial/account step -- it self-enrolls and picks a healthy
                         // endpoint from Cloudflare's WARP pool on its own the first time it connects.
+                        //
+                        // buildGameConfig(), NOT a locally-assembled AetherOptions. This path used
+                        // to construct its own plain MASQUE/TURBO options, so the Game tab's whole
+                        // latency profile (h3, ping-ranked scanning, light obfuscation, short
+                        // keepalive) applied to the AUTO race and silently skipped the button the
+                        // user actually presses. One definition now, in AetherTunEngine.
+                        val aetherProto = GameBoosterManager.gameAetherProtocol(context)
+                        val aetherScanMode = GameBoosterManager.gameAetherScan(context)
+                        // Measure the un-boosted baseline FIRST, while the tunnel is still down.
+                        //
+                        // Every other mode reaches runBoostTest(), which records this as a side
+                        // effect. The Aether button skips that entirely — it builds its result
+                        // inline and connects — so originalPing was never written and the card
+                        // read "نامشخص (مسدود)" on every Aether boost. It has to happen here,
+                        // before the TUN exists, or it measures the tunnel instead of the line.
+                        selectedGame?.servers?.find { it.region == selectedRegion }?.let { srv ->
+                            scope.launch { boosterManager.measureBaselinePing(srv) }
+                        }
                         val aetherResult = BoostResult(
                             mode = BoostMode.AETHER,
                             pingMs = 1L, // placeholder -- real ping only known once connected
                             jitterMs = 0L,
                             nodeId = "game_aether",
                             nodeName = "Aether",
-                            nodeUri = com.mlmvpn.core.aether.AetherTunEngine.buildConfig(
-                                com.mlmvpn.core.aether.AetherOptions(
-                                    protocol = com.mlmvpn.core.aether.AetherProtocol.MASQUE,
-                                    scan = com.mlmvpn.core.aether.AetherScan.TURBO,
-                                )
-                            ),
-                            details = "موتور Aether"
+                            nodeUri = com.mlmvpn.core.aether.AetherTunEngine.buildGameConfig(aetherProto, aetherScanMode),
+                            details = "موتور Aether (${aetherProto.displayFa})"
                         )
                         startBoost(aetherResult)
                     } else {
@@ -546,8 +672,6 @@ fun GameTab(onNavigateToCloud: (() -> Unit)? = null) {
                             if (result != null) {
                                 val ready = resolveForConnect(result)
                                 if (ready != null) startBoost(ready)
-                            } else if (selectedMode == BoostMode.UAE_DNS) {
-                                Toast.makeText(context, "DNS امارات پاسخی نداد. اتصال اینترنت را بررسی کنید و دوباره تلاش کنید.", Toast.LENGTH_LONG).show()
                             }
                         }
                     }
@@ -798,7 +922,18 @@ private fun BoostButton(
                 .scale(buttonScale)
                 .clip(CircleShape)
                 .background(Brush.radialGradient(gradientColors))
-                .clickable(onClick = onBoostClick),
+                // Not clickable while a connect is in flight.
+                //
+                // The button used to accept taps in every state. With Aether that is actively
+                // harmful: the connect takes seconds (identity enrolment, then a gateway scan),
+                // and a second tap during that window re-enters the handler, finds the engine
+                // it just started already running, and shows the "a VPN is already on" conflict
+                // dialog — for a boost the user themselves started one tap earlier. Which is
+                // exactly the reported "first tap does nothing, second tap warns about the VPN".
+                .clickable(
+                    enabled = state != BoosterState.TESTING && state != BoosterState.CONNECTING,
+                    onClick = onBoostClick,
+                ),
             contentAlignment = Alignment.Center
         ) {
             when (state) {

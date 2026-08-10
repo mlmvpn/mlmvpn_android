@@ -35,6 +35,14 @@ class MyVpnService : VpnService() {
     private var reconnectJob: kotlinx.coroutines.Job? = null
 
     companion object {
+        /**
+         * Inner MTU ceiling for the Aether TUN. See the use site for the byte-by-byte
+         * reasoning; short version is that MASQUE/QUIC adds ~80 bytes of outer overhead and
+         * sets DF, so the app-wide 1420 overflows a 1492-byte PPPoE path and the packets are
+         * dropped outright. 1280 is the IPv6 minimum MTU — deliverable on any IP path.
+         */
+        const val AETHER_TUN_MTU = 1280
+
         val isRunningFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
         val connectedNodeIdFlow = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
         val connectionPhaseFlow = kotlinx.coroutines.flow.MutableStateFlow(Phase.IDLE)
@@ -247,17 +255,26 @@ class MyVpnService : VpnService() {
                 // SoftEther's own SSL-VPN. Same arrangement: the vendored client owns the TUN.
                 val isSoftEther = nodeUri.startsWith(
                     com.mlmvpn.scanner.engines.vpngate.SoftEtherEngine.URI_SCHEME)
+                // These engines own their own TUN, so this service deliberately does not build
+                // one — fd stays 0 by design, exactly as in proxy mode.
+                val engineOwnsTun = isAmneziaWg || isAetherCfg || isVpnGate || isSoftEther
                 var fd = 0
-                if (!isProxyMode && !isAmneziaWg && !isAetherCfg && !isVpnGate && !isSoftEther) {
+                if (!isProxyMode && !engineOwnsTun) {
                     setupVpn(backendDns, mtu, isRawJsonConfig)
                     fd = vpnInterface?.fd ?: 0
                 }
                 // Surface the TUN state in the in-app GST log so we can tell whether the
                 // system VPN actually came up (fd>0 => VPN key icon; fd=0 => no TUN).
+                //
+                // `engineOwnsTun` has to be part of this verdict. Without it every SoftEther,
+                // VPN Gate, AmneziaWG and Aether session logged "TUN establish FAILED — check
+                // VPN permission" on a perfectly healthy connection, purely because this
+                // branch never ran. Two full debugging sessions were spent chasing that line.
                 com.mlmvpn.scanner.engines.gst.GstLog.i(
                     "MyVpnService",
                     "connect: proxyMode=$isProxyMode, vpnFd=$fd " +
                         (if (isProxyMode) "(proxy mode ON → no TUN by design)"
+                         else if (engineOwnsTun) "(engine owns the TUN → none built here, by design)"
                          else if (fd == 0) "(TUN establish FAILED → no VPN key icon; check VPN permission)"
                          else "(TUN established OK → VPN key icon should appear)")
                 )
@@ -295,9 +312,29 @@ class MyVpnService : VpnService() {
                         // already covers "just publish a SOCKS5 listener". This path exists
                         // for the case the user actually asked for — the whole device routed
                         // without a second app.
+                        // Aether needs a SMALLER inner MTU than the app-wide default.
+                        //
+                        // The shared default is 1420, chosen for Xray's VLESS/TCP outbounds.
+                        // MASQUE is UDP: every inner packet is wrapped in QUIC (short header +
+                        // connection id + packet number ≈ 20B, AEAD tag 16B, DATAGRAM frame
+                        // header ≈ 3B, connect-ip context ≈ 2B) plus UDP (8B) and IPv4 (20B) —
+                        // roughly 70-80 bytes. 1420 + 80 lands at ~1500, i.e. exactly the
+                        // Ethernet ceiling with zero headroom, and QUIC sets DF so anything
+                        // over the real path MTU is DROPPED rather than fragmented. On PPPoE
+                        // (1492, the norm on Iranian ADSL/VDSL) every full-size packet dies,
+                        // PMTU discovery black-holes, and TCP inside the tunnel spends its
+                        // life retransmitting. Small requests still work, large transfers
+                        // stall — which is precisely the reported "connects fine but laggy".
+                        //
+                        // 1280 is the IPv6 minimum MTU, so it is deliverable on every path
+                        // that carries IP at all. Roughly 10% more per-packet overhead, in
+                        // exchange for no drops.
+                        val aetherMtu = minOf(mtu, AETHER_TUN_MTU)
+                        Log.i(com.mlmvpn.core.aether.AetherEngine.PERF_TAG,
+                            "tun mtu: $aetherMtu (app default $mtu, capped for MASQUE/QUIC overhead)")
                         currentEngine = com.mlmvpn.core.aether.AetherTunEngine(
                             openTun = {
-                                setupVpn(backendDns, mtu, false)
+                                setupVpn(backendDns, aetherMtu, false)
                                 // Hand tun2proxy the RAW detached fd and drop our
                                 // ParcelFileDescriptor so the generic vpnInterface?.close()
                                 // cleanup paths don't double-close a fd tun2proxy now owns.
@@ -307,7 +344,7 @@ class MyVpnService : VpnService() {
                                     "MyVpnService", "Aether: TUN established late, fd=$raw")
                                 raw
                             },
-                            mtu = mtu,
+                            mtu = aetherMtu,
                         )
                         val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
                         if (!success) {
@@ -671,6 +708,11 @@ class MyVpnService : VpnService() {
                 if (gamePackage != null) {
                     try {
                         builder.addAllowedApplication(gamePackage)
+                        // Under AetherPerf too: when a game session is being diagnosed from a
+                        // logcat dump, "was anything except the game actually in the tunnel"
+                        // is one of the first things to rule out.
+                        Log.i(com.mlmvpn.core.aether.AetherEngine.PERF_TAG,
+                            "game routing: ONLY $gamePackage is inside the tunnel")
                         Log.d("MyVpnService", "Game Mode: Only routing $gamePackage through VPN")
                     } catch (e: Exception) {
                         Log.e("MyVpnService", "Failed to add game package to VPN routing", e)
