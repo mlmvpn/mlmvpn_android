@@ -221,6 +221,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                     "نسخه 1.2.1",
                     listOf(
                         ChangelogItem(
+                            "حذف سه اتلاف پنهان در کانفیگ اتصال",
+                            "هر سه از یک لاگ زنده روی گوشی واقعی پیدا شدند، نه از بررسی کد. ۱) هر استعلام DNS دو بار انجام می‌شد: اول رکورد IPv6 پرسیده می‌شد، جواب خالی می‌آمد، بعد رکورد IPv4 — در لاگ ۱۵۰ و بعد ۷۰۰ میلی‌ثانیه برای یک دامنه، و این برای هر دامنه‌ای که هر اپی باز می‌کرد تکرار می‌شد. حالا کانفیگ از ترجیح خود گوشی پیروی می‌کند و روی شبکه‌های موبایل که فقط IPv4 دارند، آن استعلام اول کاملاً حذف می‌شود. ۲) ترافیک QUIC (یوتیوب، تیک‌تاک، اینستاگرام) به ورکر کلادفلر تونل می‌شد که اصلاً UDP حمل نمی‌کند، پس هر تلاش معطل می‌ماند و می‌مرد و اپ بعدش روی TCP ریتری می‌کرد — تنها نتیجه‌اش چند صد میلی‌ثانیه تأخیر قبل از هر ویدیو بود. حالا سریع رد می‌شود تا مستقیم برود روی مسیر درست؛ بازی و تماس صوتی دست‌نخورده‌اند. ۳) ترافیک به رنج‌های صفحه فیلترینگ ایران هم از تونل رد می‌شد و تأخیر پروکسی صرف گرفتن صفحه فیلتر می‌شد؛ حالا بلاک می‌شود.",
+                            Icons.Default.Bolt
+                        ),
+                        ChangelogItem(
                             "اتصال سریع‌تر و مطمئن‌تر با pin کردن IP سرور",
                             "دامنه‌ی سرور هر کانفیگ حالا قبل از استارت شدن هسته توسط خود اپ resolve می‌شود و IP هایش داخل کانفیگ ثبت می‌شود، و اتصال چند IP را هم‌زمان امتحان می‌کند و اولی که جواب داد را نگه می‌دارد. این بیشترین اثر را روی کانفیگ‌های پنل ابری دارد، چون همه‌شان به یک دامنه کلادفلر اشاره می‌کنند که به ده‌ها IP مختلف resolve می‌شود و بخشی از آن‌ها همیشه از ایران کند یا مسدودند. قبلاً هسته این IP ها را یکی‌یکی امتحان می‌کرد، پس یک IP بد یعنی چند ثانیه معطلی یا شکست اتصال روی کانفیگی که سالم بود. resolve از طریق DoH انجام می‌شود تا به دی‌ان‌اس اپراتور وابسته نباشد، و اگر به هر دلیلی شکست بخورد اتصال دقیقاً مثل قبل انجام می‌شود. نتیجه: دیلی کمتر و نرخ اتصال بالاتر (سرعت دانلود بعد از وصل شدن تغییری نمی‌کند).",
                             Icons.Default.Dns
@@ -788,6 +793,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                 ChangelogVersion(
                     "Version 1.2.1",
                     listOf(
+                        ChangelogItem(
+                            "Three hidden wastes removed from the connection config",
+                            "All three were found in a live log from a real device, not by reading code. 1) Every DNS lookup ran twice: an IPv6 record was requested first, came back empty, and only then was the IPv4 record asked for -- measured at 150ms then 700ms for a single hostname, repeated for every domain any app opened. The config now follows the phone's own preference, so on IPv4-only mobile networks that first lookup disappears. 2) QUIC traffic (YouTube, TikTok, Instagram) was tunneled to a Cloudflare worker that carries no UDP at all, so every attempt stalled and died and the app retried over TCP anyway -- the only result was a few hundred milliseconds of delay before each video. It is now refused immediately so clients go straight to the path that works; game and voice traffic are untouched. 3) Traffic to Iran's block-page ranges was also being carried through the tunnel, spending full proxy latency to fetch a censorship notice; it is now blocked.",
+                            Icons.Default.Bolt
+                        ),
                         ChangelogItem(
                             "Faster, more reliable connects by pinning the server IP",
                             "A config's server domain is now resolved by the app before the core starts and its IPs are pinned into the config, and the connection races several IPs at once, keeping whichever answers first. This matters most for Cloudflare-panel configs, which all point at a Cloudflare domain that resolves to dozens of different IPs, some of which are always slow or blocked from Iran. Previously the core tried those IPs one at a time, so a single bad IP meant seconds of stalling or a failed connect on a config that was perfectly fine. Resolution goes over DoH so it doesn't depend on the ISP's DNS, and if it fails for any reason the connection proceeds exactly as before. Result: lower delay and a higher connect success rate (download speed after connecting is unchanged).",

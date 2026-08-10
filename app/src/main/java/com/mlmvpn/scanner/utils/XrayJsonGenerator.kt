@@ -215,6 +215,16 @@ object XrayJsonGenerator {
         servers.put("fakedns")
 
         dns.put("servers", servers)
+        // Without a queryStrategy, xray asks for AAAA *and* A for every single domain, serially:
+        // a live logcat capture showed every lookup costing two round trips, the first almost
+        // always coming back "TypeAAAA -> []" followed by "empty response" and then a fresh A
+        // query -- 150ms + 700ms for one hostname, over and over, on the app's own tun path.
+        // "UseSystem" follows the device's own address-family preference, so on the IPv4-only
+        // mobile networks most users are on the AAAA query disappears entirely. This exact value
+        // is what the bundled Iran default configs already ship, so it is known to be accepted
+        // by this core build (on a genuinely dual-stack network both families can still be
+        // queried -- that is the correct behaviour there, not the waste being fixed here).
+        dns.put("queryStrategy", "UseSystem")
         // Pin the pre-resolved server IPs. `hosts` is consulted before any entry in `servers`,
         // which also hardens the outbound against the fakedns entry above ever handing it a
         // 198.18.x.x fake address for its own server domain.
@@ -265,6 +275,42 @@ object XrayJsonGenerator {
             put("port", 53)
             put("outboundTag", "direct")
         })
+
+        // Iran's filtering infrastructure answers hijacked connections from these ranges (the
+        // block page). A live capture showed that traffic being dutifully carried through the
+        // tunnel -- paying full proxy latency to fetch a censorship notice. Blackholing it makes
+        // the connection fail fast so the app retries instead, which is what upstream
+        // Serverless v48 does too.
+        rules.put(JSONObject().apply {
+            put("type", "field")
+            put("ip", JSONArray().put("10.10.34.0/24").put("2001:4188:2:600::/64"))
+            put("outboundTag", "blocked")
+        })
+
+        // QUIC over a Cloudflare-worker VLESS tunnel cannot work: the worker carries no UDP, so
+        // every attempt was tunneled to the worker, stalled, and died with
+        // "websocket: close 1005" / "1006 abnormal closure" -- dozens of times in a single
+        // minute of TikTok/Instagram use in the captured log. The app then retries over TCP
+        // anyway, so the only thing those attempts bought was a few hundred milliseconds of
+        // delay before every video. Rejecting QUIC outright makes clients fall straight through
+        // to TCP, the same trade upstream Serverless v48 made when it dropped its UDP-noise
+        // approach. Only UDP/443 and sniffed QUIC are refused -- game and voice traffic on other
+        // UDP ports is untouched -- and it is skipped entirely for hybrid configs, whose whole
+        // purpose is to carry UDP out through a WARP outbound instead.
+        if (warpHybrid == null) {
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("network", "udp")
+                put("protocol", JSONArray().put("quic"))
+                put("outboundTag", "blocked")
+            })
+            rules.put(JSONObject().apply {
+                put("type", "field")
+                put("network", "udp")
+                put("port", 443)
+                put("outboundTag", "blocked")
+            })
+        }
         routing.put("rules", rules)
         json.put("routing", routing)
         
@@ -274,6 +320,14 @@ object XrayJsonGenerator {
             put("tag", "dns-out")
         }
         outbounds.put(dnsOutbound)
+
+        // Sink for the block rules above. Must exist or those rules would reference a missing
+        // tag and xray would fall back to the default (first) outbound -- i.e. the proxy, which
+        // is exactly what we are trying to stop sending this traffic to.
+        outbounds.put(JSONObject().apply {
+            put("protocol", "blackhole")
+            put("tag", "blocked")
+        })
 
         return json.toString()
     }
