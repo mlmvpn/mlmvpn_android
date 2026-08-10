@@ -2240,7 +2240,12 @@ fun NodeCard(
                             val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(node.uri)
                             val isFreeConfig = node.engineType == "Manual" &&
                                 node.groupTitle == com.mlmvpn.scanner.engines.freeconfig.FreeConfigEngine.GROUP_NAME
+                            // The domain-fronting profile is a plain "Manual" node like an
+                            // imported config, so without this it fell through to the `else`
+                            // branch and was labelled BPB -- a panel it has nothing to do with.
+                            val isMitmConfig = node.id == com.mlmvpn.scanner.mitm.MitmProfile.NODE_ID
                             val badgeText = if (config?.address == "127.0.0.1" && node.engineType != "NHN") "SNI" else when {
+                                isMitmConfig -> "فرانتینگ"
                                 isFreeConfig -> "رایگان"
                                 node.engineType == "EDG" -> "EDG"
                                 node.engineType == "NHN" -> "NHN"
@@ -2248,6 +2253,7 @@ fun NodeCard(
                                 else -> "BPB"
                             }
                             val badgeColor = if (config?.address == "127.0.0.1" && node.engineType != "NHN") Primary else when {
+                                isMitmConfig -> Color(0xFF26A69A)
                                 isFreeConfig -> Color(0xFF7C3AED)
                                 node.engineType == "NHN" -> GreenOk
                                 node.engineType == "MLM" -> Color(0xFFAB47BC)
