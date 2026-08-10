@@ -221,6 +221,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                     "نسخه 1.2.1",
                     listOf(
                         ChangelogItem(
+                            "سبک‌تر شدن تست دیلی واقعی",
+                            "تست دیلی برای هر کانفیگ یک نمونه‌ی تازه از هسته بالا می‌آورد (در یک لاگ زنده ۱۵ بار در ۶ ثانیه) و به هر کدام کانفیگ کامل اتصال داده می‌شد: سرورهای DNS، استخر fake-DNS، کل جدول روتینگ و یک درگاه محلی دوم — که هیچ‌کدام در اندازه‌گیری یک آدرس استفاده نمی‌شوند. ضمناً همه‌ی تست‌ها یک پورت محلی ثابت می‌گرفتند، پس تست‌های هم‌زمان همه یک پورت را توصیف می‌کردند؛ حالا هر تست پورت خودش را می‌گیرد. تست سلامت اسکنر و تست دیلی اسکنر کلودفلر هم به همین مسیر منتقل شدند. اگر این سبک‌سازی به هر دلیلی جواب نداد، همان کانفیگ کامل قبلی استفاده می‌شود تا تست خراب نشود.",
+                            Icons.Default.Timer
+                        ),
+                        ChangelogItem(
                             "حذف سه اتلاف پنهان در کانفیگ اتصال",
                             "هر سه از یک لاگ زنده روی گوشی واقعی پیدا شدند، نه از بررسی کد. ۱) هر استعلام DNS دو بار انجام می‌شد: اول رکورد IPv6 پرسیده می‌شد، جواب خالی می‌آمد، بعد رکورد IPv4 — در لاگ ۱۵۰ و بعد ۷۰۰ میلی‌ثانیه برای یک دامنه، و این برای هر دامنه‌ای که هر اپی باز می‌کرد تکرار می‌شد. حالا کانفیگ از ترجیح خود گوشی پیروی می‌کند و روی شبکه‌های موبایل که فقط IPv4 دارند، آن استعلام اول کاملاً حذف می‌شود. ۲) ترافیک QUIC (یوتیوب، تیک‌تاک، اینستاگرام) به ورکر کلادفلر تونل می‌شد که اصلاً UDP حمل نمی‌کند، پس هر تلاش معطل می‌ماند و می‌مرد و اپ بعدش روی TCP ریتری می‌کرد — تنها نتیجه‌اش چند صد میلی‌ثانیه تأخیر قبل از هر ویدیو بود. حالا سریع رد می‌شود تا مستقیم برود روی مسیر درست؛ بازی و تماس صوتی دست‌نخورده‌اند. ۳) ترافیک به رنج‌های صفحه فیلترینگ ایران هم از تونل رد می‌شد و تأخیر پروکسی صرف گرفتن صفحه فیلتر می‌شد؛ حالا بلاک می‌شود.",
                             Icons.Default.Bolt
@@ -793,6 +798,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                 ChangelogVersion(
                     "Version 1.2.1",
                     listOf(
+                        ChangelogItem(
+                            "Lighter real-delay test",
+                            "The delay test starts a fresh core per config (15 times in 6 seconds in one live log) and each was handed the full connection config: DNS servers, the fake-DNS pool, the whole routing table and a second local inbound -- none of which a single-URL measurement uses. Every test also took the same fixed local port, so concurrent tests all described the same port; each now gets its own. The scanner's health test and the Cloudflare scanner's delay test moved onto the same path. If the trimming ever fails, the previous full config is used so the test can't break because of it.",
+                            Icons.Default.Timer
+                        ),
                         ChangelogItem(
                             "Three hidden wastes removed from the connection config",
                             "All three were found in a live log from a real device, not by reading code. 1) Every DNS lookup ran twice: an IPv6 record was requested first, came back empty, and only then was the IPv4 record asked for -- measured at 150ms then 700ms for a single hostname, repeated for every domain any app opened. The config now follows the phone's own preference, so on IPv4-only mobile networks that first lookup disappears. 2) QUIC traffic (YouTube, TikTok, Instagram) was tunneled to a Cloudflare worker that carries no UDP at all, so every attempt stalled and died and the app retried over TCP anyway -- the only result was a few hundred milliseconds of delay before each video. It is now refused immediately so clients go straight to the path that works; game and voice traffic are untouched. 3) Traffic to Iran's block-page ranges was also being carried through the tunnel, spending full proxy latency to fetch a censorship notice; it is now blocked.",

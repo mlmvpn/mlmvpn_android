@@ -268,11 +268,11 @@ class CloudflareScanner {
         try {
             val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(baseConfigUri) ?: return 0f
             config.address = ip // Replace the address with our target IP
-            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(
-                config = config,
-                localPort = localPort,
-                includeTun = false
-            )
+            // Trimmed test config (see generateSpeedtestConfig): measureOutboundDelay never
+            // serves traffic, so the DNS/routing/second-inbound setup the full config carries
+            // was paid once per scanned IP for nothing. localPort is no longer used here --
+            // each test instance now gets its own port from a private range.
+            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
 
             withContext(Dispatchers.IO) {
                 // Initialize Core Environment if not already done

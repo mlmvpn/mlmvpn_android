@@ -569,11 +569,9 @@ fun ScannerTab() {
                                                                     try {
                                                                         val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(node.uri)
                                                                         if (config != null && config.address.isNotEmpty()) {
-                                                                            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(
-                                                                                config = config,
-                                                                                localPort = 0,
-                                                                                includeTun = false
-                                                                            )
+                                                                            // Same trimmed test config every other delay test uses --
+                                                                            // this path was building the full one (on port 0, at that).
+                                                                            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
                                                                             val delayMs = libv2ray.Libv2ray.measureOutboundDelay(jsonConfig, "https://clients3.google.com/generate_204")
                                                                             if (delayMs > 0) node else null
                                                                         } else {

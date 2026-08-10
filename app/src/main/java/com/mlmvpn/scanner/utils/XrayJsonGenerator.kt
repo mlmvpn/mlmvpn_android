@@ -122,9 +122,12 @@ object XrayJsonGenerator {
             val wsSettings = JSONObject()
             wsSettings.put("path", if (config.wsPath.isNotEmpty()) config.wsPath else "/")
             val headers = JSONObject()
+            // Host goes in the independent "host" field only. The core logs a deprecation warning
+            // for a "Host" entry inside "headers" ("will be removed soon and being migrated to
+            // independent host"), and setting both means the same value in two places, one of
+            // which is on its way out.
             if (config.wsHost.isNotEmpty()) {
                 wsSettings.put("host", config.wsHost)
-                headers.put("Host", config.wsHost)
             }
             headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             wsSettings.put("headers", headers)
@@ -405,7 +408,8 @@ object XrayJsonGenerator {
             stream.put("wsSettings", JSONObject().apply {
                 put("path", if (config.wsPath.isNotEmpty()) config.wsPath else "/")
                 val headers = JSONObject()
-                if (config.wsHost.isNotEmpty()) { put("host", config.wsHost); headers.put("Host", config.wsHost) }
+                // "host" only -- a "Host" header entry is the deprecated spelling (see generateConfig).
+                if (config.wsHost.isNotEmpty()) put("host", config.wsHost)
                 headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 put("headers", headers)
             })
@@ -599,9 +603,9 @@ object XrayJsonGenerator {
                 val wsSettings = JSONObject()
                 wsSettings.put("path", if (config.wsPath.isNotEmpty()) config.wsPath else "/")
                 val headers = JSONObject()
+                // "host" only -- a "Host" header entry is the deprecated spelling (see generateConfig).
                 if (config.wsHost.isNotEmpty()) {
                     wsSettings.put("host", config.wsHost)
-                    headers.put("Host", config.wsHost)
                 }
                 headers.put("User-Agent", "Mozilla/5.0")
                 wsSettings.put("headers", headers)
@@ -736,11 +740,68 @@ object XrayJsonGenerator {
     }
 
     /**
-     * Minimal proxy-only config used purely for native outbound-delay measurement
-     * (libv2ray.measureOutboundDelay). No tun, a single socks inbound + proxy outbound.
+     * Ports for throwaway test instances. The delay test spins up a fresh core per config
+     * (a live capture showed 15 "Xray started" lines in 6 seconds during one bulk run), and
+     * every one of them used to be handed the same hardcoded 10853 -- so concurrent tests were
+     * all describing the same two local ports. Walk a private range instead, well clear of the
+     * tunnel's own 10808/20808 and Aether's 20810.
      */
-    fun generateSpeedtestConfig(config: VpnConfig): String =
-        generateConfig(config, localPort = 10853, includeTun = false)
+    private val testPortCounter = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * Minimal proxy-only config for native outbound-delay measurement
+     * (libv2ray.measureOutboundDelay).
+     *
+     * Built by generating the normal config and then stripping it, rather than assembling a
+     * second copy of the outbound/stream logic -- that logic is subtle (uTLS fingerprint, xhttp
+     * packet-up forcing, ws host handling) and a divergent copy would silently make measured
+     * delay stop describing the connection users actually get.
+     *
+     * What is stripped and why: measureOutboundDelay dials one URL through the outbound and does
+     * not serve traffic, so DNS/fakedns/routing/the block sink and the second inbound are pure
+     * setup cost paid once per config per run. The tell is that the captured log never showed a
+     * "listening TCP" line for a test instance at all -- those inbounds were never even started.
+     * Log level drops to warning too: a bulk run of hundreds of configs at "info" is a lot of
+     * log for numbers nobody reads per-connection.
+     */
+    fun generateSpeedtestConfig(config: VpnConfig): String {
+        val port = 31000 + (testPortCounter.getAndIncrement() % 4000)
+        val full = generateConfig(config, localPort = port, includeTun = false)
+        return try {
+            val json = JSONObject(full)
+            json.put("log", JSONObject().put("loglevel", "warning"))
+            json.remove("dns")
+            json.remove("fakedns")
+            json.remove("routing")
+
+            // Keep only the proxy outbound. With a single outbound and no routing section every
+            // dial goes to it by default, which is exactly what a delay test wants to measure.
+            json.optJSONArray("outbounds")?.let { outs ->
+                val keep = JSONArray()
+                for (i in 0 until outs.length()) {
+                    val o = outs.optJSONObject(i) ?: continue
+                    if (o.optString("tag") == "proxy") keep.put(o)
+                }
+                if (keep.length() > 0) json.put("outbounds", keep)
+            }
+
+            // Keep a single socks inbound so the config still parses as a complete one.
+            json.optJSONArray("inbounds")?.let { ins ->
+                val keep = JSONArray()
+                for (i in 0 until ins.length()) {
+                    val ib = ins.optJSONObject(i) ?: continue
+                    if (ib.optString("tag") == "socks") { keep.put(ib); break }
+                }
+                if (keep.length() > 0) json.put("inbounds", keep)
+            }
+
+            json.toString()
+        } catch (_: Exception) {
+            // Any surgery failure falls back to the full config: slower to set up, but it is the
+            // known-good shape, so a delay test never fails because of this trimming.
+            full
+        }
+    }
 
     // Cloudflare WARP well-known peer public key.
     private const val WARP_PUBLIC_KEY = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuMdxHkJfChtBg="
