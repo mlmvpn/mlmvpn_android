@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
@@ -75,6 +76,8 @@ fun MitmSetupCard() {
     var busy by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    /** Non-null once the certificate has been copied where Settings' file picker can reach it. */
+    var exportedName by remember { mutableStateOf<String?>(null) }
 
     fun refresh() {
         certExists = MitmCertManager.exists(context)
@@ -158,7 +161,10 @@ fun MitmSetupCard() {
         StepRow(
             index = 2,
             title = "نصب گواهی در اندروید",
-            subtitle = "تنها مرحله‌ای که اندروید اجازه نمی‌دهد برنامه خودش انجام دهد",
+            subtitle = if (MitmCertManager.canUseDirectInstaller)
+                "تنها مرحله‌ای که اندروید اجازه نمی‌دهد برنامه خودش انجام دهد"
+            else
+                "اندروید ۱۱ به بالا: فایل را ذخیره می‌کنیم و شما از تنظیمات نصبش می‌کنید",
             done = certTrusted,
             active = certExists && !certTrusted
         )
@@ -192,7 +198,9 @@ fun MitmSetupCard() {
                     }
                 }
             }
-            !certTrusted -> {
+            !certTrusted && MitmCertManager.canUseDirectInstaller -> {
+                // Android 10 and below: the system installer still accepts a certificate handed
+                // to it by an app, so this is a single confirmation for the user.
                 ActionButton(
                     text = "نصب گواهی",
                     icon = Icons.Default.Shield,
@@ -203,8 +211,6 @@ fun MitmSetupCard() {
                     val intent = MitmCertManager.installIntent(context)
                     val started = intent != null && runCatching { context.startActivity(intent) }.isSuccess
                     if (!started) {
-                        // Some OEM ROMs do not expose the installer intent. Send the user to the
-                        // security settings screen instead of failing silently.
                         runCatching { context.startActivity(MitmCertManager.securitySettingsIntent()) }
                         error = "پنجره نصب باز نشد. از تنظیمات > امنیت > نصب گواهی، فایل را دستی نصب کنید."
                     }
@@ -214,6 +220,78 @@ fun MitmSetupCard() {
                     "در پنجره‌ای که باز می‌شود، اگر اسم خواست همین نام پیشنهادی را تأیید کنید. اگر پرسید گواهی برای چیست، «CA Certificate» را انتخاب کنید.",
                     color = TextMuted, fontSize = 11.sp, lineHeight = 16.sp
                 )
+            }
+            !certTrusted -> {
+                // Android 11+ refuses a certificate passed in by an app ("this certificate from
+                // null must be installed in Settings"), so the only route left is the user
+                // picking the file themselves. We put the file somewhere the picker can see it
+                // and spell out the taps -- there is no public deep link to that screen.
+                ActionButton(
+                    text = if (exportedName != null) "باز کردن تنظیمات اندروید" else "ذخیره گواهی در پوشه دانلود",
+                    icon = if (exportedName != null) Icons.Default.Shield else Icons.Default.Download,
+                    enabled = !busy,
+                    accent = YellowWarn
+                ) {
+                    error = null
+                    if (exportedName == null) {
+                        busy = true
+                        scope.launch {
+                            val name = withContext(Dispatchers.IO) { MitmCertManager.exportToDownloads(context) }
+                            busy = false
+                            if (name == null) error = "ذخیره فایل گواهی ناموفق بود."
+                            else exportedName = name
+                        }
+                    } else {
+                        val ok = runCatching { context.startActivity(MitmCertManager.securitySettingsIntent()) }.isSuccess
+                        if (!ok) runCatching { context.startActivity(MitmCertManager.allSettingsIntent()) }
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                if (exportedName == null) {
+                    Text(
+                        "اندروید ۱۱ به بالا اجازه نمی‌دهد برنامه‌ها گواهی را خودشان نصب کنند. اول فایل را ذخیره می‌کنیم، بعد از تنظیمات نصبش می‌کنید.",
+                        color = TextMuted, fontSize = 11.sp, lineHeight = 16.sp
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(SurfaceDark.copy(alpha = 0.7f))
+                            .padding(12.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Check, null, tint = GreenOk, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "فایل ذخیره شد: پوشه Download → $exportedName",
+                                color = GreenOk, fontSize = 11.sp, fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text("حالا در تنظیمات اندروید:", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(5.dp))
+                        listOf(
+                            "امنیت (Security) → تنظیمات بیشتر امنیت",
+                            "رمزگذاری و اطلاعات ورود (Encryption & credentials)",
+                            "نصب گواهی (Install a certificate)",
+                            "گواهی CA را انتخاب کنید و «Install anyway» را بزنید",
+                            "از پوشه Download فایل «$exportedName» را انتخاب کنید"
+                        ).forEachIndexed { i, line ->
+                            Row(modifier = Modifier.padding(bottom = 3.dp), verticalAlignment = Alignment.Top) {
+                                Text("${i + 1}.", color = YellowWarn, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.width(5.dp))
+                                Text(line, color = TextMuted, fontSize = 10.sp, lineHeight = 15.sp)
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "اگر جای این گزینه‌ها در گوشی شما کمی متفاوت بود، در جستجوی تنظیمات عبارت «certificate» را بزنید. بعد از نصب، به برنامه برگردید تا خودش تشخیص بدهد.",
+                            color = TextDim, fontSize = 10.sp, lineHeight = 14.sp
+                        )
+                    }
+                }
             }
             else -> {
                 Row(
@@ -322,6 +400,7 @@ fun MitmSetupCard() {
                         onClick = {
                             busy = true
                             error = null
+                            exportedName = null // the exported copy is now the wrong certificate
                             scope.launch {
                                 val ok = withContext(Dispatchers.IO) {
                                     MitmCertManager.deleteLocal(context)

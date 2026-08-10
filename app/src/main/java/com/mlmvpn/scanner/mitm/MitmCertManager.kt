@@ -113,15 +113,17 @@ object MitmCertManager {
      * full encoded bytes rather than by subject name, so an unrelated CA with the same name
      * cannot produce a false positive.
      */
-    fun isTrusted(context: Context): Boolean = try {
-        val ours = loadCert(context) ?: return false
-        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-        tmf.init(null as java.security.KeyStore?)
-        tmf.trustManagers
-            .filterIsInstance<X509TrustManager>()
-            .any { tm -> tm.acceptedIssuers.any { it.encoded.contentEquals(ours.encoded) } }
-    } catch (_: Exception) {
-        false
+    fun isTrusted(context: Context): Boolean {
+        return try {
+            val ours = loadCert(context) ?: return false
+            val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            tmf.init(null as java.security.KeyStore?)
+            tmf.trustManagers
+                .filterIsInstance<X509TrustManager>()
+                .any { tm -> tm.acceptedIssuers.any { it.encoded.contentEquals(ours.encoded) } }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     fun loadCert(context: Context): X509Certificate? = try {
@@ -138,17 +140,32 @@ object MitmCertManager {
             .joinToString(":") { "%02X".format(it) }
     }
 
+    /** Name the certificate is saved under in Downloads -- recognisable in a file picker. */
+    const val EXPORT_FILE_NAME = "MLM-VPN-Certificate.crt"
+
+    /**
+     * True when the platform still lets an app hand a CA certificate to the system installer.
+     *
+     * Android 11 (API 30) closed that door: `KeyChain.createInstallIntent()` with
+     * `EXTRA_CERTIFICATE` now just shows "CA certificates could not be installed -- this
+     * certificate from null must be installed in Settings". So on API 30+ the only working route
+     * is the user picking a file from Settings themselves, which is why [exportToDownloads]
+     * exists. Testing the version instead of trying and reading the dialog, because the failure
+     * is a message inside the system UI that we cannot observe.
+     */
+    val canUseDirectInstaller: Boolean
+        get() = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R
+
     /**
      * Intent that opens Android's own "install a CA certificate" dialog with our certificate
-     * already loaded, so the user only confirms and (on some OEMs) types a name.
+     * already loaded. Only meaningful below API 30 -- see [canUseDirectInstaller].
      *
-     * This is as far as automation can legally go: installing a trust anchor is gated behind a
-     * system-owned confirmation screen on every non-rooted device, by design. No app can do it
-     * silently, and any claim otherwise would be a lie to the user.
+     * Even there, installing a trust anchor is gated behind a system-owned confirmation screen
+     * on every non-rooted device, by design. No app can do it silently.
      */
     fun installIntent(context: Context): Intent? = try {
         val cert = certFile(context)
-        if (!cert.exists()) null
+        if (!cert.exists() || !canUseDirectInstaller) null
         else KeyChain.createInstallIntent().apply {
             putExtra(KeyChain.EXTRA_CERTIFICATE, cert.readBytes())
             putExtra(KeyChain.EXTRA_NAME, commonName(context) ?: "MLM VPN Local CA")
@@ -157,9 +174,72 @@ object MitmCertManager {
         null
     }
 
-    /** Fallback for OEMs whose installer intent is unavailable: the security settings screen. */
+    /**
+     * Copies the certificate into the shared Downloads folder so the user can select it from
+     * Settings' "install a certificate" file picker -- the only route left on API 30+.
+     *
+     * Uses MediaStore on API 29+, which needs no storage permission. Any previous copy under the
+     * same name is replaced first, so regenerating the certificate cannot leave the user
+     * choosing between two identically named files. Returns the visible file name on success.
+     */
+    fun exportToDownloads(context: Context): String? {
+      return try {
+        val bytes = certFile(context).readBytes()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val resolver = context.contentResolver
+            val collection = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+
+            // Drop a stale copy from an earlier run/regeneration.
+            runCatching {
+                resolver.query(
+                    collection,
+                    arrayOf(android.provider.MediaStore.MediaColumns._ID),
+                    "${android.provider.MediaStore.MediaColumns.DISPLAY_NAME} = ?",
+                    arrayOf(EXPORT_FILE_NAME),
+                    null
+                )?.use { c ->
+                    val idCol = c.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
+                    while (c.moveToNext()) {
+                        resolver.delete(
+                            android.content.ContentUris.withAppendedId(collection, c.getLong(idCol)),
+                            null, null
+                        )
+                    }
+                }
+            }
+
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, EXPORT_FILE_NAME)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/x-x509-ca-cert")
+            }
+            val uri = resolver.insert(collection, values) ?: return null
+            resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return null
+        } else {
+            val dir = android.os.Environment
+                .getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            if (!dir.exists()) dir.mkdirs()
+            File(dir, EXPORT_FILE_NAME).writeBytes(bytes)
+        }
+        EXPORT_FILE_NAME
+      } catch (e: Exception) {
+        com.mlmvpn.scanner.engines.gst.GstLog.e("MitmCert", "export failed: ${e.message}")
+        null
+      }
+    }
+
+    /**
+     * Best available deep link to where a CA certificate can be installed.
+     *
+     * There is no public action that lands directly on "Install a certificate" on every OEM, so
+     * this tries the security-settings screen and falls back to the top-level settings app. The
+     * wizard text carries the remaining taps.
+     */
     fun securitySettingsIntent(): Intent =
         Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    fun allSettingsIntent(): Intent =
+        Intent(android.provider.Settings.ACTION_SETTINGS)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
     // ---------------------------------------------------------------- X.509 / DER
