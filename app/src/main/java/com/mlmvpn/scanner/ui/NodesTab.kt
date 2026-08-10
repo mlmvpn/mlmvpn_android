@@ -1329,13 +1329,18 @@ fun NodesTab() {
                 }
                 // Domain-fronting folder: the setup card sits above the config so the user can
                 // go from empty folder to a connectable node without leaving this screen.
-                if (selectedTabEngine == "Manual" &&
-                    selectedManualGroup == com.mlmvpn.scanner.mitm.MitmProfile.GROUP) {
+                //
+                // Gated on the same condition that draws the folder row itself, not just on
+                // `selectedManualGroup`: with grouping off and more than one engine the folder row
+                // is hidden but `selectedManualGroup` keeps its last value, so checking the group
+                // alone leaked this card into the flat all-nodes list.
+                val inMitmFolder = (isGroupedByPanel || distinctEngines.size <= 1) &&
+                    selectedTabEngine == "Manual" &&
+                    selectedManualGroup == com.mlmvpn.scanner.mitm.MitmProfile.GROUP
+                if (inMitmFolder) {
                     item { com.mlmvpn.scanner.ui.mitm.MitmSetupCard() }
                 }
-                if (displayedNodes.isEmpty() &&
-                    !(selectedTabEngine == "Manual" &&
-                        selectedManualGroup == com.mlmvpn.scanner.mitm.MitmProfile.GROUP)) {
+                if (displayedNodes.isEmpty() && !inMitmFolder) {
                     item {
                         Column(
                             modifier = Modifier

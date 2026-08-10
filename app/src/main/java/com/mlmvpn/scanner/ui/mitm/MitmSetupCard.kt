@@ -83,6 +83,14 @@ fun MitmSetupCard() {
 
     /** Bumped on every ON_RESUME to re-trigger the status read. */
     var resumeTick by remember { mutableStateOf(0) }
+    /**
+     * Accordion state. Starts as null and is decided once the first status read lands: open while
+     * there is still setup to do, collapsed when everything is already green so a returning user
+     * gets a slim header instead of a wall of finished steps. After that it is the user's to
+     * toggle -- nothing reopens or recloses it behind their back.
+     */
+    var cardOpenState by remember { mutableStateOf<Boolean?>(null) }
+    val cardOpenValue = cardOpenState ?: true
 
     suspend fun refresh() {
         val hasCert = MitmCertManager.exists(context)
@@ -91,6 +99,7 @@ fun MitmSetupCard() {
         certExists = hasCert
         certTrusted = trusted
         configReady = MitmProfile.isInstalled(context)
+        if (cardOpenState == null) cardOpenState = !(hasCert && trusted && configReady)
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -129,8 +138,15 @@ fun MitmSetupCard() {
             .border(1.dp, accent.copy(alpha = 0.40f), RoundedCornerShape(16.dp))
             .padding(16.dp)
     ) {
-        // ---- header ----------------------------------------------------------------
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // ---- header (also the accordion toggle) ------------------------------------
+        val cardArrow by animateFloatAsState(if (cardOpenValue) 180f else 0f, tween(200), label = "cardArrow")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { cardOpenState = !cardOpenValue },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Box(
                 modifier = Modifier
                     .size(40.dp)
@@ -150,7 +166,8 @@ fun MitmSetupCard() {
                 Text("دامین‌فرانتینگ — بدون سرور", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "یوتیوب، اینستاگرام، واتس‌اپ، فیسبوک و ردیت بدون هیچ سرور و ورکری",
+                    if (allDone && !cardOpenValue) "آماده است — کانفیگ پایین را انتخاب کنید"
+                    else "یوتیوب، اینستاگرام، واتس‌اپ، فیسبوک و ردیت بدون هیچ سرور و ورکری",
                     color = TextMuted, fontSize = 11.sp, lineHeight = 15.sp
                 )
             }
@@ -164,8 +181,15 @@ fun MitmSetupCard() {
                     Text("آماده", color = GreenOk, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
             }
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                Icons.Default.ExpandMore, contentDescription = if (cardOpenValue) "بستن" else "باز کردن",
+                tint = TextMuted, modifier = Modifier.size(20.dp).rotate(cardArrow)
+            )
         }
 
+        AnimatedVisibility(visible = cardOpenValue, enter = expandVertically(), exit = shrinkVertically()) {
+          Column {
         Spacer(Modifier.height(14.dp))
 
         // ---- steps -----------------------------------------------------------------
@@ -568,10 +592,12 @@ fun MitmSetupCard() {
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "اگر گواهی جدید بسازید، باید یک‌بار دیگر آن را نصب کنید و گواهی قبلی را از تنظیمات اندروید پاک کنید.",
+                    "اگر گواهی جدید بسازید، باید یک‌بار دیگر آن را نصب کنید و گواهی قبلی را از تنظیمات اندروید پاک کنید. مسیر حذف گواهی برای هر برند در «مرکز آموزش» آموزش شماره ۱۷ نوشته شده.",
                     color = TextDim, fontSize = 10.sp, lineHeight = 14.sp
                 )
             }
+        }
+          } // accordion body
         }
     }
 }

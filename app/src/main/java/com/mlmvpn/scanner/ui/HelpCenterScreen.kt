@@ -579,6 +579,75 @@ fun getHelpArticlesFa(): List<HelpArticle> {
                 **نکته مهم:**
                 این قابلیت روی **همه‌ی حالت‌های بوست** (مستقیم، تونل، وارپ و هیبرید) و **همه‌ی بازی‌های موجود در لیست** به‌صورت خودکار اعمال می‌شود و نیازی به تنظیم جداگانه برای هر بازی ندارید. کافی است یک‌بار روی دکمه «فعال‌سازی DNS اختصاصی» در تب گیمینگ بزنید.
             """.trimIndent()
+        ),
+        HelpArticle(
+            id = "domain_fronting",
+            title = "۱۷. دامین‌فرانتینگ (بدون سرور) — نصب و حذف گواهی",
+            icon = Icons.Default.Shield,
+            content = """
+                **این روش چیست؟**
+                یک کانفیگ که یوتیوب، اینستاگرام، واتس‌اپ، فیسبوک و ردیت را **بدون هیچ سرور و بدون هیچ ورکر کلادفلری** باز می‌کند. ترافیک از گوشی خودتان مستقیم به سرور اصلی همان سایت می‌رود، فقط با یک نام جعلی و بلاک‌نشده. یعنی چیزی برای دیپلوی کردن نیست، هزینه‌ای ندارد، و هرچقدر کاربر زیاد شود کند نمی‌شود.
+
+                **⚠️ محدودیت مهم — قبل از هر کاری بخوانید:**
+                این روش **فقط داخل مرورگر** کار می‌کند (کروم، اج، بریو و هر مرورگر مبتنی بر کرومیوم). **اپلیکیشن یوتیوب و اینستاگرام با این روش باز نمی‌شوند.** این محدودیت خود اندروید ۷ به بالاست: اندروید اجازه نمی‌دهد اپ‌های معمولی به گواهی‌هایی که کاربر نصب کرده اعتماد کنند. هیچ راه دور زدنی هم ندارد (به‌جز روت کردن گوشی). اگر هدفتان باز شدن خود اپ‌ها است، از کانفیگ‌های پنل ابری یا کانفیگ‌های ایران استفاده کنید.
+
+                **راه‌اندازی (چند دقیقه، یک‌بار برای همیشه):**
+                ۱. تب **اتصال** ← پوشه‌ی **«دامین‌فرانتینگ (بدون سرور)»** را انتخاب کنید.
+                ۲. دکمه‌ی **«شروع راه‌اندازی»** را بزنید. برنامه یک گواهی مخصوص همین گوشی می‌سازد و کانفیگ را در همان پوشه اضافه می‌کند.
+                ۳. دکمه‌ی **«ذخیره گواهی در پوشه دانلود»** را بزنید. فایل `MLM-VPN-Certificate.crt` در پوشه Download ذخیره می‌شود.
+                ۴. دکمه‌ی **«باز کردن تنظیمات اندروید»** را بزنید و از مسیر برند گوشی خودتان (پایین‌تر) گواهی را نصب کنید.
+                ۵. به برنامه برگردید. مرحله‌ی دوم **خودش تیک می‌خورد** و دکمه‌ها محو می‌شوند. لازم نیست برنامه را ببندید.
+                ۶. کانفیگ داخل همان پوشه را انتخاب و اتصال را بزنید. حالا در **کروم** سایت‌ها را باز کنید.
+
+                **🔒 هشدار امنیتی (جدی بگیرید):**
+                گواهی‌ای که برنامه می‌سازد **مخصوص همین گوشی** است و هیچ‌جا ارسال نمی‌شود. **هرگز فایل گواهی کسی دیگر را نصب نکنید** و **فایل گواهی خودتان را به هیچ‌کس ندهید.** هر کسی که فایل کلید شما را داشته باشد می‌تواند ترافیک اینترنت‌بانک و ایمیل شما را بخواند. برای همین ما یک گواهی آماده داخل برنامه نفرستادیم و هر گوشی گواهی خودش را می‌سازد.
+
+                ────────────────────────
+                **📥 مسیر نصب گواهی بر اساس برند**
+
+                سریع‌ترین راه در همه‌ی گوشی‌ها: در **جستجوی خود تنظیمات** بنویسید `certificate` یا `گواهی` یا `credentials`.
+
+                • **سامسونگ (One UI):** تنظیمات ← بیومتریک و امنیت (Biometrics and security) ← تنظیمات امنیتی دیگر (Other security settings) ← نصب از حافظه دستگاه (Install from device storage) ← گواهی CA
+                • **شیائومی / ردمی / پوکو (MIUI و HyperOS):** تنظیمات ← رمزها و امنیت (Passwords & security) ← امنیت سیستم / حریم خصوصی ← رمزگذاری و اطلاعات ورود (Encryption & credentials) ← نصب گواهی از حافظه
+                • **پیکسل و اندروید خام (۱۲ و بالاتر):** تنظیمات ← امنیت و حریم خصوصی (Security & privacy) ← تنظیمات بیشتر امنیت (More security settings) ← رمزگذاری و اطلاعات ورود ← نصب گواهی ← گواهی CA
+                • **پیکسل و اندروید خام (۱۱):** تنظیمات ← امنیت (Security) ← رمزگذاری و اطلاعات ورود ← نصب گواهی ← گواهی CA
+                • **هواوی و آنر (EMUI / MagicOS):** تنظیمات ← امنیت (Security) ← تنظیمات بیشتر (More settings) ← رمزگذاری و اطلاعات ورود ← نصب گواهی از حافظه
+                • **اوپو / ریلمی / وان‌پلاس (ColorOS و OxygenOS):** تنظیمات ← رمز و امنیت (Password & security) ← امنیت سیستم (System security) ← رمزگذاری و اطلاعات ورود ← نصب از حافظه
+                • **ویوو (Funtouch OS / OriginOS):** تنظیمات ← تنظیمات بیشتر (More settings) ← امنیت و حریم خصوصی ← رمزگذاری و اطلاعات ورود ← نصب گواهی
+                • **موتورولا، نوکیا، ایسوس، سونی:** همان مسیر اندروید خام
+
+                وقتی پرسید نوع گواهی چیست، **«گواهی CA / CA certificate»** را انتخاب کنید. اگر اخطار داد، **Install anyway** را بزنید. در آخر از پوشه **Download** فایل `MLM-VPN-Certificate.crt` را انتخاب کنید.
+
+                ────────────────────────
+                **🗑 مسیر حذف گواهی بر اساس برند**
+
+                هر وقت خواستید این روش را کنار بگذارید، یا گواهی جدید ساختید و می‌خواهید قبلی را پاک کنید، گواهی را حذف کنید. گواهی نصب‌شده تا خودتان پاکش نکنید باقی می‌ماند.
+
+                سریع‌ترین راه در همه‌ی گوشی‌ها: در جستجوی تنظیمات بنویسید `trusted credentials` یا `گواهی` و بعد سربرگ **«کاربر / User»** را انتخاب کنید. گواهی ما با نامی مثل **«MLM VPN Local CA …»** آنجاست؛ رویش بزنید و **حذف / Remove** را انتخاب کنید.
+
+                • **سامسونگ (One UI):** تنظیمات ← بیومتریک و امنیت ← تنظیمات امنیتی دیگر ← **مشاهده گواهی‌های امنیتی (View security certificates)** ← سربرگ **User** ← گواهی را انتخاب و **Remove** بزنید
+                • **شیائومی / ردمی / پوکو:** تنظیمات ← رمزها و امنیت ← حریم خصوصی / امنیت سیستم ← رمزگذاری و اطلاعات ورود ← **اطلاعات ورود مورد اعتماد (Trusted credentials)** ← سربرگ **User** ← حذف
+                • **پیکسل و اندروید خام (۱۲ و بالاتر):** تنظیمات ← امنیت و حریم خصوصی ← تنظیمات بیشتر امنیت ← رمزگذاری و اطلاعات ورود ← **Trusted credentials** ← سربرگ **User** ← حذف
+                • **پیکسل و اندروید خام (۱۱):** تنظیمات ← امنیت ← رمزگذاری و اطلاعات ورود ← Trusted credentials ← سربرگ User ← حذف
+                • **هواوی و آنر:** تنظیمات ← امنیت ← تنظیمات بیشتر ← رمزگذاری و اطلاعات ورود ← Trusted credentials ← سربرگ User ← حذف
+                • **اوپو / ریلمی / وان‌پلاس:** تنظیمات ← رمز و امنیت ← امنیت سیستم ← رمزگذاری و اطلاعات ورود ← Trusted credentials ← سربرگ User ← حذف
+                • **ویوو:** تنظیمات ← تنظیمات بیشتر ← امنیت و حریم خصوصی ← رمزگذاری و اطلاعات ورود ← Trusted credentials ← سربرگ User ← حذف
+
+                **راه سریع پاک کردن همه‌ی گواهی‌های کاربر با هم:** در همان صفحه‌ی «رمزگذاری و اطلاعات ورود» گزینه‌ای به نام **«پاک کردن اطلاعات ورود (Clear credentials)»** هست. توجه: این گزینه **تمام** گواهی‌های نصب‌شده توسط کاربر را پاک می‌کند، نه فقط گواهی ما.
+
+                بعد از حذف، در پوشه‌ی دامین‌فرانتینگ برنامه، تیک مرحله‌ی دوم خودش برداشته می‌شود و دکمه‌های نصب برمی‌گردند. فایل `MLM-VPN-Certificate.crt` را هم می‌توانید از پوشه Download پاک کنید.
+
+                ────────────────────────
+                **رفع اشکال**
+
+                • **مرحله‌ی نصب گواهی تیک نمی‌خورد:** یعنی اندروید هنوز گواهی را قبول نکرده. مطمئن شوید در مرحله‌ی انتخاب نوع، **«گواهی CA»** را زده‌اید (نه VPN و نه Wi-Fi) و فایل درست (`MLM-VPN-Certificate.crt`) را انتخاب کرده‌اید.
+                • **اندروید می‌گوید اول قفل صفحه بگذارید:** شرط خود اندروید است؛ تا رمز یا الگو یا اثر انگشت نگذارید گواهی نصب نمی‌شود.
+                • **پیام «نصب گواهی‌های CA ممکن نبود … از null»:** این پیام یعنی از مسیر اشتباه رفته‌اید. اندروید ۱۱ به بالا اجازه نمی‌دهد برنامه‌ها خودشان گواهی نصب کنند؛ باید از **تنظیمات** و از روی **فایل** نصب شود، دقیقاً همان کاری که مرحله‌ی ۳ و ۴ بالا می‌گوید.
+                • **وصل می‌شود ولی سایت‌ها باز نمی‌شوند:** احتمالاً در اپ سایت را باز می‌کنید نه مرورگر. در کروم امتحان کنید.
+                • **در فایرفاکس کار نمی‌کند:** فایرفاکس به‌صورت پیش‌فرض گواهی‌های کاربر را قبول نمی‌کند. About Firefox ← پنج بار روی لوگو بزنید ← Settings ← Secret Settings ← گزینه‌ی **Use third party CA certificates** را روشن کنید.
+                • **بعد از ساخت گواهی جدید کار نمی‌کند:** گواهی قبلی را از تنظیمات حذف و گواهی جدید را نصب کنید؛ دو گواهی هم‌نام گیج‌کننده می‌شود.
+                • **کانفیگ وصل نمی‌شود:** پورت محلی باید `10808` باشد. برنامه خودش این را تنظیم می‌کند، ولی اگر دستی عوضش کرده‌اید برگردانید.
+            """.trimIndent()
         )
     )
 }
@@ -924,6 +993,75 @@ fun getHelpArticlesEn(): List<HelpArticle> {
                 **Important:**
                 This applies automatically across **all boost modes** (Direct, Tunnel, WARP, Hybrid) and **every game in the list**, with no per-game setup. Just tap "Deploy Dedicated DNS" once in the Gaming tab.
             """.trimIndent()
+        ),
+        HelpArticle(
+            id = "domain_fronting",
+            title = "17. Domain Fronting (server-less) — installing and removing the certificate",
+            icon = Icons.Default.Shield,
+            content = """
+                **What is this?**
+                A config that opens YouTube, Instagram, WhatsApp, Facebook and Reddit with **no server and no Cloudflare worker anywhere in the path**. Traffic goes straight from your phone to the real server of the site, just under a different, unblocked name. So there is nothing to deploy, nothing to pay for, and it does not slow down as more people use it.
+
+                **⚠️ Important limitation — read before anything else:**
+                This works **in a browser only** (Chrome, Edge, Brave, any Chromium-based browser). **The YouTube and Instagram apps do not work with this method.** That is an Android 7+ restriction: Android does not let ordinary apps trust certificates the user installed. There is no way around it short of rooting the device. If your goal is to make the apps themselves work, use the cloud-panel configs or the built-in Iran configs instead.
+
+                **Setup (a few minutes, once):**
+                1. **Connection** tab → open the **"دامین‌فرانتینگ (بدون سرور)"** (Domain Fronting) folder.
+                2. Tap **"Start setup"**. The app mints a certificate unique to this device and adds the config to the same folder.
+                3. Tap **"Save certificate to Downloads"**. The file `MLM-VPN-Certificate.crt` lands in your Download folder.
+                4. Tap **"Open Android settings"** and install it using the path for your phone brand (below).
+                5. Come back to the app. Step 2 **ticks itself** and the buttons disappear. No need to restart the app.
+                6. Select the config in that folder and connect. Now open the sites **in Chrome**.
+
+                **🔒 Security warning (take this seriously):**
+                The certificate the app creates belongs to **this device only** and is never sent anywhere. **Never install someone else's certificate file**, and **never give yours to anyone.** Whoever holds your key file can read your banking and email traffic. That is exactly why no ready-made certificate ships inside the app and every device generates its own.
+
+                ────────────────────────
+                **📥 Install path by brand**
+
+                Fastest route on any phone: use the **Settings search** and type `certificate` or `credentials`.
+
+                • **Samsung (One UI):** Settings → Biometrics and security → Other security settings → Install from device storage → CA certificate
+                • **Xiaomi / Redmi / Poco (MIUI, HyperOS):** Settings → Passwords & security → System security / Privacy → Encryption & credentials → Install a certificate from storage
+                • **Pixel / stock Android (12 and up):** Settings → Security & privacy → More security settings → Encryption & credentials → Install a certificate → CA certificate
+                • **Pixel / stock Android (11):** Settings → Security → Encryption & credentials → Install a certificate → CA certificate
+                • **Huawei / Honor (EMUI, MagicOS):** Settings → Security → More settings → Encryption and credentials → Install certificates from storage
+                • **Oppo / Realme / OnePlus (ColorOS, OxygenOS):** Settings → Password & security → System security → Encryption & credentials → Install from storage
+                • **Vivo (Funtouch OS, OriginOS):** Settings → More settings → Security & privacy → Encryption & credentials → Install a certificate
+                • **Motorola, Nokia, Asus, Sony:** same as stock Android
+
+                When asked what kind of certificate it is, pick **CA certificate** (not VPN, not Wi-Fi). If it warns you, tap **Install anyway**. Finally pick `MLM-VPN-Certificate.crt` from the **Download** folder.
+
+                ────────────────────────
+                **🗑 Removal path by brand**
+
+                Remove the certificate whenever you stop using this method, or after generating a new one so the old entry does not linger. An installed certificate stays until you remove it yourself.
+
+                Fastest route on any phone: search Settings for `trusted credentials`, then open the **User** tab. Our certificate is listed as **"MLM VPN Local CA …"** — tap it and choose **Remove**.
+
+                • **Samsung (One UI):** Settings → Biometrics and security → Other security settings → **View security certificates** → **User** tab → select it → **Remove**
+                • **Xiaomi / Redmi / Poco:** Settings → Passwords & security → Privacy / System security → Encryption & credentials → **Trusted credentials** → **User** tab → remove
+                • **Pixel / stock Android (12 and up):** Settings → Security & privacy → More security settings → Encryption & credentials → **Trusted credentials** → **User** tab → remove
+                • **Pixel / stock Android (11):** Settings → Security → Encryption & credentials → Trusted credentials → User tab → remove
+                • **Huawei / Honor:** Settings → Security → More settings → Encryption and credentials → Trusted credentials → User tab → remove
+                • **Oppo / Realme / OnePlus:** Settings → Password & security → System security → Encryption & credentials → Trusted credentials → User tab → remove
+                • **Vivo:** Settings → More settings → Security & privacy → Encryption & credentials → Trusted credentials → User tab → remove
+
+                **Shortcut to wipe all user certificates at once:** the same "Encryption & credentials" screen has **Clear credentials**. Note this removes **every** user-installed certificate, not just ours.
+
+                After removal, step 2 in the Domain Fronting folder un-ticks itself and the install buttons come back. You can also delete `MLM-VPN-Certificate.crt` from your Download folder.
+
+                ────────────────────────
+                **Troubleshooting**
+
+                • **Step 2 never ticks:** Android has not accepted the certificate yet. Make sure you chose **CA certificate** (not VPN or Wi-Fi) and picked the right file (`MLM-VPN-Certificate.crt`).
+                • **Android asks you to set a screen lock first:** that is Android's own requirement — no PIN/pattern/fingerprint, no certificate install.
+                • **"CA certificates could not be installed … from null":** you took the wrong route. Android 11+ does not let apps install certificates themselves; it has to be installed from **Settings**, from the **file** — exactly what steps 3 and 4 above do.
+                • **It connects but sites do not open:** you are probably using the app rather than a browser. Try Chrome.
+                • **Does not work in Firefox:** Firefox ignores user-installed certificates by default. About Firefox → tap the logo five times → Settings → Secret Settings → turn on **Use third party CA certificates**.
+                • **Stopped working after generating a new certificate:** remove the old one in Settings and install the new one; two identically named entries get confusing.
+                • **The config will not connect:** the local port must be `10808`. The app sets this itself, but restore it if you changed it manually.
+            """.trimIndent()
         )
     )
 }
@@ -1039,7 +1177,27 @@ fun getFaqsFa(): List<FaqItem> = listOf(
     FaqItem("آیا امکان استفاده از قابلیت \"Per-app setting\" (انتخاب برنامه‌های خاص برای عبور از VPN) وجود دارد؟", "این قابلیت در برنامه وجود دارد به تنظیمات برنامه، تنظیمات vpn مراجعه بفرمایید."),
     FaqItem("چرا در تلگرام یا اینستاگرام با وجود وصل بودن، لود شدن ویدیوها یا ربات‌ها کند است؟", "این موضوع معمولاً به دلیل تنظیمات DNS یا MTU است. در نسخه‌های جدید تلاش شده این مورد بهبود یابد، اما تعویض پروتکل (مثلاً از BPB به Edge یا برعکس) میتواند کمک کند."),
 
-    FaqItem("دکمه‌ی اتصال سریع در پنل بالای گوشی چطور کار می‌کند؟", "می‌توانید دکمه‌ی �mlmvpn� را از پنل تنظیمات سریع گوشی اضافه کنید (از بالای صفحه به پایین بکشید ← ویرایش/افزودن دکمه‌ها). با یک لمس، VPN روشن یا خاموش می‌شود؛ هنگام روشن‌شدن، تأخیر (delay) چند سرور اخیر شما گرفته شده و به سریع‌ترین وصل می‌شوید. تعداد سرورهایی که تست می‌شوند (پیش‌فرض ۲۰) را می‌توانید در تنظیمات ← تنظیمات VPN تغییر دهید. نکته: بار اول باید یک‌بار از داخل برنامه VPN را وصل کنید تا مجوز اتصال داده شود.")
+    FaqItem("دکمه‌ی اتصال سریع در پنل بالای گوشی چطور کار می‌کند؟", "می‌توانید دکمه‌ی �mlmvpn� را از پنل تنظیمات سریع گوشی اضافه کنید (از بالای صفحه به پایین بکشید ← ویرایش/افزودن دکمه‌ها). با یک لمس، VPN روشن یا خاموش می‌شود؛ هنگام روشن‌شدن، تأخیر (delay) چند سرور اخیر شما گرفته شده و به سریع‌ترین وصل می‌شوید. تعداد سرورهایی که تست می‌شوند (پیش‌فرض ۲۰) را می‌توانید در تنظیمات ← تنظیمات VPN تغییر دهید. نکته: بار اول باید یک‌بار از داخل برنامه VPN را وصل کنید تا مجوز اتصال داده شود."),
+
+    FaqItem("گواهی دامین‌فرانتینگ را چطور حذف کنم؟", "در جستجوی تنظیمات گوشی بنویسید «trusted credentials» یا «گواهی»، بعد سربرگ «کاربر / User» را انتخاب کنید. گواهی ما با نام «MLM VPN Local CA …» آنجاست؛ رویش بزنید و «حذف / Remove» را انتخاب کنید. مسیر دقیق برای سامسونگ، شیائومی، پیکسل، هواوی، اوپو/ریلمی و ویوو به‌صورت جداگانه در آموزش شماره ۱۷ نوشته شده. اگر می‌خواهید همه‌ی گواهی‌های نصب‌شده را یک‌جا پاک کنید، در همان صفحه گزینه‌ی «پاک کردن اطلاعات ورود (Clear credentials)» هست — ولی توجه کنید که آن گزینه همه را پاک می‌کند نه فقط گواهی ما. بعد از حذف، تیک مرحله‌ی دوم داخل پوشه‌ی دامین‌فرانتینگ خودش برداشته می‌شود."),
+
+    FaqItem("با دامین‌فرانتینگ وصل شدم ولی اپ یوتیوب و اینستاگرام باز نمی‌شود، مشکل چیست؟", "مشکلی نیست، این روش از اول هم فقط برای مرورگر است. از اندروید ۷ به بعد، اندروید اجازه نمی‌دهد اپ‌های معمولی به گواهی‌هایی که کاربر نصب کرده اعتماد کنند — پس یوتیوب، اینستاگرام و بقیه‌ی اپ‌ها این گواهی را نمی‌بینند و کار نمی‌کنند. این محدودیت خود اندروید است و هیچ برنامه‌ای (بدون روت) نمی‌تواند دورش بزند. سایت‌ها را در کروم باز کنید؛ اگر می‌خواهید خودِ اپ‌ها هم کار کنند از کانفیگ‌های پنل ابری یا کانفیگ‌های ایران استفاده کنید."),
+
+    FaqItem("موقع نصب گواهی پیام «نصب گواهی‌های CA ممکن نبود … از null» می‌آید، چه کار کنم؟", "این پیام یعنی از مسیر اشتباه رفته‌اید. اندروید ۱۱ به بالا کامل جلوی نصب گواهی از داخل برنامه‌ها را گرفته است. راه درست همان چیزی است که خود برنامه می‌گوید: اول دکمه‌ی «ذخیره گواهی در پوشه دانلود» را بزنید، بعد از تنظیمات اندروید ← نصب گواهی ← گواهی CA، فایل MLM-VPN-Certificate.crt را از پوشه Download انتخاب کنید."),
+
+    FaqItem("مرحله‌ی «نصب گواهی» تیک نمی‌خورد و دکمه‌ها نمی‌روند؟", "یعنی اندروید هنوز گواهی را قبول نکرده. سه دلیل رایج دارد: ۱) در مرحله‌ی انتخاب نوع گواهی، «گواهی CA / CA certificate» را نزده‌اید (اگر VPN یا Wi-Fi را بزنید نصب می‌شود ولی به کار ما نمی‌آید). ۲) فایل اشتباهی را انتخاب کرده‌اید؛ باید MLM-VPN-Certificate.crt باشد. ۳) گوشی شما قفل صفحه (رمز/الگو/اثر انگشت) ندارد — اندروید تا قفل صفحه نگذارید گواهی نصب نمی‌کند. لازم نیست برنامه را ببندید و باز کنید؛ برنامه خودش هر لحظه چک می‌کند و به‌محض نصب شدن، تیک می‌خورد."),
+
+    FaqItem("آیا نصب این گواهی برای گوشی من خطرناک است؟ می‌توانم گواهی دوستم را نصب کنم؟", "گواهی‌ای که خودِ برنامه روی گوشی شما می‌سازد امن است: کلیدش فقط روی همین گوشی ساخته می‌شود و هیچ‌جا ارسال نمی‌شود. ولی **هرگز گواهی کسی دیگر را نصب نکنید و گواهی خودتان را به کسی ندهید.** هر کسی که فایل کلید شما را داشته باشد می‌تواند ترافیک اینترنت‌بانک و ایمیل شما را بخواند. برای همین ما عمداً یک گواهی آماده داخل برنامه نگذاشتیم و هر گوشی گواهی مخصوص خودش را می‌سازد."),
+
+    FaqItem("در فایرفاکس دامین‌فرانتینگ کار نمی‌کند، ولی در کروم کار می‌کند. چرا؟", "فایرفاکس به‌صورت پیش‌فرض گواهی‌هایی که کاربر نصب کرده را نادیده می‌گیرد. برای روشن کردنش: Firefox ← منو ← Settings ← About Firefox ← پنج بار روی لوگو بزنید ← برگردید به Settings ← Secret Settings ← گزینه‌ی «Use third party CA certificates» را روشن کنید."),
+
+    FaqItem("کانفیگ‌های ایران ۷ و ۸ چه تفاوتی با ۱ تا ۶ دارند و چرا وصل نمی‌شوند؟", "شماره ۱ تا ۶ بر پایه نسخه‌ی قدیمی‌تر پروژه‌ی سرورلس ساخته شده‌اند و شماره ۷ و ۸ نسخه‌ی جدید (v48) هستند که کاملاً بدون تغییر اضافه شده‌اند. تفاوت ۷ و ۸ با هم فقط فاصله‌ی بین قطعه‌های ارسالی است (۸ برای شبکه‌هایی که به فاصله‌ی کوتاه گیر می‌دهند). اگر وصل نمی‌شوند، اول از همه پورت محلی را چک کنید: این کانفیگ‌ها فقط با پورت `10808` کار می‌کنند و ما عمداً دست‌کاری‌شان نکرده‌ایم. داخل خود پوشه‌ی کانفیگ‌های ایران هم اگر پورتتان اشتباه باشد اخطار قرمز نشان داده می‌شود."),
+
+    FaqItem("کدام حالت را برای چه کاری استفاده کنم؟", "• **کانفیگ‌های ایران (۱ تا ۸):** بدون سرور، برای باز شدن سایت‌ها و اپ‌های عمومی. اولین چیزی که باید امتحان کنید.\n• **پنل ابری (BPB / EDG / نهان):** سرور شخصی روی حساب کلادفلر خودتان؛ پایدارترین گزینه برای همه‌ی اپ‌ها، ولی باید یک‌بار دیپلوی کنید.\n• **دامین‌فرانتینگ:** بدون سرور و بدون هزینه، ولی فقط داخل مرورگر و نیاز به نصب گواهی دارد.\n• **تب گیمینگ:** برای کم کردن پینگ بازی، نه برای باز کردن سایت.\n• **اضطراری:** وقتی همه‌چیز مسدود است و حتی نمی‌توانید کانفیگ بگیرید."),
+
+    FaqItem("چرا ویدیوهای یوتیوب و اینستاگرام قبلاً دیر شروع می‌شدند و حالا سریع‌تر شده‌اند؟", "چون قبلاً برنامه ترافیک QUIC (پروتکل جدیدی که یوتیوب و اینستاگرام اول امتحان می‌کنند) را داخل تونل می‌فرستاد، ولی ورکرهای کلادفلر اصلاً این نوع ترافیک را حمل نمی‌کنند. پس هر ویدیو اول چند صد میلی‌ثانیه معطل می‌ماند، شکست می‌خورد و بعد از راه معمولی امتحان می‌شد. در نسخه‌ی جدید این ترافیک سریع رد می‌شود تا مستقیم از راه درست برود. ترافیک بازی و تماس صوتی دست‌نخورده مانده است."),
+
+    FaqItem("چرا عددهای دیلی و سرعت در نسخه‌های قبلی خیلی بد نشان داده می‌شد؟", "تست دیلی یک اتصال واقعی برای هر کانفیگ باز می‌کند. قبلاً تعداد زیادی از این اتصال‌ها هم‌زمان روی یک سرور باز می‌شد که برای کلادفلر و سیستم فیلترینگ شبیه ترافیک مشکوک است و throttle می‌شود — یعنی عددهایی که می‌دیدید در واقع ازدحام خودِ تست را اندازه می‌گرفتند، نه شرایط واقعی شبکه را. این محدود شد و تست هم سبک‌تر شد، پس عددها حالا به واقعیت نزدیک‌ترند.")
 )
 
 fun getFaqsEn(): List<FaqItem> = listOf(
