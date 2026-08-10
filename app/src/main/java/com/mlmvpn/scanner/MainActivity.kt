@@ -16,6 +16,7 @@ import android.util.Log
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 
 class MainActivity : AppCompatActivity() {
     override fun attachBaseContext(newBase: android.content.Context) {
@@ -25,7 +26,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // The app's UI is always dark (darkColorScheme below is hardcoded, it never follows the
+        // system light/dark setting) -- but enableEdgeToEdge() with no args picks status/nav bar
+        // ICON color from the SYSTEM's light/dark setting, not from what the app actually draws.
+        // A phone in system light mode got dark status-bar icons over the app's dark background:
+        // invisible clock/battery. Forcing SystemBarStyle.dark(...) always gives light icons,
+        // which is correct either way since the background here never changes.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         Log.d("LanguageSwitch", "MainActivity.onCreate called")
         com.mlmvpn.scanner.utils.AppLocaleManager.init(this)
         

@@ -256,6 +256,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             Icons.Default.Timer
                         ),
                         ChangelogItem(
+                            "رفع نامرئی‌بودن آیکون‌های نوار وضعیت در تم روشن گوشی",
+                            "ظاهر اپ همیشه تیره است و اصلاً از تنظیم روشن/تاریک سیستم پیروی نمی‌کند، ولی edge-to-edge اجازه می‌داد رنگ آیکون‌های ساعت/باتری نوار وضعیت از همان تنظیم سیستم پیروی کند، نه از چیزی که اپ واقعاً رسم می‌کند. روی گوشی با تم سیستمِ روشن، آیکون‌های تیره روی پس‌زمینه‌ی همیشه-تیره‌ی اپ کاملاً نامرئی می‌شدند — فقط با روشن‌کردن دارک‌مود خودِ گوشی درست کار می‌کرد. حالا رنگ آیکون‌ها همیشه با پس‌زمینه‌ی واقعی اپ هماهنگ است، فارغ از تم سیستم گوشی.",
+                            Icons.Default.PhoneAndroid
+                        ),
+                        ChangelogItem(
                             "واقع‌بینانه‌تر شدن نتایج تست «دیلی واقعی» و سرعت اسکنر",
                             "این تست یک اتصال واقعی پروکسی‌شده از طریق Xray برای هر کانفیگ است، نه یک پینگ خام — ولی صدها کانفیگ با تا ۸ اتصال واقعی هم‌زمان روی همان سرورها تست می‌شدند، که برای کلودفلر/DPI شبیه ترافیک مشکوک هم‌زمانِ handshake به‌نظر می‌رسد و throttle می‌شود. عددهای دیلی/سرعت نمایش داده‌شده در واقع ازدحام خودساخته‌ی همان تست را اندازه می‌گرفتند، نه شرایط واقعی شبکه را. یکی از دو محدودیت هم‌زمانی درگیر، حتی یک کامنت داشت («ممکن است کلودفلر/DPI با بیش از ۳ handshake هم‌زمان مسدود کند») که مستقیماً با عدد واقعی‌اش (۸) در تضاد بود. هر دو حالا روی ۳ محدود شدند، مطابق همان مقدار امنی که جای دیگری از اپ برای همین نوع تست استفاده می‌شود.",
                             Icons.Default.Speed
@@ -747,6 +752,11 @@ fun ChangelogModal(isFa: Boolean, onDismiss: () -> Unit) {
                             "Aether: added a timer and explanation on the gateway-scan step",
                             "The gateway-scan step (MASQUE) can legitimately take anywhere from tens of seconds to a few minutes depending on scan mode, and on networks that DPI-block MASQUE it runs the full time budget before failing -- with only a static \"working\" badge, that read as a frozen app. The status card now shows a live elapsed-time counter on the scan step, and after 20 seconds an explanatory note that this step can take a while and that some networks block or slow MASQUE, with a reminder that tapping the connect button again cancels it. This doesn't change scan behavior or success rate -- it just makes a long scan legible instead of looking stuck.",
                             Icons.Default.Timer
+                        ),
+                        ChangelogItem(
+                            "Fixed invisible status bar icons in system light mode",
+                            "The app's UI is always dark -- it never follows the system light/dark setting, its color scheme is hardcoded -- but edge-to-edge was letting the status/nav bar icon color follow that system setting anyway instead of what the app actually draws. On a phone with the system set to light mode, that gave dark clock/battery icons over the app's always-dark background: invisible (only worked if the phone itself was already in dark mode). Icon color is now forced to always match the app's own background, regardless of the phone's system theme.",
+                            Icons.Default.PhoneAndroid
                         ),
                         ChangelogItem(
                             "Made scanner \"Real Delay\" and speed test results more accurate",
