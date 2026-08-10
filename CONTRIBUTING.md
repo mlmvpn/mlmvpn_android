@@ -39,11 +39,16 @@ GPLv3-compatible.
   connectivity watchdog.
 - `app/src/main/java/com/mlmvpn/core/` — lower-level native engine wrappers
   that don't belong to a single UI tab (e.g. `aether/`).
+- `app/src/main/java/com/mlmvpn/scanner/mitm/` — on-device CA generation and
+  the server-less domain-fronting profile; see the README's "Server-less
+  domain fronting" feature bullet.
 - `app/src/main/assets/` — bundled JS/Apps Script for optional self-hosted
   backend workers (DNS, relay), plus geo/sanction data files.
 - `app/src/main/jniLibs/` — prebuilt native libraries per ABI. If you change
   a native engine, you must rebuild and commit the `.so` for all supported
   ABIs (`arm64-v8a`, `armeabi-v7a`).
+- `scripts/` — standalone maintainer/dev tooling that isn't part of the app
+  build itself (e.g. `install-aether-binary.ps1`, see [`AETHER.md`](AETHER.md)).
 
 ### Adding a new connectivity engine
 
@@ -108,11 +113,16 @@ GPLv3-compatible.
   تسترهای شبکه، و واچ‌داگ اتصال.
 - `app/src/main/java/com/mlmvpn/core/` — لایه‌های پایه موتورهای native که
   مختص یک تب خاص نیستند (مثل `aether/`).
+- `app/src/main/java/com/mlmvpn/scanner/mitm/` — ساخت گواهی روی گوشی و
+  پروفایل دامین‌فرانتینگ بدون سرور؛ به بخش «دامین‌فرانتینگ بدون سرور» در
+  README مراجعه کنید.
 - `app/src/main/assets/` — اسکریپت‌های JS/Apps Script برای بک‌اند خوداستقرار
   اختیاری، به‌همراه فایل‌های داده جغرافیایی/تحریم.
 - `app/src/main/jniLibs/` — کتابخانه‌های native از پیش کامپایل‌شده برای هر
   ABI. در صورت تغییر یک موتور native، باید فایل `.so` را برای تمام
   ABIهای پشتیبانی‌شده (`arm64-v8a`، `armeabi-v7a`) بازسازی و commit کنید.
+- `scripts/` — ابزارهای توسعه/نگهداری مستقل که بخشی از بیلد خود اپ نیستند
+  (مثل `install-aether-binary.ps1`؛ به [`AETHER.md`](AETHER.md) مراجعه کنید).
 
 ### افزودن موتور اتصال جدید
 

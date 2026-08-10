@@ -70,10 +70,20 @@ three-tier emergency fallback system, all in one app.
 - **Self-hosted backend tooling** (`engines/mlm`, `assets/gst`,
   `*_worker.js`) — Google Apps Script and Cloudflare Worker source for
   running your own relay/DNS infrastructure, deployed via the Cloud panel.
+- **Server-less domain fronting** (`mitm/MitmCertManager`, `mitm/MitmProfile`,
+  `ui/mitm/MitmSetupCard`) — reaches YouTube, Instagram, WhatsApp, Facebook,
+  Reddit and other Fastly-hosted sites in the browser with **no server or
+  worker in the path at all**: TLS is terminated locally against an RSA-2048
+  root certificate the app generates on-device (raw DER/X.509, no
+  BouncyCastle dependency), then re-established to the real host under a
+  different, unblocked SNI. The certificate is per-device and never leaves
+  it; setup is a guided in-app card that hands the certificate to Android's
+  own installer (or, on Android 11+, walks the user through Settings, since
+  the platform no longer accepts a certificate handed in by an app).
 - **Side (hamburger) menu** — quick access to: Settings, data-usage
   statistics, Fixed-IP management, deployed-Workers list, personal
-  anti-sanction DNS, subscription-link generator ("Deno Panel" for
-  serverless sub hosting), an in-app tutorial, and About.
+  anti-sanction DNS, a subscription-link generator, an in-app tutorial, and
+  About.
 - **Three-tier Emergency fallback system** — guided, progressively more
   aggressive recovery paths (Emergency 1/2/3 in the side menu) for when
   primary connectivity is fully blocked, up to and including a Vercel-based
@@ -94,6 +104,7 @@ app/src/main/java/com/mlmvpn/
 └── scanner/
     ├── data/              # Node/subscription/cloud data managers
     ├── engines/           # Pluggable connectivity engines (one dir each)
+    ├── mitm/              # On-device CA + server-less domain-fronting profile
     ├── ui/                # Compose screens
     └── utils/             # Config generators, testers, watchdogs
 app/src/main/assets/       # Bundled worker scripts, geo data, sanction lists
@@ -203,10 +214,19 @@ MLM VPN بسیار فراتر از یک کلاینت تک‌پروتکلی VPN �
 - **ابزارهای بک‌اند خوداستقرار** (`engines/mlm`, `assets/gst`,
   `*_worker.js`) — سورس Google Apps Script و Cloudflare Worker برای اجرای
   زیرساخت رله/DNS اختصاصی خودتان، که از طریق پنل ابری مستقر می‌شود.
+- **دامین‌فرانتینگ بدون سرور** (`mitm/MitmCertManager`، `mitm/MitmProfile`،
+  `ui/mitm/MitmSetupCard`) — یوتیوب، اینستاگرام، واتس‌اپ، فیسبوک، ردیت و
+  سایر سایت‌های روی Fastly را داخل مرورگر باز می‌کند، **بدون هیچ سرور یا
+  ورکری در مسیر**: TLS به‌صورت محلی با یک گواهی ریشه RSA-2048 که خود اپ روی
+  گوشی می‌سازد (DER/X.509 خام، بدون وابستگی به BouncyCastle) باز می‌شود و
+  دوباره با یک SNI متفاوت و بلاک‌نشده به مقصد واقعی وصل می‌شود. گواهی
+  مخصوص هر گوشی است و هیچ‌جا ارسال نمی‌شود؛ راه‌اندازی یک کارت هدایت‌شده
+  داخل اپ است که گواهی را به نصب‌کننده‌ی خود اندروید می‌سپارد (یا در
+  اندروید ۱۱ به بالا، چون پلتفرم دیگر گواهی داده‌شده توسط اپ را قبول
+  نمی‌کند، کاربر را قدم‌به‌قدم در تنظیمات راهنمایی می‌کند).
 - **منوی کناری (همبرگری)** — دسترسی سریع به: تنظیمات، آمار مصرف داده،
   مدیریت IP ثابت، لیست ورکرهای مستقرشده، DNS ضد تحریم شخصی، تولیدکننده
-  لینک اشتراک («Deno Panel» برای میزبانی سرورلس ساب‌لینک)، آموزش داخل‌اپ، و
-  درباره ما.
+  لینک اشتراک، آموزش داخل‌اپ، و درباره ما.
 - **سیستم پشتیبان اضطراری سه‌سطحی** — مسیرهای بازیابی هدایت‌شده و به‌مرور
   تهاجمی‌تر (اضطراری ۱/۲/۳ در منوی کناری) برای زمانی که مسیرهای اصلی اتصال
   کاملاً مسدود شده باشند، تا سطح بوت‌استرپ رله مبتنی بر Vercel.
@@ -219,6 +239,7 @@ app/src/main/java/com/mlmvpn/
 └── scanner/
     ├── data/              # مدیریت داده نود/اشتراک/کلاود
     ├── engines/           # موتورهای اتصال قابل‌افزودن (هر کدام یک پوشه)
+    ├── mitm/              # گواهی روی گوشی + پروفایل دامین‌فرانتینگ بدون سرور
     ├── ui/                # صفحات Compose
     └── utils/             # تولیدکننده‌های کانفیگ، تسترها، واچ‌داگ‌ها
 app/src/main/assets/       # اسکریپت‌های ورکر، داده جغرافیایی، لیست تحریم
@@ -256,8 +277,11 @@ cd mlmvpn_android
 
 ### مجوز و ذکر منبع
 
-این پروژه تحت یک **نسخه اصلاح‌شده از مجوز MIT با الزام ذکر منبع** منتشر
-شده است — به فایل [`LICENSE`](LICENSE) مراجعه کنید. به‌طور خلاصه:
+این پروژه تحت **GNU GPLv3**، به‌همراه یک شرط اضافه (مجاز طبق ماده §۷ خود
+GPLv3) که ذکر منبع را الزامی می‌کند، منتشر شده است — به فایل
+[`LICENSE`](LICENSE) مراجعه کنید. دلیلش این است که پروژه از سورس GPL-3.0
+پروژه‌های `kittoku/mvc` و `shadowsocks-android` استفاده می‌کند، که طبق
+GPL کل اثر ترکیبی باید GPL باشد. به‌طور خلاصه:
 
 > هرگونه استفاده، فورک یا اثر مشتق‌شده از این پروژه — چه به‌صورت سورس و چه
 > کامپایل‌شده — باید هرجا که نرم‌افزار به کاربر نهایی نمایش داده می‌شود
