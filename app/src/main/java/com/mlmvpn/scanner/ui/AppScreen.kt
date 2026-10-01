@@ -43,7 +43,7 @@ private val FEATURE_BAR_HEIGHT = 56.dp
 
 private val SELF_HEADED = setOf(
     "settings", "vpn_settings", "usage", "tutorial", "nodes", "cloud", "scanner", "quick", "game", "sublink", "fixed_ip", "vpngate", "freeconfig", "lan",
-    "configstudio", "github", "store", "openvpn", "mae", "flux",
+    "configstudio", "github", "store", "openvpn", "mae", "flux", "cfdoctor", "amnezia",
     // The five transports. Each draws an iOS navigation bar of its own, and pushes pages under
     // it that carry their own back chevron -- the app chrome on top would be a second one.
 ) + com.mlmvpn.scanner.ui.tunnel.Transport.IDS
@@ -68,7 +68,13 @@ fun AppScreen() {
     // The landing screen is the icon grid. Everything else in the app is reached from it: the
     // four dock apps, the fourteen grid apps, and nothing hidden behind a drawer any more.
     val homeTab = "home"
-    var activeTab by remember { mutableStateOf(if (hasPendingBoost || openedFromBooster) "game" else homeTab) }
+    // A `.conf` opened with the app (AmzImportActivity) lands on the «آمنزیا» section.
+    val openedForTab = remember {
+        generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }
+            .filterIsInstance<android.app.Activity>().firstOrNull()?.intent
+            ?.getStringExtra(com.mlmvpn.scanner.ui.amnezia.AmzImportActivity.EXTRA_OPEN_TAB)
+    }
+    var activeTab by remember { mutableStateOf(if (hasPendingBoost || openedFromBooster) "game" else openedForTab ?: homeTab) }
     // Real back stack (was a single `previousTab`, which broke nested navigation: opening a screen
     // FROM another overlay clobbered the one shared "previous" value, so the parent's back button
     // went dead). openTab() pushes; goBack() pops; switchTab() resets the stack.
@@ -77,7 +83,7 @@ fun AppScreen() {
     // Game tab has to land on the icon grid, and `homeTab` is also what decides when back offers
     // to exit the app -- pointing it at a feature screen would make the exit prompt unreachable.
     val navStack = remember {
-        mutableStateListOf<String>().apply { if (hasPendingBoost || openedFromBooster) add(homeTab) }
+        mutableStateListOf<String>().apply { if (hasPendingBoost || openedFromBooster || openedForTab != null) add(homeTab) }
     }
     // Breadcrumbs: a native abort produces no Java stack, so the last screen the user reached
     // is often the only clue about where it happened.
@@ -440,6 +446,11 @@ fun AppScreen() {
                             }
                         }
                     }
+                    if (visitedTabs.contains("cfdoctor")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "cfdoctor") 0.dp else 10000.dp)) {
+                            com.mlmvpn.scanner.ui.doctor.CfDoctorScreen(onBack = { goBack() }, visible = activeTab == "cfdoctor")
+                        }
+                    }
                     if (visitedTabs.contains("lan")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "lan") 0.dp else 10000.dp)) {
                             CompositionLocalProvider(LocalTabVisible provides (activeTab == "lan")) {
@@ -483,6 +494,13 @@ fun AppScreen() {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "flux") 0.dp else 10000.dp)) {
                             CompositionLocalProvider(LocalTabVisible provides (activeTab == "flux")) {
                                 com.mlmvpn.scanner.ui.flux.FluxScreen(onBack = { goBack() })
+                            }
+                        }
+                    }
+                    if (visitedTabs.contains("amnezia")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "amnezia") 0.dp else 10000.dp)) {
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "amnezia")) {
+                                com.mlmvpn.scanner.ui.amnezia.AmneziaScreen(onBack = { goBack() })
                             }
                         }
                     }

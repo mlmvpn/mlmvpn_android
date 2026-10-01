@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="doctor" path="doctor/" />
     <!-- UpdateChecker downloads the new APK into cacheDir/updates/ -->
     <cache-path name="updates" path="updates/" />
     <!-- Config Studio writes an export here, shares it, and overwrites it next time.

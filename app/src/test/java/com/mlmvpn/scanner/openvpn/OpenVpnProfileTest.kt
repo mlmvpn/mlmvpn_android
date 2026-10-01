@@ -46,12 +46,29 @@ class OpenVpnProfileTest {
         assertEquals("openvpn-server-ca.crt", e.dependency)
     }
 
-    @Test fun rejectsScriptExecutionAndExternalCredentialFiles() {
-        for (line in listOf("up malware.sh", "plugin evil.so", "auth-user-pass passwords.txt", "config other.conf")) {
-            assertThrows(ProfileImportException::class.java) {
-                ProfileImporter.parse("evil.ovpn", fixture("Canada.ovpn") + "\n$line", mapOf("openvpn-server-ca.crt" to fixture("ca.crt")))
-            }
+    @Test fun scriptsPluginsAndCredentialFilesNeverReachTheCore() {
+        // Dropped, not refused: a free profile from Telegram often carries such lines, and one of
+        // them used to throw the whole file away. What matters is that none of them survives.
+        for (line in listOf("up malware.sh", "plugin evil.so", "config other.conf", "script-security 2", "setenv X 1", "inactive 0")) {
+            val p = ProfileImporter.parse("evil.ovpn", fixture("Canada.ovpn") + "\n$line", mapOf("openvpn-server-ca.crt" to fixture("ca.crt")))
+            assertFalse(line, p.config.contains(line.substringBefore(' ')))
         }
+        // A credentials FILE cannot come along: the profile then needs an account.
+        val withFile = ProfileImporter.parse("f.ovpn", fixture("Canada.ovpn") + "\nauth-user-pass passwords.txt", mapOf("openvpn-server-ca.crt" to fixture("ca.crt")))
+        assertFalse(withFile.config.contains("passwords.txt"))
+        assertFalse(withFile.selfContained)
+    }
+
+    @Test fun inlineCredentialsMakeAProfileSelfContained() {
+        val cfg = fixture("Canada.ovpn").lines().filterNot { it.trim().startsWith("auth-user-pass") }.joinToString("\n") +
+            "\n<auth-user-pass>\nvpnbook\nsecret\n</auth-user-pass>\nfast-io\n<connection>\nremote x 1\n</connection>"
+        val p = ProfileImporter.parse("free.ovpn", cfg, mapOf("openvpn-server-ca.crt" to fixture("ca.crt")))
+        assertEquals("vpnbook" to "secret", p.ownCredentials)
+        assertTrue(p.selfContained)
+        val effective = com.mlmvpn.scanner.openvpn.ProfileRuntime.effective(p, tcp = false)
+        assertFalse(effective.contains("secret"))
+        assertTrue(effective.lines().any { it.trim() == "auth-user-pass" })
+        assertFalse(p.config.contains("fast-io"))
     }
 
     @Test fun commentsAndLineEndingsDoNotDefeatDuplicateDetection() {

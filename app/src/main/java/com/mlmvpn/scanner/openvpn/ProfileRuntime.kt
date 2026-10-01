@@ -25,7 +25,17 @@ object ProfileRuntime {
      * @param relayPort the loopback port of an [OpenVpnSplitRelay] that dials the server itself.
      */
     fun effective(profile: Profile, tcp: Boolean, relayPort: Int? = null): String {
-        val lines = profile.config.replace("\r\n", "\n").split("\n").toMutableList()
+        // The file's own credentials go to the core through its API, like an account's; in the
+        // config they become the bare directive that tells it the server wants them.
+        val raw = profile.config.replace("\r\n", "\n").split("\n")
+        val lines = mutableListOf<String>()
+        var inAuth = false
+        for (l in raw) {
+            val t = l.trim()
+            if (t == "<auth-user-pass>") { inAuth = true; lines += "auth-user-pass"; continue }
+            if (inAuth) { if (t == "</auth-user-pass>") inAuth = false; continue }
+            lines += l
+        }
         val directive = { l: String -> l.trim().substringBefore(' ').lowercase() }
 
         if (lines.none { directive(it) == "cipher" }) {

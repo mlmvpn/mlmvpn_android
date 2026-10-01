@@ -27,7 +27,11 @@ object ProfileImporter {
         var block: String? = null
         var hasCa = false
         var control = false
+        var inlineAuth = false
+        var dropped = 0
+        var skipping: String? = null
         for (line in lines) {
+            if (skipping != null) { if (line == "</$skipping>") skipping = null; continue }
             if (block != null) {
                 out += line
                 if (line == "</$block>") block = null
@@ -36,7 +40,11 @@ object ProfileImporter {
             if (line.isBlank() || line.startsWith('#') || line.startsWith(';')) continue
             if (line.startsWith('<')) {
                 val tag = line.removePrefix("<").removeSuffix(">")
-                if (tag !in files || line != "<$tag>") throw ProfileImportException("Unsupported inline section")
+                if (line != "<$tag>" || tag.startsWith("/")) throw ProfileImportException("Unsupported inline section")
+                if (tag == "auth-user-pass") { inlineAuth = true; block = tag; out += line; continue }
+                // A block this app has no use for (<connection>, <http-proxy-user-pass>, ...):
+                // skipped whole, rather than refusing a profile that works without it.
+                if (tag !in files) { skipping = tag; continue }
                 if (tag == "ca") hasCa = true
                 if (tag.startsWith("tls-")) control = true
                 block = tag
@@ -45,10 +53,14 @@ object ProfileImporter {
             }
             val words = tokenize(line)
             if (words.isEmpty()) continue
-            val key = words[0].removePrefix("--")
-            if (key !in allowed) throw ProfileImportException("Unsupported directive: $key")
-            val parts = listOf(key) + words.drop(1)
-            if (key == "auth-user-pass" && parts.size != 1) throw ProfileImportException("Credentials must come from an account")
+            val key = words[0].removePrefix("--").lowercase()
+            // Free profiles from Telegram carry tuning and client options this core does not
+            // take (inactive, setenv, fast-io, mute-replay-warnings, push-peer-info, ...). One of
+            // them used to refuse the whole file. They are dropped instead -- and so are scripts,
+            // plugins and management options, which are never run whatever the file says.
+            if (key !in allowed) { dropped++; continue }
+            // A credentials FILE cannot come along; the credentials then come from an account.
+            val parts = if (key == "auth-user-pass") listOf(key) else listOf(key) + words.drop(1)
             if (key == "dev" && parts.getOrNull(1)?.startsWith("tun") != true) throw ProfileImportException("Only TUN profiles are supported")
             if (key in files) {
                 if (parts.size !in 2..3) throw ProfileImportException("Invalid certificate reference")
@@ -74,7 +86,11 @@ object ProfileImporter {
                 if (key != "verb" && key != "mute" && key != "auth-nocache") out += parts.joinToString(" ") { quote(it) }
             }
         }
-        if (block != null) throw ProfileImportException("Unclosed inline section")
+        if (block != null || skipping != null) throw ProfileImportException("Unclosed inline section")
+        if (inlineAuth) {
+            val auth = Profile.inlineCredentials(out.joinToString("\n"))
+            if (auth == null || auth.first.isBlank()) throw ProfileImportException("Invalid inline credentials")
+        }
         if (!hasCa && directives.none { it[0] == "peer-fingerprint" }) throw ProfileImportException("A CA or peer fingerprint is required")
         if (directives.none { it[0] == "remote-cert-tls" && it.getOrNull(1) == "server" } && directives.none { it[0] == "peer-fingerprint" }) {
             out += "remote-cert-tls server"

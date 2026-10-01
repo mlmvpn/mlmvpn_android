@@ -81,15 +81,72 @@
         </service>
 
         <!-- AmneziaWG (GoBackend) establishes the WireGuard tun through its own internal
-             VpnService. It must be declared here or the tunnel comes up but no traffic flows. -->
+             VpnService. It must be declared here or the tunnel comes up but no traffic flows.
+
+             android:process=":awg": the library hands this service to its GoBackend through a
+             static future, so the two must share a process, and the GoBackend lives in :awg
+             (AwgHostService), away from Xray's Go runtime. Do not remove. -->
         <service
             android:name="org.amnezia.awg.backend.AbstractBackend$VpnService"
             android:exported="false"
+            android:process=":awg"
             android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+
+        <!-- AwgHostService: the AmneziaWG tunnel, in its own process. AmneziaWG and Xray each
+             bring a Go runtime, and two in one process crash it; see the class doc. -->
+        <service
+            android:name="com.mlmvpn.core.warp.AwgHostService"
+            android:exported="false"
+            android:process=":awg" />
+
+        <!-- AwgProbeService: delay tests for servers only AmneziaWG can talk to, through the
+             library's SOCKS proxy mode. Its own process again: one Go runtime per process, and
+             the proxy backend keeps process-wide state the tunnel must not share. -->
+        <service
+            android:name="com.mlmvpn.core.warp.AwgProbeService"
+            android:exported="false"
+            android:process=":awgprobe" />
+
+        <!-- XrayProbeService: the delay-test cores of the «آمنزیا» section. A public server can
+             drive Xray into a Go panic, which aborts its whole process; here that is only this
+             one, never the app or its VPN. -->
+        <service
+            android:name="com.mlmvpn.core.warp.XrayProbeService"
+            android:exported="false"
+            android:process=":xprobe" />
+
+        <!-- «Open with» for WireGuard / AmneziaWG files from Telegram or a file manager: imports
+             them into the «آمنزیا» section and opens it. -->
+        <activity
+            android:name=".ui.amnezia.AmzImportActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="*/*" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.conf" />
+                <data android:pathPattern=".*\\..*\\.conf" />
+                <data android:pathPattern=".*\\..*\\..*\\.conf" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/x-wireguard-profile" />
+                <data android:mimeType="application/x-amneziawg-profile" />
+            </intent-filter>
+        </activity>
 
         <!--
             WireguardScanService: legacy, hosts the old AmneziaWG-based WireGuard pipeline

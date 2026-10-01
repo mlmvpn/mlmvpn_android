@@ -663,10 +663,21 @@ class MyVpnService : VpnService() {
                             // that itself, but clearing here too keeps every engine type safe.
                             try { currentEngine?.stop() } catch (_: Exception) {}
                             currentEngine = null
+                            // FAILED, like SoftEther: a caller waiting on the phase hears "no" at
+                            // once instead of sitting out its whole timeout.
+                            connectionPhaseFlow.value = Phase.FAILED
+                            isRunning = false
+                            connectedNodeId = null
                             stopSelf()
                         } else {
                             Log.d("MyVpnService", "AmneziaWG Engine Started Successfully!")
                             connectionPhaseFlow.value = Phase.CONNECTED
+                            // The tunnel lives in the :awg process. If that process dies, the
+                            // tunnel is gone; the session must not go on claiming it is up.
+                            com.mlmvpn.core.warp.AwgHostClient.tunnel.onDied = {
+                                Log.w("MyVpnService", ":awg process died under a running tunnel -- stopping")
+                                startService(Intent(this@MyVpnService, MyVpnService::class.java).setAction("STOP"))
+                            }
                         }
                     } else if (nodeUri.startsWith("{") && nodeUri.contains("\"inbounds\"") && nodeUri.contains("\"outbounds\"")) {
                         Log.d("MyVpnService", "Raw JSON Config detected (${nodeUri.length} chars)")

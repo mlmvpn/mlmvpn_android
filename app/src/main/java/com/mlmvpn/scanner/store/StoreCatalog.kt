@@ -500,6 +500,15 @@ object StoreCatalog {
 
     val DATA: List<StoreItem> = listOf(
         StoreItem(
+            id = "cf-doctor-plan", kind = StoreKind.DATA,
+            titleFa = "برنامهٔ تست دکتر کلادفلر", titleEn = "Cloudflare Doctor test plan",
+            subtitleFa = "تست‌های تشخیص اتصال", subtitleEn = "Connection diagnostic tests",
+            developer = "MLM VPN", repo = "mlmvpn/mlmvpn_android",
+            source = StoreSource.Channel,
+            icon = StoreIcon(Icons.Default.Public, Blue, imageRes = R.drawable.ic_app_doctor),
+            data = DataSpec("cf_doctor_plan.json", DataSpec.Target.OVERLAY, json = true),
+        ),
+        StoreItem(
             id = "geosite", kind = StoreKind.DATA,
             titleFa = "دادهٔ مسیریابی دامنه‌ها (geosite)", titleEn = "Domain routing data (geosite)",
             subtitleFa = "Xray — قوانین category-ir و تبلیغات", subtitleEn = "Xray — category-ir and ad rules",

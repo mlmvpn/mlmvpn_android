@@ -127,7 +127,7 @@ class OpenVpnService : VpnService() {
         val account = command.account ?: return
         val profile = command.profile ?: return
         if (account in attempted) return
-        try { withContext(Dispatchers.IO) { repo.selectAccount(account) } }
+        if (account != OpenVpnRuntime.SELF) try { withContext(Dispatchers.IO) { repo.selectAccount(account) } }
         catch (_: Exception) {
             OpenVpnRuntime.mutable.value = OpenVpnConnection(ConnectionPhase.ERROR, error = "ACCOUNT_UNAVAILABLE")
             if (latestStartId == command.startId) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(command.startId) }
@@ -201,12 +201,16 @@ class OpenVpnService : VpnService() {
             try {
                 val d = repo.data.value
                 val profile = d.profiles.firstOrNull { it.id == profileId } ?: error("profile")
-                val account = d.accounts.firstOrNull { it.id == accountId && it.usable(System.currentTimeMillis()) } ?: error("account")
+                val self = accountId == OpenVpnRuntime.SELF
+                if (self && !profile.selfContained) { terminal = "ACCOUNT_UNAVAILABLE"; return }
+                val account = if (self) null else d.accounts.firstOrNull { it.id == accountId && it.usable(System.currentTimeMillis()) } ?: error("account")
                 if (!OpenVpnNative.available(this@OpenVpnService)) { terminal = "CORE_UNAVAILABLE"; return }
                 val validation = OpenVpnNative.evaluate(ProfileRuntime.effective(profile, tcp = true))
                 if (validation.isNotEmpty()) { terminal = validation; return }
                 // Validate everything before releasing the user's working tunnel.
-                val password = repo.password(accountId)
+                val own = profile.ownCredentials
+                val username = if (self) own?.first.orEmpty() else account!!.username
+                val password = if (self) own?.second.orEmpty() else repo.password(accountId)
                 if (stopped.get()) return
                 TunnelExclusion.releaseForOpenVpn(this@OpenVpnService)
                 if (stopped.get()) return
@@ -230,7 +234,7 @@ class OpenVpnService : VpnService() {
                 check(id != 0L)
                 handle.set(id)
                 if (stopped.get()) OpenVpnNative.stop(id)
-                val error = OpenVpnNative.run(id, config, account.username, password, this)
+                val error = OpenVpnNative.run(id, config, username, password, this)
                 if (terminal == null && error.isNotEmpty()) terminal = error
             } catch (_: CancellationException) { stop() }
             catch (_: Exception) { terminal = "CONNECTION_FAILED" }

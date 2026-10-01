@@ -56,6 +56,9 @@ class CloudManager private constructor(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("cloud_accounts_prefs", Context.MODE_PRIVATE)
 
+    /** Same settings as the app path; callers isolate calls and never mutate this client. */
+    internal fun diagnosticClientBuilder(): OkHttpClient.Builder = client.newBuilder()
+
     // Temporary lists for memory, later persist to SharedPreferences or Room
     val accounts = mutableListOf<CloudAccount>()
     var settings = CloudSettings()
@@ -299,6 +302,7 @@ class CloudManager private constructor(private val context: Context) {
         // later call has to guess and none of them can guess differently.
         val shapeSaysGlobal = CloudAuth.isGlobalKey(token, email)
         var provenScheme: String? = null
+        var authTransportFailed = false
 
         fun probe(scheme: String): Boolean = try {
             val url = if (scheme == "bearer") "https://api.cloudflare.com/client/v4/user/tokens/verify"
@@ -316,6 +320,7 @@ class CloudManager private constructor(private val context: Context) {
             client.newCall(Request.Builder().url(url).headers(headers).get().build())
                 .execute().use { it.isSuccessful }
         } catch (e: Exception) {
+            authTransportFailed = true
             false
         }
 
@@ -329,7 +334,11 @@ class CloudManager private constructor(private val context: Context) {
         if (provenScheme == null) {
             return@withContext Pair(
                 false,
-                if (email.isBlank())
+                if (authTransportFailed)
+                    com.mlmvpn.scanner.store.tr(
+                        "ارتباط با کلادفلر کامل نشد؛ ممکن است اینترنت مسدود یا کند باشد. از بخش عیب‌یابی، دکتر کلادفلر را اجرا کنید.",
+                        "Cloudflare could not be reached reliably. This network may be blocked or slow. Open Cloudflare Doctor from Troubleshooting.")
+                else if (email.isBlank())
                     S(R.string.the_credentials_were_rejected_if_you_entered)
                 else
                     S(R.string.the_credentials_were_rejected_check_the_token)
@@ -1366,7 +1375,8 @@ class CloudManager private constructor(private val context: Context) {
         }
     }
 
-    suspend fun fetchCloudConfigs(account: CloudAccount): Pair<Boolean, List<String>> = withContext(Dispatchers.IO) {
+    suspend fun fetchCloudConfigs(account: CloudAccount, probeClient: OkHttpClient = client): Pair<Boolean, List<String>> = withContext(Dispatchers.IO) {
+        val client = probeClient
         try {
             if (account.workerUrl.isNullOrEmpty() || account.subPath.isNullOrEmpty() || account.trPass.isNullOrEmpty()) {
                 return@withContext Pair(false, emptyList())
@@ -2076,7 +2086,8 @@ class CloudManager private constructor(private val context: Context) {
         }
     }
 
-    suspend fun fetchEdgConfigs(account: CloudAccount): Pair<Boolean, List<String>> = withContext(Dispatchers.IO) {
+    suspend fun fetchEdgConfigs(account: CloudAccount, probeClient: OkHttpClient = client): Pair<Boolean, List<String>> = withContext(Dispatchers.IO) {
+        val client = probeClient
         try {
             if (account.edgWorkerUrl.isNullOrEmpty() || account.edgUuid.isNullOrEmpty()) {
                 return@withContext Pair(false, emptyList())
@@ -2285,7 +2296,8 @@ class CloudManager private constructor(private val context: Context) {
      * mistyped credential -- and the caller then leaves the account as it was rather than
      * recording a guess.
      */
-    private fun proveAuthScheme(account: CloudAccount): String? {
+    private fun proveAuthScheme(account: CloudAccount, probeClient: OkHttpClient = client): String? {
+        val client = probeClient
         fun ok(scheme: String): Boolean = try {
             val url = if (scheme == "bearer") "https://api.cloudflare.com/client/v4/user/tokens/verify"
                       else "https://api.cloudflare.com/client/v4/user"
@@ -2349,7 +2361,8 @@ class CloudManager private constructor(private val context: Context) {
      * a subdomain *create* for that stated reason -- see [createSubdomainOnly] -- and that answer
      * comes from Cloudflare's own error, not from us inferring it.
      */
-    suspend fun probeAccountStatus(account: CloudAccount): CloudVerifyProbe = withContext(Dispatchers.IO) {
+    suspend fun probeAccountStatus(account: CloudAccount, probeClient: OkHttpClient = client, readOnly: Boolean = false): CloudVerifyProbe = withContext(Dispatchers.IO) {
+        val client = probeClient
         val started = System.currentTimeMillis()
         var subHttp = -1
         var subErrors = ""
@@ -2362,8 +2375,8 @@ class CloudManager private constructor(private val context: Context) {
         // answer. Without this the fallback inference decides -- and inference is what put every
         // token account on Global-Key headers in the first place.
         if (account.authScheme.isNullOrBlank()) {
-            account.authScheme = proveAuthScheme(account)
-            if (account.authScheme != null) saveAccounts()
+            account.authScheme = proveAuthScheme(account, client)
+            if (account.authScheme != null && !readOnly) saveAccounts()
         }
         val scheme = account.authScheme
             ?: if (CloudAuth.useBearer(account)) "bearer?" else "global?"
@@ -2457,8 +2470,9 @@ class CloudManager private constructor(private val context: Context) {
      * `tokenVerify` carries the authentication answer; `subdomain`, whose slot is free here,
      * carries the account listing.
      */
-    suspend fun probeCredential(rawToken: String, rawEmail: String): CloudVerifyProbe =
+    suspend fun probeCredential(rawToken: String, rawEmail: String, probeClient: OkHttpClient = client): CloudVerifyProbe =
         withContext(Dispatchers.IO) {
+            val client = probeClient
             val started = System.currentTimeMillis()
             val token = rawToken.replace(Regex("[^a-zA-Z0-9_-]"), "").trim()
             val email = rawEmail.trim()

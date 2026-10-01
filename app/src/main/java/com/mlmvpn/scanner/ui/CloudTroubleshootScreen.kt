@@ -73,6 +73,11 @@ fun CloudTroubleshootScreen(
     /** Fired whenever a lever or a fix changed the account, so the panel behind can catch up. */
     onAccountChanged: () -> Unit = {},
 ) {
+    var doctorOpen by remember { mutableStateOf(false) }
+    if (doctorOpen) {
+        com.mlmvpn.scanner.ui.doctor.CfDoctorScreen(onBack = { doctorOpen = false }, credential = credential, account = account, visible = LocalTabVisible.current)
+        return
+    }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -183,6 +188,14 @@ fun CloudTroubleshootScreen(
     ) {
         Spacer(Modifier.height(10.dp))
         SettingsFooter(stringResource(R.string.cf_fix_intro))
+        SettingsGroup {
+            SettingsRow(
+                title = stringResource(R.string.cf_doctor_title),
+                icon = Icons.Default.CloudOff,
+                tint = Ios.Blue,
+                onClick = { doctorOpen = true },
+            )
+        }
 
         // ---- what was seen -------------------------------------------------------------------
         SettingsSectionHeader(stringResource(R.string.cf_fix_status))

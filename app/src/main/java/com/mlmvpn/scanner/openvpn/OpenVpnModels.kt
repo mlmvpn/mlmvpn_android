@@ -62,6 +62,28 @@ class Profile(
     val authenticatedControl: Boolean = false, val favorite: Boolean = false, val probe: ProbeResult? = null,
 ) {
     fun withFavorite(value: Boolean) = Profile(id, name, config, remotes, authenticatedControl, value, probe)
+
+    /** The username and password the file itself carries (an inline auth-user-pass block), if any. */
+    val ownCredentials: Pair<String, String>? get() = inlineCredentials(config)
+
+    /**
+     * Connects without one of the app's accounts: the file needs no credentials at all
+     * (certificate only), or carries its own. TunnelBear profiles always need the account.
+     */
+    val selfContained: Boolean
+        get() = ownCredentials != null || config.lineSequence().none { it.trim().lowercase().startsWith("auth-user-pass") }
+
+    companion object {
+        fun inlineCredentials(config: String): Pair<String, String>? {
+            val lines = config.lineSequence().map { it.trim() }.toList()
+            val start = lines.indexOf("<auth-user-pass>")
+            if (start < 0) return null
+            val end = lines.indexOf("</auth-user-pass>")
+            if (end < start) return null
+            val body = lines.subList(start + 1, end).filter { it.isNotEmpty() }
+            return body.getOrNull(0)?.let { it to body.getOrElse(1) { "" } }
+        }
+    }
     fun withProbe(value: ProbeResult) = Profile(id, name, config, remotes, authenticatedControl, favorite, value)
     override fun toString() = "OpenVPN profile $id"
 }

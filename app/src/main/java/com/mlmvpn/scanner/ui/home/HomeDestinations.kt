@@ -125,6 +125,7 @@ object HomeDestinations {
      * [BOARD_DEFAULT] and [DEFAULT_FOLDERS].
      */
     val GRID_DEFAULT: List<HomeApp> = listOf(
+        HomeApp("cfdoctor", R.string.cf_doctor_title, Icons.Default.Cloud, Blue, imageRes = R.drawable.ic_app_doctor),
         // The other four transports of the tunnel stack, first and in one unbroken row of four.
         // Together with MASQUE in the dock they are five separate products, not five modes of
         // one: MASQUE and WireGuard reach Cloudflare's edge with entirely different handshakes,
@@ -149,6 +150,9 @@ object HomeDestinations {
         // «FLUX»: country, IP version, connect -- the rest is the engine's job. Beside MAE, which
         // can use FLUX's routes as exits of its own.
         HomeApp("flux",              R.string.flux_title_short,   Icons.Default.Bolt,          Indigo, imageRes = R.drawable.ic_app_flux),
+        // «آمنزیا»: free WireGuard (hidden behind AmneziaWG junk packets) and Hysteria2 servers,
+        // plus the user's own .conf files, by country and by real delay.
+        HomeApp("amnezia",           R.string.amz_title,          Icons.Default.VpnKey,        Orange, imageRes = R.drawable.ic_app_amnezia),
         // A cloud server on the user's own GitHub allowance, reached through a Worker on their own
         // Cloudflare -- the Windows app's «گیت‌هاب تانل», whole. Beside Quick Connect: both are
         // "get me online", and this one is the fast one when the free networks are slow.
@@ -229,7 +233,7 @@ object HomeDestinations {
      * is only the folder a board starts with: it can be renamed, emptied and taken apart.
      */
     val DEFAULT_FOLDERS: Map<String, List<String>> = mapOf(
-        "tools" to listOf("fixed_ip", "sublink", "lan", "usage", "tutorial"),
+        "tools" to listOf("cfdoctor", "fixed_ip", "sublink", "lan", "usage", "tutorial"),
     )
 
     /**
@@ -242,7 +246,7 @@ object HomeDestinations {
     val BOARD_DEFAULT: List<String> = listOf(
         "masque", "wireguard", "warp_on_warp", "warp",
         "psiphon", "tor", "geph", "quick", "mae", "flux",
-        "github", "freeconfig",
+        "amnezia", "github", "freeconfig",
         "game", "vpngate", "openvpn", "configstudio",
         "store", "antisanction", "iran", "fronting",
         "@tools", "emergency_2", "emergency_3",
@@ -264,9 +268,9 @@ object HomeDestinations {
 
     fun categoryOf(id: String): Category? = when (id) {
         "masque", "wireguard", "warp_on_warp", "warp", "psiphon", "tor", "geph", "quick", "mae", "flux",
-        "github", "vpngate", "openvpn", "nodes" -> Category.CONNECT
+        "amnezia", "github", "vpngate", "openvpn", "nodes" -> Category.CONNECT
         "freeconfig", "iran", "fronting", "sublink", "configstudio", "cloud" -> Category.CONFIGS
-        "fixed_ip", "lan", "usage", "tutorial", "store", "scanner", "settings" -> Category.TOOLS
+        "cfdoctor", "fixed_ip", "lan", "usage", "tutorial", "store", "scanner", "settings" -> Category.TOOLS
         "game" -> Category.GAMES
         "emergency_2", "emergency_3", "antisanction" -> Category.EMERGENCY
         else -> null

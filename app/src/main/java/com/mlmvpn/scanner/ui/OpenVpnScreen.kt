@@ -122,6 +122,9 @@ fun OpenVpnScreen(onBack: () -> Unit, onStore: () -> Unit, onIran: () -> Unit, v
             onDial = {
                 when {
                     connection.active -> OpenVpnRuntime.disconnect(context)
+                    // A profile that brings its own credentials (or needs none) connects as it is.
+                    profile != null && profile.selfContained && (account == null || !com.mlmvpn.scanner.openvpn.ProfileRuntime.isTunnelBear(profile)) ->
+                        connect(profile.id, com.mlmvpn.scanner.openvpn.OpenVpnRuntime.SELF)
                     account == null -> { editing = null; page = Page.ACCOUNT_EDIT }
                     profile == null -> page = Page.SERVERS
                     else -> connect(profile.id, account.id)
@@ -139,7 +142,10 @@ fun OpenVpnScreen(onBack: () -> Unit, onStore: () -> Unit, onIran: () -> Unit, v
             onPick = { p ->
                 vm.change { it.selectProfile(p.id) }
                 val a = account
-                if (a != null && a.usable(System.currentTimeMillis()) && !(connection.active && connection.profileId == p.id)) {
+                val already = connection.active && connection.profileId == p.id
+                if (!already && p.selfContained && !com.mlmvpn.scanner.openvpn.ProfileRuntime.isTunnelBear(p)) {
+                    connect(p.id, com.mlmvpn.scanner.openvpn.OpenVpnRuntime.SELF)
+                } else if (a != null && a.usable(System.currentTimeMillis()) && !already) {
                     connect(p.id, a.id)
                 }
                 page = Page.MAIN
@@ -150,7 +156,8 @@ fun OpenVpnScreen(onBack: () -> Unit, onStore: () -> Unit, onIran: () -> Unit, v
                 if (fastest == null) vm.message.value = "TEST_FIRST"
                 else {
                     vm.change { it.selectProfile(fastest.id) }
-                    account?.takeIf { it.usable(System.currentTimeMillis()) }?.let { connect(fastest.id, it.id) }
+                    if (fastest.selfContained && !com.mlmvpn.scanner.openvpn.ProfileRuntime.isTunnelBear(fastest)) connect(fastest.id, com.mlmvpn.scanner.openvpn.OpenVpnRuntime.SELF)
+                    else account?.takeIf { it.usable(System.currentTimeMillis()) }?.let { connect(fastest.id, it.id) }
                 }
                 page = Page.MAIN
             },
@@ -741,7 +748,7 @@ private fun errorText(code: String): String = when {
     code == "NO_RESPONSE" -> tr("پاسخ نداد", "No answer")
     code == "NO_DATA" -> tr("دست‌دادن کامل شد ولی داده‌ای از تونل رد نشد؛ سرور دیگری را امتحان کنید.", "The handshake finished but no data crossed the tunnel; try another server.")
     code == "SAVE_FAILED" -> tr("ذخیره نشد؛ اگر این حساب وصل است، اول قطع کنید.", "Could not save; if this account is connected, disconnect first.")
-    code == "IMPORT_FAILED" -> tr("فایل‌ها خوانده نشدند. حداکثر ۱۰۰ فایل، هرکدام زیر ۱ مگابایت.", "Could not read the files. At most 100 files, each under 1 MiB.")
+    code.startsWith("IMPORT_FAILED") -> tr("فایل خوانده نشد: ", "Could not read the file: ") + code.removePrefix("IMPORT_FAILED").removePrefix(":")
     code == "PROFILE_UNSUPPORTED" -> tr("هسته این پروفایل را پشتیبانی نمی‌کند.", "The core does not support this profile.")
     code == "CORE_UNAVAILABLE" -> tr("هستهٔ OpenVPN بارگذاری نشد؛ استور را بررسی کنید.", "The OpenVPN core could not load; check the Store.")
     code == "CONNECT_DEADLINE" -> tr("این سرور در زمان مشخص وصل نشد و اتصال لغو شد. سرور دیگری را امتحان کنید.", "This server did not connect in time, so the attempt was stopped. Try another server.")

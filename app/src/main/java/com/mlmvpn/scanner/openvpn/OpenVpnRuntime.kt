@@ -10,6 +10,9 @@ import kotlinx.coroutines.withTimeout
 
 object OpenVpnRuntime {
     internal val mutable = MutableStateFlow(OpenVpnConnection())
+
+    /** The "account" of a profile that brings its own credentials, or needs none. */
+    const val SELF = "@profile"
     val connection = mutable.asStateFlow()
     fun connect(context: Context, profile: String, account: String) {
         ContextCompat.startForegroundService(context, Intent(context, OpenVpnService::class.java)
