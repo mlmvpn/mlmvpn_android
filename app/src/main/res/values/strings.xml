@@ -257,6 +257,7 @@
     <string name="settings_lang_auto">System Default</string>
     <string name="settings_lang_fa">فارسی</string>
     <string name="settings_lang_en">English</string>
+    <string name="settings_lang_zh">中文</string>
     <string name="settings_select">Select</string>
     <string name="settings_advanced_vpn">Advanced VPN Settings (Tunnel / Apps)</string>
     <string name="settings_saved">Settings saved</string>

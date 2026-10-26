@@ -235,6 +235,7 @@ fun SettingsScreen(
 
     val languageOptions = listOf(
         IosOption("auto", stringResource(R.string.settings_lang_auto)),
+        IosOption("zh", stringResource(R.string.settings_lang_zh)),
         IosOption("fa", stringResource(R.string.settings_lang_fa)),
         IosOption("en", stringResource(R.string.settings_lang_en)),
     )

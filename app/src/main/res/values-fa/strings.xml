@@ -253,6 +253,7 @@
     <string name="settings_lang_auto">زبان سیستم</string>
     <string name="settings_lang_fa">فارسی</string>
     <string name="settings_lang_en">English</string>
+    <string name="settings_lang_zh">中文</string>
     <string name="settings_select">انتخاب کنید</string>
     <string name="settings_advanced_vpn">تنظیمات پیشرفته VPN (تونل / برنامه‌ها)</string>
     <string name="settings_saved">تنظیمات ذخیره شد</string>
