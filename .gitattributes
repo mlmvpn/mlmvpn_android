@@ -6,3 +6,14 @@
 
 # Signed test fixtures: byte-exact, or their signatures stop verifying.
 app/src/test/resources/geph/* -text
+
+# The studio worker bundle is verified byte-for-byte against its fragments
+# (`node scripts/build-studio-worker.js --check`, wired into preBuild), so the
+# asset and the fragments must share one line ending IN THE REPO. The asset was
+# once committed with CRLF while the fragments are LF, which made the check fail
+# on every Linux checkout (CI included) and pass only on Windows where
+# core.autocrlf=true masks it. eol=lf pins LF everywhere.
+app/src/main/assets/mlm_worker.js text eol=lf
+worker-src/studio/*.js text eol=lf
+worker-src/studio/*.json text eol=lf
+worker-src/studio/*.sql text eol=lf
