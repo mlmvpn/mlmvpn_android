@@ -227,6 +227,9 @@ internal fun TileFace(
             // It sits after `clip` in the chain, so the squircle still shapes it.
             .drawWithContent {
                 drawContent()
+                // `size` unqualified would be TileFace's own Dp parameter, not the
+                // DrawScope's Size -- qualify through the receiver.
+                val h = this.size.height
                 drawRect(
                     brush = Brush.verticalGradient(
                         listOf(
@@ -234,7 +237,7 @@ internal fun TileFace(
                             Color.White.copy(alpha = 0f),
                         ),
                         startY = 0f,
-                        endY = size.height * 0.55f,
+                        endY = h * 0.55f,
                     ),
                 )
             },

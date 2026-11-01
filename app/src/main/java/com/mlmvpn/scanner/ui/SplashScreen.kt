@@ -75,10 +75,14 @@ fun SplashScreen(onFinished: () -> Unit) {
     val taglineAlpha = remember { Animatable(0f) }
     val exitAlpha = remember { Animatable(1f) }
 
+    // Read in the composable body, not inside the LaunchedEffect: LocalContext.current is a
+    // @Composable read and the effect's lambda is not a composable context.
+    val context = androidx.compose.ui.platform.LocalContext.current
+
     LaunchedEffect(Unit) {
         // Performance mode skips the intro: ~4s of full-screen animation is the heaviest single
         // thing the app does at launch, and on an old GPU it reads as a hang, not a flourish.
-        if (com.mlmvpn.scanner.utils.Perf.isLowEnd(androidx.compose.ui.platform.LocalContext.current)) {
+        if (com.mlmvpn.scanner.utils.Perf.isLowEnd(context)) {
             onFinished()
             return@LaunchedEffect
         }
