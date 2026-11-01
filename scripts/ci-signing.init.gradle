@@ -8,16 +8,31 @@
 // with KEYSTORE_PATH / KEYSTORE_PASS / KEY_ALIAS / KEY_PASS set (see
 // .github/workflows/release-apk.yml). Without KEYSTORE_PATH the script does
 // nothing, so local builds behave exactly as before.
+//
+// The configuration goes through extensions.configure('android') rather than
+// property access: that is the form which creates the signingConfigs.release
+// element if AGP has not made it yet, so it cannot throw UnknownDomainObject
+// during project configuration.
 allprojects { p ->
-    afterEvaluate {
+    p.afterEvaluate {
         if (p.plugins.hasPlugin('com.android.application')) {
             def ks = System.getenv('KEYSTORE_PATH')
             if (ks != null && new File(ks).isFile()) {
-                p.android.signingConfigs.release.storeFile = p.file(ks)
-                p.android.signingConfigs.release.storePassword = System.getenv('KEYSTORE_PASS')
-                p.android.signingConfigs.release.keyAlias = System.getenv('KEY_ALIAS')
-                p.android.signingConfigs.release.keyPassword = System.getenv('KEY_PASS')
-                p.android.buildTypes.release.signingConfig = p.android.signingConfigs.release
+                p.extensions.configure('android') {
+                    signingConfigs {
+                        release {
+                            storeFile = p.file(ks)
+                            storePassword = System.getenv('KEYSTORE_PASS')
+                            keyAlias = System.getenv('KEY_ALIAS')
+                            keyPassword = System.getenv('KEY_PASS')
+                        }
+                    }
+                    buildTypes {
+                        release {
+                            signingConfig = signingConfigs.release
+                        }
+                    }
+                }
             }
         }
     }

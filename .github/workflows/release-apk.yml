@@ -95,6 +95,27 @@ jobs:
           tail -n 45 /tmp/build.log | while IFS= read -r l; do echo "::error ::$l"; done
           { echo '### Build log tail (failure)'; echo '```'; tail -60 /tmp/build.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Publish the full build log to a draft release (on failure)
+        # The release body is readable through the plain REST API, unlike the runner
+        # log zip (which redirects to a host this environment cannot reach).
+        if: failure() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          {
+            echo "## Build FAILED — full log of run ${GITHUB_RUN_ID}"
+            echo
+            echo '```'
+            head -c 60000 /tmp/build.log
+            echo '```'
+          } > /tmp/notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file /tmp/notes.md
+          else
+            gh release create "$TAG" --draft --title "$TAG (build failed)" --notes-file /tmp/notes.md
+          fi
+
       - name: Collect APKs
         run: |
           mkdir -p dist/apk
