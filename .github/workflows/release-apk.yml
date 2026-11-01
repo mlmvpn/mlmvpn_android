@@ -73,8 +73,13 @@ jobs:
           echo "KEY_ALIAS=mlmvpn-ci" >> "$GITHUB_ENV"
           echo "KEY_PASS=mlmvpn-ci" >> "$GITHUB_ENV"
 
+      - name: Sanity-check the wrapper
+        run: |
+          java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain --version
+
       - name: Build signed release APKs (all ABIs + universal)
-        run: ./gradlew --no-daemon --stacktrace -I scripts/ci-signing.init.gradle assembleRelease -x lintVitalRelease
+        # `sh gradlew` (not `./gradlew`) so the exec bit is not required.
+        run: sh gradlew --no-daemon --stacktrace -I scripts/ci-signing.init.gradle assembleRelease -x lintVitalRelease
 
       - name: Collect APKs
         run: |
