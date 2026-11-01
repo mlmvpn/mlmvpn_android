@@ -5175,6 +5175,18 @@ object ConnectionLog {
     )
 
     /**
+     * The file append runs on this single background writer, never on the caller. A Psiphon
+     * connect emits several hundred lines in under two seconds and each `appendText` is a
+     * synchronous disk write inside @Synchronized — on an old phone's flash that blocked
+     * whichever thread logged (the main thread included) for the whole burst, which read as a
+     * hang. The ring buffer above stays synchronous: it is memory, and screens read it live.
+     * A single-thread executor keeps the lines in order; a daemon thread never delays exit.
+     */
+    private val fileWriter = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "connection-log-writer").apply { isDaemon = true }
+    }
+
+    /**
      * Ported from upstream v0.8.0: mirror the ring buffer to a file so logs
      * survive the process being killed. Required — the merged MainActivity calls
      * this on startup. Capped and self-truncating so it cannot grow unbounded.
@@ -5193,7 +5205,10 @@ object ConnectionLog {
         val line = "${stamp.format(java.util.Date())}  $message"
         if (entries.size == MAX_ENTRIES) entries.removeFirst()
         entries.addLast(line)
-        runCatching { sink?.appendText(line + "\n") }
+        val target = sink
+        if (target != null) {
+            fileWriter.execute { runCatching { target.appendText(line + "\n") } }
+        }
     }
 
     @Synchronized

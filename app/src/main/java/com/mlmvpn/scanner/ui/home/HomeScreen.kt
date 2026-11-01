@@ -6,6 +6,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -427,12 +428,28 @@ private fun HomeStatusStrip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // The shield and its verdict in one frosted pill, the way iOS batches a status: readable
+        // over any wallpaper without a scrim behind the whole strip. Real glass, not a flat fill,
+        // so the pill refracts the backdrop behind it like the dock does.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .frostedGlass(RoundedCornerShape(20.dp), overWallpaper = true, underScrim = false)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
             Icon(
                 Icons.Default.Shield,
                 contentDescription = null,
                 tint = if (isRunning) green else muted.copy(alpha = 0.55f),
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = stringResource(if (isRunning) R.string.vpn_connected else R.string.vpn_disconnected),
+                color = if (isRunning) green else muted.copy(alpha = 0.8f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
             )
         }
 
@@ -510,6 +527,7 @@ private fun BoardGrid(
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier = modifier) {
+        val context = LocalContext.current
         val density = LocalDensity.current
         val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
         val scope = rememberCoroutineScope()
@@ -574,7 +592,9 @@ private fun BoardGrid(
         // Only while rearranging: an infinite transition left in composition never stops asking for
         // frames, which pins the whole app at 60fps forever -- the failure documented in
         // AppScreen's emergency vignette, where it destabilised the GPU RenderThread.
-        val jiggle: State<Float> = if (editMode) {
+        // In performance mode the board stays still instead: the jiggle is pure decoration and
+        // exactly the frame budget an old GPU does not have.
+        val jiggle: State<Float> = if (editMode && !com.mlmvpn.scanner.utils.Perf.isLowEnd(context)) {
             rememberInfiniteTransition(label = "HomeJiggle").animateFloat(
                 initialValue = -1.7f,
                 targetValue = 1.7f,
@@ -832,13 +852,22 @@ internal fun PageDots(count: Int, current: Int, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         repeat(count) { i ->
+            // iOS's tell: the dot for the page you are on stretches into a small pill instead of
+            // merely brightening, so the position reads at a glance even with several pages.
+            val active = i == current
+            val dotWidth by animateDpAsState(
+                targetValue = if (active) 18.dp else 7.dp,
+                animationSpec = spring(dampingRatio = 0.8f, stiffness = 420f),
+                label = "pageDotWidth",
+            )
             Box(
                 modifier = Modifier
                     .padding(horizontal = 4.dp)
-                    .size(7.dp)
+                    .width(dotWidth)
+                    .height(7.dp)
                     .clip(RoundedCornerShape(50))
                     .background(
-                        Color.White.copy(alpha = if (i == current) 0.85f else 0.28f)
+                        Color.White.copy(alpha = if (active) 0.9f else 0.28f)
                     )
             )
         }

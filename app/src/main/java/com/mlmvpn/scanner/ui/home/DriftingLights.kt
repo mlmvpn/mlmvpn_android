@@ -118,8 +118,17 @@ fun DriftingLights(
     // animation -- does not stop when the app goes to the background or this page is parked out of
     // sight: it went on writing a float fifteen times a second for as long as the tunnel kept the
     // process alive. Paused, it picks up from where the drift stopped, so nothing jumps.
+    // In performance mode the drift is drawn once, static: the loop below writes a float every
+    // tick and each tick invalidates the Canvas's display list, which is frame budget an old
+    // GPU does not have. The lights still render — the clock simply stays at 0.
+    val animate = !com.mlmvpn.scanner.utils.Perf.isLowEnd(
+        androidx.compose.ui.platform.LocalContext.current
+    )
     val clock = remember { mutableFloatStateOf(0f) }
-    com.mlmvpn.scanner.ui.LaunchedWhileVisible(Unit) {
+    // Keyed on `animate` as well as visibility: flipping performance mode while this screen is
+    // open starts or stops the loop in place instead of at the next visit.
+    com.mlmvpn.scanner.ui.LaunchedWhileVisible(animate) {
+        if (!animate) return@LaunchedWhileVisible
         // Read off the wall clock rather than accumulated per tick, so a tick the dispatcher was
         // late for costs one longer step instead of permanently slowing the drift down.
         val resumeAt = clock.floatValue

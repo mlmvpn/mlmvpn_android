@@ -12,6 +12,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 import android.util.Log
 
@@ -45,7 +49,13 @@ class MainActivity : AppCompatActivity() {
         com.mlmvpn.scanner.ui.home.Wallpapers.init(this)
         com.mlmvpn.scanner.ui.home.Appearance.init(this)
 
-        com.mlmvpn.scanner.engines.subgenerator.SubGenManager(this).startAutoSync()
+        // The subscription sync only matters once the user has Cloudflare accounts, so it no
+        // longer starts on the launch path: building its managers on the main thread before the
+        // first frame was a measurable jank on old phones. Two seconds in, off the critical path.
+        lifecycleScope.launch(Dispatchers.IO) {
+            delay(2000)
+            com.mlmvpn.scanner.engines.subgenerator.SubGenManager(this@MainActivity).startAutoSync()
+        }
 
         setContent {
             // Settings > Display > Appearance drives this. Note the honest limit: only the
