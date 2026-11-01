@@ -167,6 +167,8 @@ jobs:
           fi
           # A failed earlier attempt may have left the release as a draft named
           # "(build failed)" -- publish it properly now that the build succeeded.
-          REL_ID=$(gh release view "$TAG" --json id --jq '.id')
-          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$REL_ID" \
-            --field draft=false --field name="$TAG" >/dev/null
+          REL_ID=$(gh release view "$TAG" --json id --jq '.id' 2>/dev/null || true)
+          if [ -n "$REL_ID" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$REL_ID" \
+              --field draft=false --field name="$TAG" >/dev/null || true
+          fi
