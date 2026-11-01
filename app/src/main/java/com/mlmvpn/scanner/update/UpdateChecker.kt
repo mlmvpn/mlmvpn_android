@@ -28,7 +28,7 @@ import com.mlmvpn.scanner.R
 import com.mlmvpn.scanner.utils.S
 
 /**
- * Checks the GitHub "latest release" of arshia8058/mlmvpn_android (this fork) against the installed
+ * Checks the GitHub "latest release" of arshia8058/mlmvpn_android_copy (our standalone repo) against the installed
  * versionName and, if newer, downloads + installs the APK. Every network call here is
  * best-effort: GitHub is blocked for many users in Iran, so a failure (no internet,
  * DNS/TLS block, rate limit, malformed response) must never interrupt anything else -- but it is
@@ -50,7 +50,8 @@ import com.mlmvpn.scanner.utils.S
  */
 object UpdateChecker {
     private const val TAG = "UpdateChecker"
-    private const val REPO = "mlmvpn/mlmvpn_android"
+    // Our standalone repo, not upstream and not the old fork: updates come from its releases.
+    private const val REPO = "arshia8058/mlmvpn_android_copy"
     private const val API_URL = "https://api.github.com/repos/$REPO/releases/latest"
 
     private const val PREFS = "app_settings"

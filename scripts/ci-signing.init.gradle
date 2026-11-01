@@ -1,7 +1,8 @@
 // CI-only signing injection. The release buildType deliberately has NO
 // signingConfig in the repo (release keys are never committed), so an unsigned
 // APK is what `assembleRelease` produces locally. This init script signs it with
-// an ephemeral keystore passed through environment variables:
+// the STABLE CI keystore (ci/ci-release.keystore) passed through environment
+// variables, so every CI build shares one signature and in-app updates work:
 //
 //   ./gradlew -I scripts/ci-signing.init.gradle assembleRelease
 //
