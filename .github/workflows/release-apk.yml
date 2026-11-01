@@ -75,10 +75,14 @@ jobs:
           java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain --version
 
       - name: Build signed release APKs (all ABIs + universal)
-        # `sh gradlew` (not `./gradlew`) so the exec bit is not required.
+        # Invoke the wrapper JAR directly rather than through gradlew: it is exactly
+        # what the sanity check above already proved works on this runner.
         run: |
           set -o pipefail
-          sh gradlew --no-daemon --stacktrace -I scripts/ci-signing.init.gradle assembleRelease -x lintVitalRelease 2>&1 | tee /tmp/build.log
+          java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain \
+            --no-daemon --stacktrace \
+            -I scripts/ci-signing.init.gradle \
+            assembleRelease -x lintVitalRelease 2>&1 | tee /tmp/build.log
 
       - name: Surface the build log as annotations (on failure)
         # Runner log downloads are not reachable from everywhere, so on failure the
