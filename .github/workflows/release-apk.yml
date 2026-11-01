@@ -55,9 +55,6 @@ jobs:
           echo 'org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8' >> gradle.properties
           cat gradle.properties
 
-      - name: Cache Gradle
-        uses: gradle/gradle-build-action@v3
-
       - name: Generate an ephemeral signing keystore
         # The release buildType has no signingConfig in the repo (release keys are
         # never committed), so CI signs with a throwaway key. The resulting APKs
@@ -79,7 +76,22 @@ jobs:
 
       - name: Build signed release APKs (all ABIs + universal)
         # `sh gradlew` (not `./gradlew`) so the exec bit is not required.
-        run: sh gradlew --no-daemon --stacktrace -I scripts/ci-signing.init.gradle assembleRelease -x lintVitalRelease
+        run: |
+          set -o pipefail
+          sh gradlew --no-daemon --stacktrace -I scripts/ci-signing.init.gradle assembleRelease -x lintVitalRelease 2>&1 | tee /tmp/build.log
+
+      - name: Surface the build error as annotations (on failure)
+        # The runner log download is not always reachable from everywhere, so on
+        # failure the interesting lines are echoed as workflow annotations --
+        # which ARE available through the plain REST API -- and the tail goes to
+        # the job summary.
+        if: failure()
+        run: |
+          grep -E "e: file:|error:|FAILURE:|What went wrong|Execution failed|Caused by|> Task .* FAILED|Exception" /tmp/build.log | head -40 | while IFS= read -r l; do echo "::error ::$l"; done
+          echo '### Last 40 lines of the build log' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -40 /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Collect APKs
         run: |
