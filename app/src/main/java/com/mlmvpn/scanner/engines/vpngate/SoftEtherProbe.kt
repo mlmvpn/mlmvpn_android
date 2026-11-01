@@ -221,6 +221,9 @@ object SoftEtherProbe {
                 PropertyPack().also { it.read(ByteBuffer.wrap(response.second)) }
             } catch (e: Exception) {
                 return@withContext Result.Failed(Failure.NOT_SOFTETHER)
+            } catch (e: AssertionError) {
+                // The parser's own checks (a malformed pack from something that is not SoftEther).
+                return@withContext Result.Failed(Failure.NOT_SOFTETHER)
             }
             if (pack.intProperties[SEP_ERROR] != null) return@withContext Result.Failed(Failure.REFUSED)
             if (pack.bytesProperties[SEP_RANDOM] == null) return@withContext Result.Failed(Failure.NOT_SOFTETHER)

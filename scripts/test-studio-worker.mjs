@@ -146,7 +146,7 @@ export const __internals = {
   studioDialPool, studioPoolParse, POOL_LISTS, POOL_STATE, POOL_GOOD, POOL_SETTINGS,
   studioMeterJoin, studioMeterAdd, studioMeterLeave, studioMeterTick, METER, studioThresholdFor,
   studioEarlyData, studioXhttpReadHeader, studioPresenceAdmit, PRESENCE_OK, studioPoolVerify,
-  studioExitsFor, studioConfigKind, POOL_VERIFIED, EXIT_URL_STATE,
+  studioExitsFor, studioConfigKind, POOL_VERIFIED, EXIT_URL_STATE, SessionDO,
 };
 `;
 
@@ -1635,7 +1635,8 @@ await test('device and address hashes are salted and carry no raw address', asyn
   const req = (ip, ua) => new Request(BASE, { headers: { 'CF-Connecting-IP': ip, 'User-Agent': ua } });
 
   const a = await studioIpHash(salt, req('203.0.113.7', 'x'));
-  ok(!a.includes('203'), 'the address is not in the hash');
+  // the whole address: «203» alone turns up in about one random hex hash in seventy, and failed a build
+  ok(!a.includes('203.0.113.7') && /^[0-9a-f]+$/.test(a), 'the address is not in the hash');
   eq(a, await studioIpHash(salt, req('203.0.113.7', 'x')), 'stable for the same address');
   ok(a !== await studioIpHash(salt, req('203.0.113.8', 'x')), 'different for a different address');
   ok(a !== await studioIpHash('other-salt', req('203.0.113.7', 'x')), 'and salted');
@@ -4003,6 +4004,87 @@ await test('end to end: XHTTP packet-up carries data, download GET and upload PO
     ok(text.includes('echo:hello'), 'the payload in the header POST came back: ' + JSON.stringify(text));
     ok(text.indexOf('echo:second') >= 0 && text.indexOf('echo:third') > text.indexOf('echo:second'),
       'and the later uploads, in the order they were sent: ' + JSON.stringify(text));
+  } finally { delete globalThis.__studioConnect; }
+});
+
+await test('end to end: XHTTP packet-up whose requests land in DIFFERENT isolates still meets, in the session\'s Durable Object', async () => {
+  // The failure measured on workers.dev (2026-09-26): the upload POSTs reached other isolates than
+  // the download GET and were lost. Two module instances stand in for two isolates (each has its own
+  // session table); a third hosts the Durable Object every request of the session is handed to.
+  const { worker: isolateA, env, post } = await authed();
+  const isolateB = await loadWorker();
+  const objectIsolate = await loadWorker();
+  const user = await (await post('/users', { username: 'xdo' })).json();
+  const cred = '12345678-9abc-4def-8123-456789abcdef';
+  eq((await post('/configs', { user_id: user.id, protocol: 'v', transport_type: 'xhttp', credential: cred,
+    uri_template: 'vless://{{cred}}@{{host}}:{{port}}?type=xhttp&mode=packet-up&path={{path}}#{{remark}}' })).status, 201, 'config');
+
+  const objects = new Map();
+  const names = [];
+  const SESSIONS = {
+    idFromName: (n) => { names.push(n); return n; },
+    get: (id) => ({
+      fetch: async (req) => {
+        if (!objects.has(id)) {
+          const state = { storage: { sql: null, setAlarm() { } }, waitUntil: (p) => { if (p && p.catch) p.catch(() => { }); } };
+          objects.set(id, new objectIsolate.internals.SessionDO(state, envDO));
+        }
+        return objects.get(id).fetch(req);
+      },
+    }),
+  };
+  const envDO = { ...env, SESSIONS };
+  globalThis.__studioConnect = () => fakeSocket(echoServer());
+  try {
+    const sid = crypto.randomUUID();
+    const downP = isolateA.fetch(new Request(BASE + '/' + sid), envDO, CTX);
+    const up0 = await isolateB.fetch(new Request(BASE + '/' + sid + '/0', { method: 'POST', body: vlessRequest(cred, 'example.com', 443, utf8('hello')) }), envDO, CTX);
+    eq(up0.status, 200, 'the header POST, in the other isolate, is answered');
+    const down = await downP;
+    eq(down.status, 200, 'the download answers');
+    const reader = down.body.getReader();
+    const got = [];
+    let pending = null;
+    const readFor = async (ms) => {
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        pending = pending || reader.read();
+        const r = await Promise.race([pending, new Promise((x) => setTimeout(() => x({ timeout: true }), until - Date.now()))]);
+        if (r.timeout) break;
+        pending = null;
+        if (r.done) break;
+        got.push(new Uint8Array(r.value));
+      }
+    };
+    await readFor(200);
+    eq((await isolateA.fetch(new Request(BASE + '/' + sid + '/2', { method: 'POST', body: utf8('third') }), envDO, CTX)).status, 200, 'an upload in isolate A');
+    eq((await isolateB.fetch(new Request(BASE + '/' + sid + '/1', { method: 'POST', body: utf8('second') }), envDO, CTX)).status, 200, 'the one before it, in isolate B');
+    await readFor(250);
+    const all = cat(...got);
+    eq(Array.from(all.slice(0, 2)), [0, 0], 'the VLESS response header first');
+    const text = new TextDecoder().decode(all.slice(2));
+    ok(text.includes('echo:hello'), 'the payload of the header POST came back: ' + JSON.stringify(text));
+    ok(text.indexOf('echo:second') >= 0 && text.indexOf('echo:third') > text.indexOf('echo:second'),
+      'and the uploads from both isolates, in order: ' + JSON.stringify(text));
+    eq(objects.size, 1, 'one Durable Object for the session');
+    ok(names.every((n) => n === 'x:' + sid), 'named after the session: ' + JSON.stringify([...new Set(names)]));
+  } finally { delete globalThis.__studioConnect; }
+});
+
+await test('without the SESSIONS binding, packet-up is served in the isolate as before (nothing is forwarded)', async () => {
+  const { worker, env, post } = await authed();
+  const user = await (await post('/users', { username: 'xnd' })).json();
+  const cred = '22345678-9abc-4def-8123-456789abcdef';
+  await post('/configs', { user_id: user.id, protocol: 'v', transport_type: 'xhttp', credential: cred,
+    uri_template: 'vless://{{cred}}@{{host}}:{{port}}?type=xhttp&mode=packet-up&path={{path}}#{{remark}}' });
+  globalThis.__studioConnect = () => fakeSocket(echoServer());
+  try {
+    const sid = crypto.randomUUID();
+    const downP = worker.fetch(new Request(BASE + '/' + sid), env, CTX);
+    eq((await call(worker, env, '/' + sid + '/0', { method: 'POST', body: vlessRequest(cred, 'example.com', 443, utf8('solo')) })).status, 200, 'header POST');
+    const down = await downP;
+    const r = await Promise.race([down.body.getReader().read(), new Promise((x) => setTimeout(() => x({ timeout: true }), 500))]);
+    ok(!r.timeout && !r.done, 'the download carries data in one isolate, as it always did');
   } finally { delete globalThis.__studioConnect; }
 });
 

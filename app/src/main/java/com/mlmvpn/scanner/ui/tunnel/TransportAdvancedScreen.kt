@@ -212,7 +212,7 @@ fun TransportAdvancedScreen(transport: Transport, onBack: () -> Unit) {
 
         P_CHAIN -> IosPickerScreen(
             title = S(R.string.outer_layer),
-            options = CHAIN_OUTER,
+            options = listOf(IosOption("direct", S(R.string.direct_2), "Psiphon")) + CHAIN_OUTER,
             selectedKey = chainOuter,
             onSelect = { chainOuter = it; prefs.chainOuterMode = it },
             onBack = ::pop,
@@ -523,6 +523,14 @@ fun TransportAdvancedScreen(transport: Transport, onBack: () -> Unit) {
                 Transport.GEPH -> Unit
                 // «وارپ» likewise: CfWarpSettingsScreen.
                 Transport.CFWG -> Unit
+                // «لنترن»'s own choices (routing, the server list) are on its screen; only the shared
+                // sections below apply here.
+                Transport.LANTERN -> Unit
+                // «URnetwork»: its own choices (location, ad blocker, MAE, account) are on its screen.
+                // Of the shared sections below, the per-destination lists become URnetwork's own
+                // routing rules in its core, and the kill switch and reconnect apply as for the rest;
+                // the diagnostics section is the tunnel core's and is left out.
+                Transport.URNETWORK -> Unit
             }
 
             // --- Zero Trust, for the three transports that enrol -----------------------
@@ -610,13 +618,17 @@ fun TransportAdvancedScreen(transport: Transport, onBack: () -> Unit) {
                     S(R.string.and_if_you_are_not_expecting_it)
             )
 
-            SettingsSectionHeader(S(R.string.diagnostics))
-            SettingsGroup {
-                SettingsRow(S(R.string.log_level), Icons.Default.Visibility, Ios.Yellow,
-                    value = labelOf(LOG_LEVELS, logLevel), onClick = { push(P_LOG_LEVEL) })
-                Separator()
-                SettingsRow(S(R.string.performance_profile), Icons.Default.Memory, Ios.Orange,
-                    value = labelOf(PERF_PROFILES, perfProfile), onClick = { push(P_PERF) })
+            // The tunnel core's log level and performance profile: settings of a core URnetwork
+            // does not run, so its page does not offer them.
+            if (transport != Transport.URNETWORK) {
+                SettingsSectionHeader(S(R.string.diagnostics))
+                SettingsGroup {
+                    SettingsRow(S(R.string.log_level), Icons.Default.Visibility, Ios.Yellow,
+                        value = labelOf(LOG_LEVELS, logLevel), onClick = { push(P_LOG_LEVEL) })
+                    Separator()
+                    SettingsRow(S(R.string.performance_profile), Icons.Default.Memory, Ios.Orange,
+                        value = labelOf(PERF_PROFILES, perfProfile), onClick = { push(P_PERF) })
+                }
             }
 
             Spacer(Modifier.height(28.dp))
@@ -757,6 +769,7 @@ private fun fa(text: String): String {
 // spelled out because the core matches the whole word.
 
 private val MASQUE_TRANSPORTS = listOf(
+    IosOption(com.mlmvpn.core.tunnel.MasqueCarrier.AUTO, S(R.string.masque_transport_auto), S(R.string.masque_transport_auto_sub)),
     IosOption("h3", S(R.string.http_3_over_quic), S(R.string.port_443_over_udp_faster_and_what)),
     IosOption("h2", S(R.string.http_2_over_tcp), S(R.string.port_443_over_tcp_with_tls_fragmentation)),
 )
@@ -808,7 +821,9 @@ private val TOR_MODES = listOf(
     IosOption("direct", S(R.string.direct_2), S(R.string.no_bridge_for_a_network_that_has)),
     IosOption("obfs4", "obfs4", S(R.string.a_bridge_that_hides_the_shape_of)),
     IosOption("meek", "Meek", S(R.string.rides_the_traffic_on_a_cdn_the)),
+    IosOption("webtunnel", "WebTunnel", S(R.string.tor_mode_webtunnel_sub)),
     IosOption("snowflake", "Snowflake", S(R.string.volunteer_webrtc_proxies_the_last_resort)),
+    IosOption("vanilla", S(R.string.tor_mode_vanilla), S(R.string.tor_mode_vanilla_sub)),
 )
 
 private val LOG_LEVELS = listOf(

@@ -1,0 +1,15 @@
+// The same Android Gradle Plugin as android/tools/aibench (already in this machine's cache).
+// Java, no Kotlin and no AndroidX: nothing here has to match any app's toolchain.
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:8.3.2"
+    }
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}

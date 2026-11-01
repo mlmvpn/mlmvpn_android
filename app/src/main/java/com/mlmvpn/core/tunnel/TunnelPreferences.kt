@@ -40,7 +40,7 @@ class TunnelPreferences(context: Context) {
      * never completes a handshake and h2 connects immediately.
      */
     var masqueTransport: String
-        get() = read(MASQUE_TRANSPORT, "h3")
+        get() = read(MASQUE_TRANSPORT, MasqueCarrier.AUTO)
         set(value) = write(MASQUE_TRANSPORT, value)
 
     /**
@@ -56,7 +56,7 @@ class TunnelPreferences(context: Context) {
 
     /** How hard the endpoint scan works before settling on a gateway. */
     var scanMode: String
-        get() = read(SCAN_MODE, "balanced")
+        get() = read(SCAN_MODE, DEFAULT_SCAN_MODE)
         set(value) = write(SCAN_MODE, value)
 
     /** Which address family to scan: "v4", "v6" or "both". */
@@ -141,7 +141,7 @@ class TunnelPreferences(context: Context) {
      * or "auto" to walk the whole ladder.
      */
     var chainOuterMode: String
-        get() = read(CHAIN_OUTER_MODE, "auto")
+        get() = read(CHAIN_OUTER_MODE, "direct")
         set(value) = write(CHAIN_OUTER_MODE, value)
 
     /**
@@ -338,6 +338,8 @@ class TunnelPreferences(context: Context) {
         const val MASQUE_TRANSPORT = "default_masque_transport"
         const val ENDPOINT_DISCOVERY = "endpoint_discovery"
         const val SCAN_MODE = "default_scan_mode"
+        /** «توربو»: see CoreConfig.json for the measurement behind it. */
+        const val DEFAULT_SCAN_MODE = "turbo"
         const val IP_SCAN = "default_scan"
         const val MANUAL_ENDPOINT = "manual_endpoint"
         const val OBFUSCATION_PROFILE = "obfuscation_profile"

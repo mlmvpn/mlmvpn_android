@@ -33,6 +33,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.res.imageResource
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.res.stringResource
@@ -78,6 +80,8 @@ fun AppIconTile(
     connected: Boolean = false,
     /** iOS's red count badge, top-right. 0 draws nothing. */
     badge: Int = 0,
+    /** A short red word over the top of the tile («قطع»); null draws nothing. */
+    tag: String? = null,
 ) {
     // One Box around both shapes so the lamp is positioned against the tile rather than against
     // the cell: `size` is the tile, and the cell around it is wider by whatever the caption needs.
@@ -104,6 +108,35 @@ fun AppIconTile(
             }
             CountBadge(count = badge, size = size, modifier = Modifier.align(topRight))
         }
+        if (tag != null) TextTag(text = tag, size = size, modifier = Modifier.align(Alignment.TopCenter))
+    }
+}
+
+/**
+ * A red word pinned over the top edge of a tile -- «قطع» on an engine that does not work right
+ * now, so nobody spends a minute on it before finding out. Same red as the count badge, so the
+ * board has one colour for "look here".
+ */
+@Composable
+private fun TextTag(text: String, size: Dp, modifier: Modifier = Modifier) {
+    val h = (size * 0.30f).coerceIn(16.dp, 22.dp)
+    Box(
+        modifier = modifier
+            .absoluteOffset(y = -(h * 0.45f))
+            .height(h)
+            .shadow(elevation = 2.dp, shape = RoundedCornerShape(50), clip = false)
+            .clip(RoundedCornerShape(50))
+            .background(Color(0xFFFF3B30))
+            .padding(horizontal = 7.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = (h.value * 0.58f).sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
     }
 }
 
@@ -186,7 +219,7 @@ internal fun TileFace(
         // drawn behind it and it is not clipped. Clipping would shave the corners of a silhouette
         // that is already the right one.
         Image(
-            painter = painterResource(app.imageRes),
+            painter = tilePainter(app.imageRes),
             contentDescription = null,
             modifier = modifier
                 .size(size)
@@ -220,13 +253,68 @@ internal fun TileFace(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = app.glyphRes?.let { ImageVector.vectorResource(it) } ?: app.icon,
+            imageVector = app.glyphRes?.let { tileVector(it) } ?: app.icon,
             contentDescription = null,
             tint = Color.White,
             modifier = Modifier.size(size * app.glyphScale),
         )
     }
 }
+
+/**
+ * Tile artwork, loaded once per process instead of once per composition.
+ *
+ * painterResource decodes a bitmap or parses a vector every time the home screen is composed
+ * afresh -- each return to it, each folder's miniatures -- and on a weak phone those few dozen
+ * decodes and parses kept the main thread busy for seconds (freeze and ANR reports at TileFace,
+ * 1.2.41). The artwork does not change while the app runs, so each piece is read once. Keyed by
+ * the night bit as well, in case a vector reads a theme colour.
+ */
+private val tileVectors = java.util.concurrent.ConcurrentHashMap<Long, ImageVector>()
+private val tileBitmaps = java.util.concurrent.ConcurrentHashMap<Int, androidx.compose.ui.graphics.ImageBitmap>()
+
+@Composable
+private fun tileVector(id: Int): ImageVector {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val night = androidx.compose.ui.platform.LocalConfiguration.current.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+    val key = id.toLong() shl 8 or night.toLong()
+    return tileVectors[key] ?: ImageVector.vectorResource(context.theme, context.resources, id).also { tileVectors[key] = it }
+}
+
+@Composable
+private fun tilePainter(id: Int): androidx.compose.ui.graphics.painter.Painter {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val isVector = remember(id) {
+        val v = android.util.TypedValue()
+        context.resources.getValue(id, v, true)
+        v.string?.toString()?.endsWith(".xml") == true
+    }
+    if (isVector) return androidx.compose.ui.graphics.vector.rememberVectorPainter(tileVector(id))
+    // Decoded off the main thread and only as large as a tile is ever drawn: the full-size
+    // artwork of every tile decoded on the main thread at the home screen's first frame froze
+    // slow phones for nine seconds (1.2.42 #2033, #2206). Blank for the first frame or two.
+    val loaded = androidx.compose.runtime.produceState(tileBitmaps[id], id) {
+        if (value == null) value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { decodeTile(context.resources, id) }.getOrNull()?.also { tileBitmaps[id] = it }
+        }
+    }.value
+    return remember(loaded) {
+        if (loaded != null) androidx.compose.ui.graphics.painter.BitmapPainter(loaded)
+        else androidx.compose.ui.graphics.painter.ColorPainter(Color.Transparent)
+    }
+}
+
+/** A tile's artwork at most [TILE_PX] on its longer side. */
+private fun decodeTile(res: android.content.res.Resources, id: Int): androidx.compose.ui.graphics.ImageBitmap? {
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeResource(res, id, bounds)
+    var sample = 1
+    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= TILE_PX) sample *= 2
+    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+    return android.graphics.BitmapFactory.decodeResource(res, id, opts)?.asImageBitmap()
+}
+
+private const val TILE_PX = 256
 
 /** A full home-screen cell: the tile plus its caption. */
 @Composable

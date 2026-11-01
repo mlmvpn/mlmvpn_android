@@ -7,7 +7,6 @@ import com.mlmvpn.scanner.engines.flux.core.model.Security
 import com.mlmvpn.scanner.engines.flux.core.model.Transport
 import java.net.URLDecoder
 import java.security.MessageDigest
-import java.util.Base64
 
 /**
  * FLUX's own link reader: strict where the app's general [com.mlmvpn.scanner.utils.VpnConfig] is
@@ -191,8 +190,15 @@ object FluxLinkParser {
             transport = Transport.QUIC, security = Security.TLS, sni = sni,
             alpn = listOf("h3"), obfs = obfs, obfsPassword = obfsPassword, label = p.fragment,
             sourceId = sourceId, insecure = insecure,
+            certPin = certPin(q["pinSHA256"] ?: q["pinsha256"] ?: q["pinSha256"]),
         )
         return Result.Ok(node)
+    }
+
+    /** A certificate pin as the core takes it: 64 lowercase hex digits, or "" when it is not one. */
+    fun certPin(raw: String?): String {
+        val hex = raw.orEmpty().replace(":", "").replace("-", "").trim().lowercase()
+        return if (hex.length == 64 && hex.all { it in '0'..'9' || it in 'a'..'f' }) hex else ""
     }
 
     /**
@@ -262,9 +268,21 @@ object FluxLinkParser {
     private fun b64(s: String): String? = try {
         val cleaned = s.replace('-', '+').replace('_', '/')
         val padded = cleaned.padEnd((cleaned.length + 3) / 4 * 4, '=')
-        String(Base64.getDecoder().decode(padded), Charsets.UTF_8).takeIf { it.contains("://") }
+        String(com.mlmvpn.scanner.engines.cfdoctor.WireBase64.decode(padded), Charsets.UTF_8).takeIf { it.contains("://") }
     } catch (_: Exception) { null }
 
-    fun sha256(s: String): String =
-        MessageDigest.getInstance("SHA-256").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+    fun sha256(s: String): String {
+        // Hex by table, not String.format per byte: this names every node of every source list,
+        // thousands at a time, and the formatter was most of the cost (FLUX freeze, 1.2.41).
+        val bytes = MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
+        val out = CharArray(bytes.size * 2)
+        for (i in bytes.indices) {
+            val v = bytes[i].toInt() and 0xff
+            out[i * 2] = HEX[v ushr 4]
+            out[i * 2 + 1] = HEX[v and 0x0f]
+        }
+        return String(out)
+    }
+
+    private val HEX = "0123456789abcdef".toCharArray()
 }

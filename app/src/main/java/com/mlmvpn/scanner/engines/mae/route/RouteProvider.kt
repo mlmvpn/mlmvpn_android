@@ -28,6 +28,14 @@ data class Capabilities(
      * sends the app to TCP at once; a route with `quic = false` does the same for its services.
      */
     val quic: Boolean = udp,
+    /**
+     * One exit address for a whole session. False for an exit that moves between servers: Lantern
+     * spreads connections over its list (its exit went from Germany to Britain inside one session),
+     * and a Worker leaves from whichever colo takes each connection. An app that holds a sign-in to
+     * where it was first seen (Gemini) passes a page check through one and is refused at the first
+     * prompt (the user, 2026-10-18).
+     */
+    val stableExit: Boolean = true,
 )
 
 /**
@@ -290,10 +298,15 @@ class WorkerRoute(
     private val path: String = "/",
     /** Outbound to dial the Worker's edge through; null = directly (workers.dev is open on most networks). */
     private val dialVia: String? = null,
+    /**
+     * The central Worker has a Proxy IP (its `FALLBACK`): where `connect()` refuses a Cloudflare
+     * address it goes through that, so Cloudflare-hosted destinations open too. MAE's own Worker had none.
+     */
+    reachesCloudflare: Boolean = false,
 ) : RouteProvider {
     override val id = ID
     override val kind = RouteKind.FOREIGN
-    override val caps = Capabilities(udp = false, quotaLimited = true, noCloudflareDestinations = true)
+    override val caps = Capabilities(udp = false, quotaLimited = true, noCloudflareDestinations = !reachesCloudflare, stableExit = false)
     override val cost = 0.3
     override val families = listOf(FamilyPolicy.V4_ONLY, FamilyPolicy.V6_ONLY, FamilyPolicy.BOTH)
 

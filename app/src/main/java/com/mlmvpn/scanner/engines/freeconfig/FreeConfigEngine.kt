@@ -201,10 +201,14 @@ object FreeConfigEngine {
     suspend fun fetchCandidates(pool: Pool): List<String> {
         if (pool.id == POOL_LEGACY) return fetchCandidates()
         val text = fetchText(pool.url, pool.mirror)
-        return text.lines()
-            .map { it.trim() }
-            .filter { line -> URI_PREFIXES.any { prefix -> line.startsWith(prefix, ignoreCase = true) } }
-            .distinctBy { dedupeKey(it) }
+        // Off the caller's thread: the wizard asks from the main thread, and the dedupe parses
+        // every link of a pool -- thousands -- which froze the screen (freeze reports, 1.2.41).
+        return withContext(Dispatchers.Default) {
+            text.lines()
+                .map { it.trim() }
+                .filter { line -> URI_PREFIXES.any { prefix -> line.startsWith(prefix, ignoreCase = true) } }
+                .distinctBy { dedupeKey(it) }
+        }
     }
 
     /**
@@ -307,13 +311,15 @@ object FreeConfigEngine {
         } catch (e: Exception) {
             Log.w(TAG, "asset copy failed: ${e.message}")
         }
+        // The core itself never runs in the main process (XrayHosts, `:xmeasure`): nothing to set up here.
+        if (com.mlmvpn.core.warp.XrayHosts.inMainProcess(context)) return@withContext
         try {
             val keyBytes = ByteArray(32)
             java.security.SecureRandom().nextBytes(keyBytes)
             val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
             val xudpBaseKey = android.util.Base64.encodeToString(keyBytes, flags)
             libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "initCoreEnv failed: ${e.message}")
         }
     }
@@ -350,7 +356,10 @@ object FreeConfigEngine {
         targetCount: Int,
         shouldStop: () -> Boolean = { false },
         onProgress: (TestProgress) -> Unit
-    ): List<VpnNode> = coroutineScope {
+    ): List<VpnNode> = withContext(Dispatchers.Default) { coroutineScope {
+        // Off the caller's thread (the wizard's is the main one): only the progress goes back to it.
+        val caller = Dispatchers.Main.immediate
+        suspend fun report(p: TestProgress) = withContext(caller) { onProgress(p) }
         ensureXrayEnv(context)
 
         val shuffled = candidates.shuffled()
@@ -389,7 +398,7 @@ object FreeConfigEngine {
             // Candidates that failed the cheap check are done being "tested" -- they never reach
             // the expensive stage, so count them immediately rather than waiting for stage 2.
             tested += (batch.size - survivors.size)
-            onProgress(TestProgress(tested, candidates.size, working.size, targetCount))
+            report(TestProgress(tested, candidates.size, working.size, targetCount))
 
             if (shouldStop()) break
 
@@ -406,9 +415,9 @@ object FreeConfigEngine {
                         realTestSemaphore.acquire()
                         try {
                             val jsonConfig = XrayJsonGenerator.generateSpeedtestConfig(cfg)
-                            val delayMs = withTimeoutOrNull(6_000L) {
-                                libv2ray.Libv2ray.measureOutboundDelay(jsonConfig, DELAY_TEST_URL)
-                            } ?: 0L
+                            // In `:xmeasure` (CombineEngine.measureDelay): a free config that panics
+                            // Xray ends that process, not the app, and the timeout really fires.
+                            val delayMs = com.mlmvpn.scanner.data.CombineEngine.measureDelay(jsonConfig, DELAY_TEST_URL, 6_000L)
                             if (delayMs > 0) uri to cfg else null
                         } catch (e: Exception) {
                             null
@@ -424,12 +433,12 @@ object FreeConfigEngine {
                         working.add(buildBadgedNode(r.first, r.second))
                     }
                 }
-                onProgress(TestProgress(tested, candidates.size, working.size, targetCount))
+                report(TestProgress(tested, candidates.size, working.size, targetCount))
             }
         }
 
         working
-    }
+    } }
 
     /**
      * Renames the config to "mlmvpnNNNN" (random 3-4 digit code) both as the node's display name

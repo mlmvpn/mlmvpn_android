@@ -62,6 +62,8 @@ object CrashReporter {
     private const val LAST_EXIT_PREFIX = "lastexit-"
     /** A VM shutdown note from the shutdown hook, written by every deliberate exit. */
     private const val EXIT_PREFIX = "exit-"
+    /** A process's breadcrumbs, saved as it goes (`crumbs-<pid>.log`), for a death that leaves no report. */
+    private const val CRUMBS_PREFIX = "crumbs-"
 
     /** Crash reports kept on the phone, newest first. */
     private const val KEEP_CRASHES = 20
@@ -83,6 +85,44 @@ object CrashReporter {
     private val breadcrumbs = ArrayDeque<String>()
     private const val MAX_BREADCRUMBS = 40
 
+    /**
+     * The screen the user was on ("windscribe", "proton"), from the last openTab/goBack breadcrumb.
+     * It goes into the state the system keeps for a native crash or an ANR, and from there into the
+     * line the report is grouped by: a native crash's own line ("SIGABRT in libart.so (main)") is
+     * the same for unrelated bugs, and one closed issue then swallowed the next feature's reports.
+     */
+    @Volatile private var area: String? = null
+    private val AREA_STEP = Regex("^(?:openTab|goBack) \\S+ -> ([A-Za-z0-9_-]{1,24})")
+    private val AREA_TAG = Regex("^\\[([A-Za-z0-9_-]{1,24})] ")
+
+    /**
+     * Memory set aside at start and let go first thing in the crash handler: out of memory, the
+     * handler could not even build its report, and the death was filed as "CRASH(jvm): crash" with
+     * no stack -- which is how the Windscribe/Proton/Outline crashes of a tester (LAN sharing, split
+     * tunnel and the smart Iran route on) arrived on 2026-10-11.
+     */
+    @Volatile private var reserve: ByteArray? = null
+
+    private val crumbWriter = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "crash-crumbs").apply { isDaemon = true; priority = Thread.MIN_PRIORITY }
+    }
+    private val crumbsDirty = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Activities on screen, for the freeze watchdog: a stall nobody sees is not a freeze. */
+    @Volatile private var visible = 0
+    /** The main thread unanswered this long gets a first look at where it is stuck. */
+    private const val FREEZE_MS = 4_000L
+    /**
+     * ...and is reported only if it is still stuck this long after it was asked. At 4 s the watchdog
+     * reported every slow frame of a weak phone -- a first draw of the home screen, a long text
+     * layout -- and those were most of 1.2.41's 169 freeze reports. A stall that passes is a
+     * breadcrumb now; one that the system turns into an ANR still arrives with the system's trace.
+     */
+    private const val FREEZE_REPORT_MS = 9_000L
+    private const val MAX_FREEZE_REPORTS = 2
+    /** Set first thing in the crash handler: a process on its way down stops answering by design. */
+    @Volatile private var crashing = false
+
     fun install(app: Application) {
         logDir = File(app.filesDir, "crashlogs").apply { mkdirs() }
         appContext = app.applicationContext
@@ -93,9 +133,12 @@ object CrashReporter {
         activityManager = app.getSystemService(Application.ACTIVITY_SERVICE) as? android.app.ActivityManager
         prune()
         publishState("start")
+        if (isMainProcess(app)) reserve = ByteArray(1024 * 1024)
 
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            crashing = true
+            reserve = null
             try {
                 val text = buildReport(thread, error)
                 // Logcat first: if writing the file fails for any reason, the report is still
@@ -140,14 +183,20 @@ object CrashReporter {
         // The exit history and the outbox are the package's, not a process's: the main process
         // reads and sends, so the tunnel's process starting up does not do it all again.
         if (isMainProcess(app)) {
-            reportPreviousExit(app)
-            try {
-                queueUnsent(app)
-                if (queued().isNotEmpty()) CrashUploadJob.schedule(app)
-            } catch (t: Throwable) {
-                // A crash reporter must never be the crash.
-                Log.w(TAG, "could not queue reports: ${t.message}")
-            }
+            watchMainThread(app)
+            // Off the main thread: reading the system's traces and redacting them can take
+            // seconds on a slow phone after an ANR, and doing it inside Application.onCreate
+            // made the app itself fail to start (an ANR report of its own, 1.2.38).
+            Thread({
+                reportPreviousExit(app)
+                try {
+                    queueUnsent(app)
+                    if (queued().isNotEmpty()) CrashUploadJob.schedule(app)
+                } catch (t: Throwable) {
+                    // A crash reporter must never be the crash.
+                    Log.w(TAG, "could not queue reports: ${t.message}")
+                }
+            }, "crash-previous-exit").start()
         }
 
         Log.i(TAG, "crash reporter installed; reports in ${logDir.absolutePath}")
@@ -280,8 +329,24 @@ object CrashReporter {
                 ?.trim()
                 .orEmpty()
         val frame = stack.map { it.trim() }.firstOrNull { it.startsWith("at com.mlmvpn") }.orEmpty()
-        return listOf(cause, frame).filter { it.isNotBlank() }.joinToString("  |  ").take(300)
+        return listOf(stable(cause), frame).filter { it.isNotBlank() }.joinToString("  |  ").take(300)
     }
+
+    /**
+     * The message without what changes from one occurrence to the next. The server files one issue
+     * per summary, and "app is in background uid UidRecord{6492d3d u0a469 ...}" or an object's
+     * @address differ every time: one bug became 96 issues through 1.2.39.
+     */
+    private fun stable(cause: String): String = cause
+        .replace(Regex("(app is in background).*"), "$1")
+        .replace(Regex("Intent \\{[^}]*\\}"), "Intent {…}")
+        // a record's hash (ServiceRecord{eae6ac4 u0 …}) changes with every crash: 1.2.43 and 1.2.44
+        // filed one Gereh service crash as 650 issues (mlmvpn/crashes)
+        .replace(Regex("ServiceRecord\\{\\S+ \\S+ ([^ }]+)[^}]*\\}"), "ServiceRecord{$1}")
+        .replace(Regex("(ProcessRecord|ActivityRecord|BroadcastRecord)\\{[^}]*\\}"), "$1{…}")
+        .replace(Regex("@[0-9a-fA-F]{5,}"), "@…")
+        .replace(Regex("\\b(pid|uid)=\\d+"), "$1=#")
+        .replace(Regex("\\d{4,}"), "#")
 
     // ---------------------------------------------------------------------------- the outbox
     //
@@ -572,10 +637,21 @@ object CrashReporter {
     private fun reportFromExit(e: android.app.ApplicationExitInfo, trace: String?) {
         val kind = when (e.reason) {
             android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "native"
+            // A process that died of a signal: a Go panic aborts with SIGABRT, and when the system's
+            // crash dumper cannot unwind it (Xray on Android 11, Outline «تست همه», 2026-10-11) the
+            // death is recorded as SIGNALED, not CRASH_NATIVE -- and went unreported. Only SIGKILL is
+            // left out: that is the system or this app (killProcess) ending a process on purpose.
+            android.app.ApplicationExitInfo.REASON_SIGNALED -> if (e.status == 9) return else "native"
             android.app.ApplicationExitInfo.REASON_ANR -> "anr"
             android.app.ApplicationExitInfo.REASON_CRASH,
             android.app.ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
-            android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "jvm"
+            android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
+            // Native code ending the process with an error, a process killed because one it
+            // depended on died, killed for memory while carrying the tunnel: [noteworthy] already
+            // keeps only the ones that can be a bug, and each was written down and never sent.
+            android.app.ApplicationExitInfo.REASON_EXIT_SELF,
+            android.app.ApplicationExitInfo.REASON_DEPENDENCY_DIED,
+            android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "jvm"
             else -> return
         }
         // A JVM crash that wrote its own report needs no second one.
@@ -584,10 +660,17 @@ object CrashReporter {
         ) return
 
         val state = stateOf(e)
+        // A signal death carries no tombstone: the signal's name is all there is to group it by.
+        val signal = if (e.reason == android.app.ApplicationExitInfo.REASON_SIGNALED) when (e.status) {
+            6 -> "SIGABRT"; 11 -> "SIGSEGV"; 7 -> "SIGBUS"; 4 -> "SIGILL"; 8 -> "SIGFPE"; 5 -> "SIGTRAP"; 3 -> "SIGQUIT"; 15 -> "SIGTERM"
+            else -> "signal ${e.status}"
+        } else null
+        val step = state?.substringAfter('|', "")
+        val where = step?.let { AREA_TAG.find(it)?.groupValues?.get(1) }
         val headline = when (kind) {
-            "native" -> CrashText.nativeHeadline(e.processName, trace.orEmpty())
-            "anr" -> CrashText.anrHeadline(e.processName, e.description)
-            else -> "error: ${reasonName(e.reason)} (${CrashText.processLabel(e.processName)})" +
+            "native" -> CrashText.nativeHeadline(e.processName, listOfNotNull(signal, trace).joinToString("\n"), where)
+            "anr" -> CrashText.anrHeadline(e.processName, e.description, where)
+            else -> "error: ${reasonName(e.reason)} (${CrashText.processLabel(e.processName)})" + (where?.let { " [$it]" } ?: "") +
                 (e.description?.takeIf { it.isNotBlank() }?.let { ": " + CrashText.normalize(it).take(160) } ?: "")
         }
         val text = buildString {
@@ -607,6 +690,12 @@ object CrashReporter {
             state?.substringAfter('|', "")?.takeIf { it.isNotBlank() }?.let { appendLine("last step : $it") }
             appendLine("reason    : ${reasonName(e.reason)} status ${e.status}, importance ${e.importance}")
             appendLine("described : ${e.description}")
+            appendLine("settings  : ${settingsLine()} (now)")
+            savedCrumbs(e)?.let {
+                appendLine()
+                appendLine("--- breadcrumbs (saved by the process before it died, most recent last) ---")
+                appendLine(it)
+            }
             if (!trace.isNullOrBlank()) {
                 appendLine()
                 appendLine(if (kind == "native") "--- tombstone (readable parts) ---" else "--- trace ---")
@@ -636,14 +725,22 @@ object CrashReporter {
         android.app.ApplicationExitInfo.REASON_ANR,
         android.app.ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
         android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
-        android.app.ApplicationExitInfo.REASON_SIGNALED,
-        android.app.ApplicationExitInfo.REASON_DEPENDENCY_DIED -> true
-        // tun2proxy's host exits(255) by design after every teardown (see Tun2proxyHostService);
-        // anywhere else, a nonzero exit is native code ending the process under us.
-        android.app.ApplicationExitInfo.REASON_EXIT_SELF -> e.status != 0 && !e.processName.endsWith(":tun")
-        // Killed for memory while it was carrying the tunnel, not while it sat cached.
+        android.app.ApplicationExitInfo.REASON_SIGNALED -> true
+        // Only a provider of this app's own: under an app cloner the app runs beside the cloner's
+        // providers ("com.excelliance...PluginManagerProvider"), and their deaths are the cloner's.
+        android.app.ApplicationExitInfo.REASON_DEPENDENCY_DIED ->
+            e.description.orEmpty().let { it.contains("/com.mlmvpn.") || it.contains("/.") }
+        // The helper processes end themselves by design: tun2proxy's host exits(255) after every
+        // teardown (see Tun2proxyHostService), the Xray hosts end once their last core stops
+        // (XrayHosts, XrayProbeService). In the main process a nonzero exit is native code ending
+        // the process under us.
+        android.app.ApplicationExitInfo.REASON_EXIT_SELF -> e.status != 0 && !e.processName.contains(':')
+        // Killed for memory while the user was looking at it. A helper process, or the app in the
+        // background, being reclaimed is the system making room, not a fault: those filled the
+        // tracker with LOW_MEMORY "crashes" from every busy phone (1.2.41).
         android.app.ApplicationExitInfo.REASON_LOW_MEMORY ->
-            e.importance <= android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE
+            !e.processName.contains(':') &&
+                e.importance <= android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
         else -> false
     }
 
@@ -658,7 +755,10 @@ object CrashReporter {
         } else {
             bytes.decodeToString()
         }
-        return if (text.length <= MAX_TRACE_CHARS) text else text.take(MAX_TRACE_CHARS) + "\n… (trace truncated)"
+        if (text.length <= MAX_TRACE_CHARS) return text
+        // What lies past the cut still counts: the app's libraries and any abort message, first.
+        val key = if (reason == android.app.ApplicationExitInfo.REASON_CRASH_NATIVE) CrashText.keyLines(text) else ""
+        return key + text.take(MAX_TRACE_CHARS) + "\n… (trace truncated)"
     }
 
     private fun reasonName(reason: Int): String = when (reason) {
@@ -667,6 +767,198 @@ object CrashReporter {
         9 -> "EXCESSIVE_RESOURCE_USAGE"; 10 -> "USER_REQUESTED"; 11 -> "USER_STOPPED"
         12 -> "DEPENDENCY_DIED"; 13 -> "OTHER"; 14 -> "FREEZER"; 15 -> "PACKAGE_STATE_CHANGE"
         16 -> "PACKAGE_UPDATED"; else -> "UNKNOWN"
+    }
+
+    /** The switches that change which code an engine runs: they differed between a tester and the owner. */
+    private fun settingsLine(): String = try {
+        val ctx = appContext
+        val split = com.mlmvpn.core.tunnel.SplitTunnelSettings(ctx).mode().name.lowercase()
+        val smart = com.mlmvpn.core.tunnel.SmartIranRoute.enabled(ctx)
+        val lan = com.mlmvpn.scanner.utils.NetworkSettings.allowLan(ctx)
+        "split=$split smartIran=${if (smart) "on" else "off"} lan=${if (lan) "on" else "off"}"
+    } catch (t: Throwable) {
+        "?"
+    }
+
+    private fun memoryLine(): String = try {
+        val rt = Runtime.getRuntime()
+        val used = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024)
+        "${used} MB used of ${rt.maxMemory() / (1024 * 1024)} MB"
+    } catch (t: Throwable) {
+        "?"
+    }
+
+    /**
+     * Writes this process's breadcrumbs to `crumbs-<pid>.log` within a second of a new one, off the
+     * caller's thread. A native crash, an ANR or a JVM crash whose handler could not run leaves no
+     * report of its own; the next launch finds this file by the dead process's pid.
+     */
+    private fun saveCrumbsSoon() {
+        if (!this::logDir.isInitialized || !crumbsDirty.compareAndSet(false, true)) return
+        runCatching {
+            crumbWriter.schedule({
+                crumbsDirty.set(false)
+                runCatching {
+                    val text = synchronized(breadcrumbs) { breadcrumbs.joinToString("\n") }
+                    val target = File(logDir, "$CRUMBS_PREFIX${android.os.Process.myPid()}.log")
+                    val temp = File(logDir, target.name + ".part")
+                    temp.writeText(text)
+                    if (!temp.renameTo(target)) { target.writeText(text); temp.delete() }
+                }
+            }, 1, java.util.concurrent.TimeUnit.SECONDS)
+        }.onFailure { crumbsDirty.set(false) }
+    }
+
+    /** The breadcrumbs the process of [e] saved, if they are its own (not a later process's with the same pid). */
+    private fun savedCrumbs(e: android.app.ApplicationExitInfo): String? = try {
+        File(logDir, "$CRUMBS_PREFIX${e.pid}.log")
+            .takeIf { it.exists() && it.lastModified() <= e.timestamp + 5_000 && e.timestamp - it.lastModified() < 6 * 3600_000L }
+            ?.readText()?.takeLast(8_000)?.takeIf { it.isNotBlank() }
+    } catch (t: Throwable) {
+        null
+    }
+
+    /**
+     * A freeze, caught while it happens. The system's ANR record arrives only on the next launch,
+     * only when the system recorded one (some phones kill a frozen app outright, which no report
+     * follows), and grouped by a line that often matches an older bug. So: a watchdog thread asks
+     * the main thread to answer every second; when it has not for [FREEZE_MS] while a screen is
+     * showing, the main thread's stack -- the code it is stuck in -- and the breadcrumbs are written
+     * as a report and handed to the upload job at once, before anything can kill the process.
+     */
+    private fun watchMainThread(app: Application) {
+        app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityResumed(a: android.app.Activity) { visible++ }
+            override fun onActivityPaused(a: android.app.Activity) { visible = (visible - 1).coerceAtLeast(0) }
+            override fun onActivityCreated(a: android.app.Activity, b: android.os.Bundle?) {}
+            override fun onActivityStarted(a: android.app.Activity) {}
+            override fun onActivityStopped(a: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(a: android.app.Activity, b: android.os.Bundle) {}
+            override fun onActivityDestroyed(a: android.app.Activity) {}
+        })
+        val looper = android.os.Looper.getMainLooper()
+        val main = android.os.Handler(looper)
+        Thread({
+            var reported = 0
+            while (reported < MAX_FREEZE_REPORTS) {
+                val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+                main.post { answered.set(true) }
+                val asked = android.os.SystemClock.uptimeMillis()
+                while (!answered.get() && android.os.SystemClock.uptimeMillis() - asked < FREEZE_MS) Thread.sleep(200)
+                if (!answered.get() && visible > 0 && !crashing) {
+                    // Where it is stuck at the first look, kept for the report: the second look
+                    // shows whether it is the same place (a hang) or somewhere else (slow work).
+                    val first = runCatching { looper.thread.stackTrace }.getOrNull()
+                    while (!answered.get() && android.os.SystemClock.uptimeMillis() - asked < FREEZE_REPORT_MS) Thread.sleep(200)
+                    val stuck = android.os.SystemClock.uptimeMillis() - asked
+                    if (!answered.get() && visible > 0 && !crashing) {
+                        runCatching { reportFreeze(looper.thread, stuck, first) }
+                        reported++
+                        // One report per freeze: wait for it to end (or for the process to be killed).
+                        while (!answered.get()) Thread.sleep(500)
+                    } else if (answered.get() && !crashing) {
+                        // Slow, not frozen: a breadcrumb, so a later report shows it happened.
+                        val at = first?.firstOrNull { it.className.startsWith("com.mlmvpn") }
+                        note("slow main thread ${stuck / 100 * 100} ms" + (at?.let { " at ${it.className.substringAfterLast('.')}.${it.methodName}" } ?: ""))
+                    }
+                }
+                Thread.sleep(1_000)
+            }
+        }, "crash-freeze-watch").apply { isDaemon = true; priority = Thread.MIN_PRIORITY }.start()
+    }
+
+    private fun reportFreeze(main: Thread, stuckMs: Long, first: Array<StackTraceElement>?) {
+        val stack = main.stackTrace
+        val where = area
+        val text = buildString {
+            appendLine(CrashText.ANR_HEADER)
+            // Grouped by the screen and (through signatureOf) the first frame of the app's own code.
+            appendLine("error: freeze (main)" + (where?.let { " [$it]" } ?: "") + ": the main thread stopped answering")
+            appendLine("time      : ${Date()}")
+            appendLine("version   : $appVersion")
+            appendLine("device    : ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}")
+            appendLine("stuck for : $stuckMs ms and counting")
+            appendLine("settings  : ${settingsLine()}")
+            appendLine("memory    : ${memoryLine()}")
+            appendLine()
+            appendLine("--- breadcrumbs (most recent last) ---")
+            synchronized(breadcrumbs) { breadcrumbs.forEach { appendLine(it) } }
+            appendLine()
+            appendLine("--- main thread ---")
+            stack.forEach { appendLine("\tat $it") }
+            appendLine()
+            if (first != null && !first.contentEquals(stack)) {
+                appendLine("--- main thread at the first look (${FREEZE_MS / 1000} s) ---")
+                first.take(30).forEach { appendLine("\tat $it") }
+                appendLine()
+            }
+            appendLine("--- other threads (top frames) ---")
+            Thread.getAllStackTraces().entries
+                .filter { (t, st) -> t !== main && st.isNotEmpty() && t.name != "crash-freeze-watch" }
+                .sortedByDescending { (_, st) -> st.any { it.className.startsWith("com.mlmvpn") } }
+                .take(40)
+                .forEach { (t, st) ->
+                    appendLine("\"${t.name}\" ${t.state}")
+                    st.take(10).forEach { appendLine("\t  $it") }
+                }
+        }
+        Log.e(TAG, text)
+        val file = writeReport(text, tag = "freeze-main")
+        if (autoSend()) {
+            enqueue(file)
+            CrashUploadJob.schedule(appContext)
+        }
+    }
+
+    /**
+     * MLM CHAT: the watchdog of the chat process (`:chat`). On Ehsan's S26 (27 Oct 2026) Telegram's
+     * storage queue stopped answering: every chat sat on its loading circle, and closing the app did
+     * not help, because Gereh's foreground service keeps the process alive. The watching itself
+     * (which queues, how long, the restart) is Gereh's bridge's now, for every app that carries it
+     * ([org.mlmvpn.chat.bridge.GerehWatchdog]); what a stall becomes is the app's: here a report like
+     * any freeze's, filed and sent ([reportChatStall]).
+     */
+    fun watchChatQueues(app: Application) {
+        org.mlmvpn.chat.bridge.GerehWatchdog.start(app, object : org.mlmvpn.chat.bridge.GerehWatchdog.Host {
+            override fun stalled(stalls: Array<org.mlmvpn.chat.bridge.GerehWatchdog.Stall>) {
+                stalls.forEach { runCatching { reportChatStall(it) } }
+            }
+
+            override fun stillStuck(stalls: Array<org.mlmvpn.chat.bridge.GerehWatchdog.Stall>) {
+                // filed at the first word (stalled); the bridge restarts the process now
+            }
+
+            override fun crashing(): Boolean = this@CrashReporter.crashing
+
+            override fun note(line: String) = this@CrashReporter.note(line)
+        })
+    }
+
+    private fun reportChatStall(s: org.mlmvpn.chat.bridge.GerehWatchdog.Stall) {
+        val text = buildString {
+            appendLine(CrashText.ANR_HEADER)
+            appendLine("error: freeze (chat ${s.queue} queue)" + (s.where?.let { " in $it" } ?: "") + ": it stopped answering")
+            appendLine("time      : ${Date()}")
+            appendLine("version   : $appVersion")
+            appendLine("device    : ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}")
+            appendLine("stuck for : ${s.stuckMs} ms and counting")
+            appendLine("settings  : ${settingsLine()}")
+            appendLine("memory    : ${memoryLine()}")
+            appendLine()
+            appendLine("--- breadcrumbs (most recent last) ---")
+            synchronized(breadcrumbs) { breadcrumbs.forEach { appendLine(it) } }
+            appendLine()
+            // the stuck queue's whole stack, then every other thread's top (the bridge wrote both)
+            append(s.stack)
+            appendLine()
+            append(s.others)
+        }
+        Log.e(TAG, text)
+        val file = writeReport(text, tag = "freeze-chat-${s.queue}")
+        if (autoSend()) {
+            enqueue(file)
+            CrashUploadJob.schedule(appContext)
+        }
     }
 
     /**
@@ -678,7 +970,8 @@ object CrashReporter {
     private fun publishState(step: String) {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
         try {
-            var bytes = "v=$appVersion|$step".toByteArray()
+            val tagged = area?.let { "[$it] $step" } ?: step
+            var bytes = "v=$appVersion|$tagged".toByteArray()
             // The system keeps at most 128 bytes.
             if (bytes.size > 127) bytes = bytes.copyOf(127)
             activityManager?.setProcessStateSummary(bytes)
@@ -698,7 +991,12 @@ object CrashReporter {
             breadcrumbs.addLast(line)
             while (breadcrumbs.size > MAX_BREADCRUMBS) breadcrumbs.removeFirst()
         }
-        publishState(clean)
+        AREA_STEP.find(clean)?.let { area = it.groupValues[1] }
+        // A binder call to the system, so not on the caller's thread: breadcrumbs are noted from
+        // the main thread, and a busy system_server held it there (freeze report, 1.2.41). One
+        // thread, so the newest state is the one that stays.
+        runCatching { crumbWriter.execute { publishState(clean) } }.onFailure { publishState(clean) }
+        saveCrumbsSoon()
         // Echoed to logcat under the same tag so it is visible in the run-up to a *native*
         // crash too, where the file below is never written.
         Log.i(TAG, "• $line")
@@ -711,6 +1009,8 @@ object CrashReporter {
         appendLine("version   : $appVersion")
         appendLine("device    : ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, " +
                 "Android ${android.os.Build.VERSION.RELEASE}")
+        appendLine("settings  : ${settingsLine()}")
+        appendLine("memory    : ${memoryLine()}")
         appendLine()
         appendLine("--- breadcrumbs (most recent last) ---")
         synchronized(breadcrumbs) { breadcrumbs.forEach { appendLine(it) } }
@@ -735,6 +1035,7 @@ object CrashReporter {
         keepNewest(KEEP_CRASHES) { it.startsWith(CRASH_PREFIX) && it.endsWith(".txt") }
         keepNewest(KEEP_NOTES) { it.startsWith(LAST_EXIT_PREFIX) }
         keepNewest(KEEP_NOTES) { it.startsWith(EXIT_PREFIX) }
+        keepNewest(KEEP_NOTES + 1) { it.startsWith(CRUMBS_PREFIX) && it.endsWith(".log") }
         // A write the process died in the middle of; never renamed, never readable as a report.
         // Old ones only: another process of the app may be writing one this very moment.
         files.filter { it.name.endsWith(".part") && System.currentTimeMillis() - it.lastModified() > 60_000 }

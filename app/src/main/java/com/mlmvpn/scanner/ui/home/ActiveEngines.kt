@@ -36,6 +36,9 @@ import com.mlmvpn.scanner.ui.tunnel.TunnelStage
  */
 object ActiveEngines {
 
+    /** Stands for "a Proton server, which one not settled yet" in the Amnezia engine's place. */
+    private const val PROTON_PENDING = "\u0000proton"
+
     /**
      * The home ids that should show a lamp right now.
      *
@@ -48,38 +51,99 @@ object ActiveEngines {
 
         val tunnel by TunnelController.state.collectAsState()
         val openvpn by com.mlmvpn.scanner.openvpn.OpenVpnRuntime.connection.collectAsState()
+        val windscribe by com.mlmvpn.scanner.engines.windscribe.WindscribeEngine.connection.collectAsState()
         val xrayRunning by MyVpnService.isRunningFlow.collectAsState()
         val xrayNode by MyVpnService.connectedNodeIdFlow.collectAsState()
         // Asked of the service that is carrying the config, not of the node list. See
         // [MyVpnService.sniSessionFlow] for why the list could not answer it reliably.
         val sniSession by MyVpnService.sniSessionFlow.collectAsState()
+        // The server the Amnezia engine is on: Proton's servers are connected by that engine, and
+        // their lamp is Proton's own, not Amnezia's.
+        val amz by com.mlmvpn.scanner.engines.amnezia.AmzEngine.connect.collectAsState()
+        val protonTried by com.mlmvpn.scanner.engines.proton.ProtonEngine.tried.collectAsState()
+        val amzServer = amzServerOf(amz, protonTried)
 
         // Keyed on every input, so the set is rebuilt when an engine changes and NOT on the many
         // other recompositions the board goes through -- a drag re-runs the grid on every touch
         // move, and `xrayHome` reads preferences and parses the saved-server list.
         val tunnelId = tunnel.active?.id?.takeIf { tunnel.stage == TunnelStage.RUNNING }
-        return remember(tunnelId, xrayRunning, xrayNode, sniSession, openvpn.phase) {
-            buildSet {
-                if (openvpn.phase == com.mlmvpn.scanner.openvpn.ConnectionPhase.CONNECTED) add("openvpn")
-                tunnelId?.let { add(it) }
-                if (xrayRunning) xrayHome(context, xrayNode, sniSession)?.let { add(it) }
-                // The SESSION, not the front process.
-                //
-                // This used to light on `RstaSpoofManager.isRunningFlow` as well, and that is a
-                // process being alive -- which is not the same fact. The front carries nothing by
-                // itself; it is a door, and it only means anything while a config is walking
-                // through it. Measuring a config raises the same door, and so did every delay
-                // test over a list with one SNI config in it, so the lamp came on over a MASQUE
-                // or a WireGuard tunnel with no SNI anywhere near it. The user saw it and asked
-                // exactly the right question: why is the SNI light on when I am on the tunnel?
-                //
-                // (The stray process was a real leak too, and is fixed at the source -- the front
-                // is now claimed and released rather than switched on. This is the second half:
-                // even if something did strand it, an open door is not a connection and must not
-                // be drawn as one.)
-                if (sniSession) add("emergency_3")
-            }
+        return remember(tunnelId, xrayRunning, xrayNode, sniSession, openvpn.phase, openvpn.profileId, amzServer, windscribe) {
+            compute(context, tunnelId, xrayRunning, xrayNode, sniSession, openvpn.phase, amzServer, openvpn.profileId)
         }
+    }
+
+    /**
+     * The same answer outside composition, from the engines' current values -- for MLM Scout, which
+     * has to say which connection it is about to pause, and name it on the button that brings it back.
+     */
+    fun idsNow(context: Context): Set<String> {
+        val tunnel = TunnelController.state.value
+        return compute(
+            context,
+            tunnel.active?.id?.takeIf { tunnel.stage == TunnelStage.RUNNING },
+            MyVpnService.isRunningFlow.value,
+            MyVpnService.connectedNodeIdFlow.value,
+            MyVpnService.sniSessionFlow.value,
+            com.mlmvpn.scanner.openvpn.OpenVpnRuntime.connection.value.phase,
+            amzServerOf(com.mlmvpn.scanner.engines.amnezia.AmzEngine.connect.value, com.mlmvpn.scanner.engines.proton.ProtonEngine.tried.value),
+            com.mlmvpn.scanner.openvpn.OpenVpnRuntime.connection.value.profileId,
+        )
+    }
+
+    /**
+     * The icon that owns [nodeId] on MyVpnService, for a connect still in progress -- which [idsNow]
+     * does not light, since it lights only what is up. The widgets show "connecting" on it.
+     */
+    internal fun homeOfNode(context: Context, nodeId: String?): String? = runCatching {
+        xrayHome(
+            context,
+            nodeId,
+            MyVpnService.sniSessionFlow.value,
+            amzServerOf(com.mlmvpn.scanner.engines.amnezia.AmzEngine.connect.value, com.mlmvpn.scanner.engines.proton.ProtonEngine.tried.value),
+        )
+    }.getOrNull()
+
+    // Between two tries (a retry on another way, a fall-back to another server) the engine is
+    // briefly on no server at all; a Proton connect still in progress keeps Proton's lamp then,
+    // instead of flashing Amnezia's on.
+    private fun amzServerOf(amz: com.mlmvpn.scanner.engines.amnezia.AmzConnect, protonTried: Boolean): String? = when (val c = amz) {
+        is com.mlmvpn.scanner.engines.amnezia.AmzConnect.Connecting -> c.serverId
+        is com.mlmvpn.scanner.engines.amnezia.AmzConnect.Connected -> c.serverId
+        is com.mlmvpn.scanner.engines.amnezia.AmzConnect.Failed -> c.serverId
+        else -> null
+    } ?: if (protonTried) PROTON_PENDING else null
+
+    private fun compute(
+        context: Context,
+        tunnelId: String?,
+        xrayRunning: Boolean,
+        xrayNode: String?,
+        sniSession: Boolean,
+        openvpnPhase: com.mlmvpn.scanner.openvpn.ConnectionPhase,
+        amzServer: String?,
+        openvpnProfile: String?,
+    ): Set<String> = buildSet {
+        if (openvpnPhase == com.mlmvpn.scanner.openvpn.ConnectionPhase.CONNECTED)
+            add(if (openvpnProfile?.startsWith(com.mlmvpn.scanner.engines.windscribe.WindscribeEngine.PROFILE_PREFIX) == true) "windscribe" else "openvpn")
+        tunnelId?.let { add(it) }
+        if (xrayRunning) xrayHome(context, xrayNode, sniSession, amzServer)?.let { add(it) }
+        // The SESSION, not the front process.
+        //
+        // This used to light on `RstaSpoofManager.isRunningFlow` as well, and that is a
+        // process being alive -- which is not the same fact. The front carries nothing by
+        // itself; it is a door, and it only means anything while a config is walking
+        // through it. Measuring a config raises the same door, and so did every delay
+        // test over a list with one SNI config in it, so the lamp came on over a MASQUE
+        // or a WireGuard tunnel with no SNI anywhere near it. The user saw it and asked
+        // exactly the right question: why is the SNI light on when I am on the tunnel?
+        //
+        // (The stray process was a real leak too, and is fixed at the source -- the front
+        // is now claimed and released rather than switched on. This is the second half:
+        // even if something did strand it, an open door is not a connection and must not
+        // be drawn as one.)
+        if (sniSession) add("emergency_3")
+        if (com.mlmvpn.scanner.engines.windscribe.WindscribeEngine.connection.value.phase !=
+            com.mlmvpn.scanner.engines.windscribe.WsPhase.CONNECTED) remove("windscribe")
     }
 
     /**
@@ -94,7 +158,7 @@ object ActiveEngines {
      * screen still sets `aether`, and lighting an unrelated tile would be worse than lighting
      * none.
      */
-    private fun xrayHome(context: Context, nodeId: String?, sniSession: Boolean): String? {
+    private fun xrayHome(context: Context, nodeId: String?, sniSession: Boolean, amzServer: String? = null): String? {
         val id = nodeId?.trim().orEmpty()
         if (id.isEmpty()) return null
         return when {
@@ -117,7 +181,15 @@ object ActiveEngines {
             id == "GST_EMERGENCY" -> "emergency_2"
             id == com.mlmvpn.scanner.engines.mae.MaeEngine.NODE_ID -> "mae"
             id == com.mlmvpn.scanner.engines.flux.FluxEngine.NODE_ID -> "flux"
-            id == com.mlmvpn.scanner.engines.amnezia.AmzEngine.NODE_ID -> "amnezia"
+            id == com.mlmvpn.scanner.engines.fenix.FenixEngine.NODE_ID -> "fenix"
+            id == com.mlmvpn.scanner.engines.windscribe.WindscribeEngine.NODE_ID -> "windscribe"
+            id == com.mlmvpn.scanner.engines.outline.OutlineEngine.NODE_ID -> "outline"
+            id == com.mlmvpn.scanner.engines.npv.NpvEngine.NODE_ID -> "npv"
+            id == com.mlmvpn.scanner.engines.amnezia.AmzEngine.NODE_ID ->
+                if (amzServer == PROTON_PENDING || (amzServer != null && amzServer in com.mlmvpn.scanner.engines.proton.ProtonEngine.storedIds(context))) "proton"
+                // Windscribe's WireGuard is the Amnezia engine's tunnel on a node imported for it.
+                else if (amzServer != null && amzServer in com.mlmvpn.scanner.engines.windscribe.WindscribeEngine.wireGuardIds(context).values) "windscribe"
+                else "amnezia"
             id.startsWith(com.mlmvpn.scanner.engines.github.GtEngine.NODE_PREFIX) -> "github"
             // The booster's own ids, plus the two DNS-only modes it can run without a tunnel.
             id.startsWith("game_") || id.startsWith("dedicated_dns") ||

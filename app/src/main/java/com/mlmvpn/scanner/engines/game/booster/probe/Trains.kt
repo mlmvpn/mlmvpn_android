@@ -1,11 +1,16 @@
 package com.mlmvpn.scanner.engines.game.booster.probe
 
+import com.mlmvpn.scanner.utils.alive
+import com.mlmvpn.scanner.utils.killHard
+import com.mlmvpn.scanner.utils.waitUpTo
+
 import android.net.Network
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.DataInputStream
 import java.io.IOException
@@ -28,7 +33,7 @@ data class TrainResult(
     val target: String,
     val proto: String,
     val stats: PathStats,
-    /** Answered probes after warm-up, in send order, seq renumbered from 0 within this train. */
+    /** Answered probes in receive order; seq still identifies their send order within the train. */
     val samples: List<RttSample>,
     val sent: Int,
     val ppsAchieved: Double?,
@@ -254,7 +259,7 @@ suspend fun udpTrainFlows(
     val kept = synchronized(samples) { samples.toList() }
         .filter { it.txRelMs >= warmupMs && it.seq >= firstKept }
         .map { it.copy(seq = it.seq - firstKept) }
-        .sortedBy { it.seq }
+        .sortedBy { it.txRelMs + it.rttMs }
     val stats = ProbeStats.stats(kept, afterWarmup.size)
     val spanS = if (sentSeqs.size > 1) (sendAt.get(sentSeqs.last()) - sendAt.get(sentSeqs.first())) / 1e9 else 0.0
     TrainResult(
@@ -334,12 +339,13 @@ suspend fun tcpTrain(
         val start = System.nanoTime()
         try {
             s.setSoLinger(true, 0)
-            s.connect(target, timeoutMs)
+            withProbeSocket(s) { it.connect(target, timeoutMs) }
             val rtt = (System.nanoTime() - start) / 1_000_000.0
             val sample = RttSample(seq, rtt, (start - t0) / 1_000_000.0)
             samples.add(sample)
             onSample?.invoke(sample)
         } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
             lastError = e.message ?: e.javaClass.simpleName
         } finally {
             try { s.close() } catch (_: Exception) {}
@@ -349,6 +355,56 @@ suspend fun tcpTrain(
     val stats = ProbeStats.stats(samples, sent)
     TrainResult(label, "tcp", stats, samples, sent, null,
         error = if (samples.isEmpty()) (lastError ?: "no connection") else null)
+}
+
+/** Close the descriptor on cancellation; interrupting a JVM socket read alone is insufficient. */
+private suspend fun <T> withProbeSocket(socket: Socket, block: (Socket) -> T): T = kotlinx.coroutines.coroutineScope {
+    val closer = launch(kotlinx.coroutines.Dispatchers.Unconfined, start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+        try { kotlinx.coroutines.awaitCancellation() } finally { runCatching { socket.close() } }
+    }
+    try { withContext(Dispatchers.IO) { block(socket) } }
+    finally { closer.cancel(); runCatching { socket.close() } }
+}
+
+/** End-to-end TLS timing, including CONNECT. The same method is used in the race and live card. */
+suspend fun tlsTrain(
+    target: InetSocketAddress, count: Int = 5, gapMs: Long = 150, timeoutMs: Int = 6000,
+    socks: InetSocketAddress? = null, network: Network? = null,
+): TrainResult {
+    val samples = ArrayList<RttSample>()
+    val t0 = System.nanoTime()
+    var sent = 0
+    var lastError: String? = null
+    val address = if (socks != null) InetSocketAddress.createUnresolved(target.hostString, target.port)
+        else if (target.isUnresolved) resolveV4(target.hostString, network).firstOrNull()?.let { InetSocketAddress(it, target.port) }
+        else target
+    if (address == null) return TrainResult(target.hostString, "tls", PathStats.empty(count), emptyList(), count, null, "dns")
+    repeat(count) { seq ->
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        val raw = when {
+            socks != null -> Socket(Proxy(Proxy.Type.SOCKS, socks))
+            network != null -> network.socketFactory.createSocket()
+            else -> Socket()
+        }
+        sent++
+        val start = System.nanoTime()
+        try {
+            withProbeSocket(raw) { socket ->
+                socket.soTimeout = timeoutMs
+                socket.connect(address, timeoutMs)
+                val factory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
+                (factory.createSocket(socket, target.hostString, target.port, true) as javax.net.ssl.SSLSocket).use { tls ->
+                    tls.soTimeout = timeoutMs
+                    tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+                    tls.startHandshake()
+                }
+            }
+            samples += RttSample(seq, (System.nanoTime() - start) / 1_000_000.0, (start - t0) / 1_000_000.0)
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { lastError = e.message ?: e.javaClass.simpleName }
+        if (seq < count - 1) delay(gapMs)
+    }
+    return TrainResult(target.hostString, "tls", ProbeStats.stats(samples, sent), samples, sent, null, lastError)
 }
 
 /**
@@ -386,6 +442,9 @@ class SocksUdpSession private constructor(
             repeat(n) {
                 try {
                     out += open(proxy, timeoutMs)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    out.forEach { it.close() }
+                    throw e
                 } catch (e: Exception) {
                     return out
                 }
@@ -445,7 +504,7 @@ suspend fun icmpPing(host: String, count: Int = 5, intervalS: Double = 0.2, time
         val out = try {
             val p = ProcessBuilder(args).redirectErrorStream(true).start()
             val budgetMs = (count * intervalS * 1000 + timeoutS * 1000 + 2000).toLong()
-            if (!p.waitFor(budgetMs, TimeUnit.MILLISECONDS)) p.destroy()
+            if (!p.waitUpTo(budgetMs, TimeUnit.MILLISECONDS)) p.destroy()
             p.inputStream.bufferedReader().readText()
         } catch (e: Exception) {
             return@withContext TrainResult(host, "icmp", PathStats.empty(count), emptyList(), count, null,
@@ -458,14 +517,16 @@ suspend fun icmpPing(host: String, count: Int = 5, intervalS: Double = 0.2, time
             error = if (samples.isEmpty()) "no ICMP answer" else null)
     }
 
-/** Resolve [host] to IPv4 addresses, or an empty list. The booster measures IPv4 only. */
-suspend fun resolveV4(host: String): List<InetAddress> = withContext(Dispatchers.IO) {
-    try {
-        InetAddress.getAllByName(host).filterIsInstance<java.net.Inet4Address>()
-    } catch (e: Exception) {
-        emptyList()
-    }
-}
+private val dnsWork = BoundedProbeWork(4)
+
+/** A stuck platform resolver occupies at most one of four workers, never the calling session. */
+suspend fun resolveV4(host: String, network: Network? = null, timeoutMs: Long = 1500): List<InetAddress> =
+    kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+        dnsWork.run {
+            (network?.getAllByName(host) ?: InetAddress.getAllByName(host))
+                .filterIsInstance<java.net.Inet4Address>()
+        }
+    }.orEmpty()
 
 private fun ByteArray.toHex(): String {
     val chars = CharArray(size * 2)

@@ -1,0 +1,48 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.mlmchat.netprobe'
+    compileSdk 35
+    buildToolsVersion "35.0.0"
+
+    defaultConfig {
+        // Its own package: installing it never replaces or touches any other app.
+        applicationId "com.mlmchat.netprobe"
+        minSdk 24
+        // 33 like aibench: the BLE / nearby-Wi-Fi permissions of 31+ apply, and no foreground
+        // service type is needed.
+        targetSdk 33
+        versionCode 1
+        versionName "0.1.0"
+        // The .so files come from native/ through cargo-ndk (build-netprobe.ps1).
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64' }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        // Keep the 16 KB-aligned libraries uncompressed and page-aligned inside the APK.
+        jniLibs { useLegacyPackaging = false }
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    // QR codes: generate the card, read the other card from the camera. Pure Java, Apache-2.0.
+    implementation 'com.google.zxing:core:3.5.3'
+}

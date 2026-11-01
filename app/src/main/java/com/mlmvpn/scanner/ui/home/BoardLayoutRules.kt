@@ -125,6 +125,30 @@ object BoardLayoutRules {
     }
 
     /**
+     * Brings [id] -- a destination a release added, which the reconciliation appended at the end of
+     * an arranged board, a page the user may never open -- to the last cell of the first page: the
+     * icon that was in that cell moves to the first cell of the second page, and nothing else moves.
+     * What is in [keep] stays where it is (MLM Scout, lifted to that same cell once before): the
+     * cell before it is used instead.
+     *
+     * Null when there is nothing to do: [id] is not on the board itself (a folder holds it, or it is
+     * gone), or it is on the first page already.
+     */
+    fun promoteToFirstPage(layout: BoardLayout, id: String, perPage: Int, keep: Set<String> = emptySet()): BoardLayout? {
+        val at = layout.order.indexOf(id)
+        if (perPage < 1 || at < perPage) return null
+        val order = layout.order.toMutableList()
+        order.removeAt(at)
+        // [at] was past the first page, so the first page is still full without it.
+        var cell = perPage - 1
+        while (cell > 0 && order[cell] in keep) cell--
+        val displaced = order[cell]
+        order[cell] = id
+        order.add(perPage, displaced)
+        return layout.copy(order = order)
+    }
+
+    /**
      * Drops [draggedId] onto [targetId]: into the target folder, or, onto a plain destination, into
      * a new folder called [newKey] that takes the target's place. A folder is never put inside a
      * folder -- the board has one level, as on iOS and on the Windows desktop.

@@ -1,0 +1,5 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="72" android:viewportHeight="72">
+    <!-- MLMCHAT: the main screen's relay switch (SPEC 20.6): two arrows that trade places -->
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="5.4" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M13,25L57,25M45,13L57,25L45,37" />
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="5.4" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M59,47L15,47M27,35L15,47L27,59" />
+</vector>

@@ -1,0 +1,71 @@
+buildscript {
+    repositories {
+        jcenter()
+        google()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:3.5.3'
+    }
+}
+
+allprojects {
+    repositories {
+        jcenter()
+        google()
+    }
+    version = VERSION_NAME
+    group = GROUP
+}
+
+//Solution by the first link
+if (JavaVersion.current().isJava8Compatible()) {
+    allprojects {
+        tasks.withType(Javadoc) {
+            enabled = false
+//            options.addStringOption('Xdoclint:none', '-quiet')
+        }
+    }
+}
+
+if (hasProperty('local')) {
+    if (!hasProperty('LOCAL_MAVEN_URL')) {
+        throw new RuntimeException('Cannot publish to local maven as no such property exists: LOCAL_MAVEN_URL')
+    }
+    ext.RELEASE_REPOSITORY_URL = LOCAL_MAVEN_URL
+    ext.SNAPSHOT_REPOSITORY_URL = LOCAL_MAVEN_URL
+}
+
+wrapper {
+    gradleVersion '5.5.1'
+    distributionType 'all'
+}
+
+ext {
+
+    config = [
+            'min-sdk'        : 16,
+            'target-sdk'     : 28,
+            'build-tools'    : '28.0.3',
+            'push-aar-gradle': 'https://raw.githubusercontent.com/noties/gradle-mvn-push/master/gradle-mvn-push-aar.gradle'
+    ]
+
+    deps = [
+            'x-annotations': 'androidx.annotation:annotation:1.1.0',
+            'debug'        : 'io.noties:debug:5.1.0'
+    ]
+
+    registerArtifact = this.&registerArtifact
+}
+
+def registerArtifact(project) {
+
+    if (hasProperty('release')) {
+        project.apply from: config['push-aar-gradle']
+    }
+
+    project.afterEvaluate {
+        // disable generation of BuildConfig files
+        project.generateDebugBuildConfig.enabled = false
+        project.generateReleaseBuildConfig.enabled = false
+    }
+}

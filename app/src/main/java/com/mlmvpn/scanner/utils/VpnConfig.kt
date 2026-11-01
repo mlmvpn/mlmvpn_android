@@ -42,9 +42,26 @@ data class VpnConfig(
      * so a config that came in runnable goes back out runnable instead of being re-spelled
      * into something the core rejects.
      */
-    var rawUri: String = ""
+    var rawUri: String = "",
+    /**
+     * TLS cipher suites (Go's names, joined by ':'), the `cs` of PattNG's links. They only count
+     * with the `unsafe` fingerprint, which [CfUnfilter.shape] then sets.
+     */
+    var cipherSuites: String = "",
+    /** The stream's finalMask as a JSON object, the `fm` of PattNG's links ("" for none). */
+    var finalMask: String = "",
+    /**
+     * The ECH config list for this server -- the `ech` of a link. On this app's links it is the
+     * `cloudflare-ech.com+udp://1.1.1.1` form (an outer name plus the resolver that serves the key),
+     * which the EDG worker exports and the ECH strategy sets; the core fetches the key over that DoH
+     * and encrypts the ClientHello, so the real server name never travels in the clear. "" = no ECH.
+     */
+    var ech: String = ""
 ) {
     companion object {
+        /** A %XX escape (decodeB64). */
+        private val PERCENT = Regex("%([0-9A-Fa-f]{2})")
+
         fun parseUri(uriString: String): VpnConfig? {
             try {
                 val config = VpnConfig()
@@ -64,27 +81,62 @@ data class VpnConfig(
                 config.port = if (uri.port > 0) uri.port else 443
                 
                 config.name = uri.fragment?.let { android.net.Uri.decode(it) } ?: ""
-                
-                config.network = uri.getQueryParameter("type") ?: "tcp"
-                config.wsHost = uri.getQueryParameter("host") ?: ""
-                config.wsPath = uri.getQueryParameter("path") ?: ""
-                config.xhttpPath = uri.getQueryParameter("path") ?: ""
-                config.xhttpHost = uri.getQueryParameter("host") ?: ""
-                config.xhttpMode = uri.getQueryParameter("mode") ?: "auto"
-                config.xhttpExtra = uri.getQueryParameter("extra") ?: ""
-                config.serviceName = uri.getQueryParameter("serviceName") ?: ""
-                config.tls = uri.getQueryParameter("security") ?: ""
-                config.sni = uri.getQueryParameter("sni") ?: ""
-                config.alpn = uri.getQueryParameter("alpn") ?: ""
-                config.fingerprint = uri.getQueryParameter("fp") ?: ""
-                config.flow = uri.getQueryParameter("flow") ?: ""
-                config.publicKey = uri.getQueryParameter("pbk") ?: ""
-                config.shortId = uri.getQueryParameter("sid") ?: ""
-                config.spiderX = uri.getQueryParameter("spx") ?: ""
+
+                // The query read once. Uri.getQueryParameter rescans the whole query and builds a
+                // fresh ICU decoder on every call -- nineteen per link -- and the node list, the
+                // free-config importer and the scanner parse thousands of links: the main thread
+                // stood in those decoders for seconds (freeze reports, 1.2.41).
+                val q = queryOf(uri.encodedQuery)
+                config.network = q.param("type") ?: "tcp"
+                config.wsHost = q.param("host") ?: ""
+                config.wsPath = q.param("path") ?: ""
+                config.xhttpPath = config.wsPath
+                config.xhttpHost = config.wsHost
+                config.xhttpMode = q.param("mode") ?: "auto"
+                config.xhttpExtra = q.param("extra") ?: ""
+                config.serviceName = q.param("serviceName") ?: ""
+                config.tls = q.param("security") ?: ""
+                config.sni = q.param("sni") ?: ""
+                config.alpn = q.param("alpn") ?: ""
+                config.fingerprint = q.param("fp") ?: ""
+                config.cipherSuites = q.param("cs") ?: ""
+                config.finalMask = q.param("fm") ?: ""
+                config.ech = q.param("ech") ?: ""
+                config.flow = q.param("flow") ?: ""
+                config.publicKey = q.param("pbk") ?: ""
+                config.shortId = q.param("sid") ?: ""
+                config.spiderX = q.param("spx") ?: ""
 
                 return config
             } catch (e: Exception) {
                 return null
+            }
+        }
+
+        /** A query's raw pairs, first occurrence of each key kept (as Uri.getQueryParameter answers). */
+        private fun queryOf(encodedQuery: String?): Map<String, String> {
+            if (encodedQuery.isNullOrEmpty()) return emptyMap()
+            val out = HashMap<String, String>()
+            for (pair in encodedQuery.split('&')) {
+                if (pair.isEmpty()) continue
+                val eq = pair.indexOf('=')
+                val key = if (eq < 0) pair else pair.substring(0, eq)
+                if (!out.containsKey(key)) out[key] = if (eq < 0) "" else pair.substring(eq + 1)
+            }
+            return out
+        }
+
+        /**
+         * A value decoded exactly as Uri.getQueryParameter decodes it ('+' is a space, %XX is UTF-8),
+         * and only when there is something to decode.
+         */
+        private fun Map<String, String>.param(key: String): String? {
+            val raw = this[key] ?: return null
+            if (raw.indexOf('%') < 0 && raw.indexOf('+') < 0) return raw
+            return try {
+                java.net.URLDecoder.decode(raw, "UTF-8")
+            } catch (e: Exception) {
+                Uri.decode(raw.replace('+', ' '))
             }
         }
 
@@ -99,9 +151,14 @@ data class VpnConfig(
             }
         }
 
-        /** Tolerant base64: these links appear both padded and unpadded, URL-safe and not. */
+        /**
+         * Tolerant base64: these links appear both padded and unpadded, URL-safe and not, and some
+         * lists escape the padding (`%3D`): an ss link with one could not be read (a «گره» chat test,
+         * 28 Oct 2026). Only %XX is undone; a `+` stays a `+`.
+         */
         private fun decodeB64(raw: String): String? {
-            val cleaned = raw.trim().replace("-", "+").replace("_", "/").replace(Regex("\\s"), "")
+            val unescaped = PERCENT.replace(raw) { it.groupValues[1].toInt(16).toChar().toString() }
+            val cleaned = unescaped.trim().replace("-", "+").replace("_", "/").replace(Regex("\\s"), "")
             val padded = cleaned.padEnd((cleaned.length + 3) / 4 * 4, '=')
             return try {
                 String(android.util.Base64.decode(padded, android.util.Base64.DEFAULT))
@@ -141,6 +198,9 @@ data class VpnConfig(
                 config.sni = json.optString("sni").ifBlank { config.wsHost }
                 config.alpn = json.optString("alpn")
                 config.fingerprint = json.optString("fp")
+                config.cipherSuites = json.optString("cs")
+                config.finalMask = json.optString("fm")
+                config.ech = json.optString("ech")
                 config.name = fragmentOf(uriString).ifBlank { json.optString("ps") }
                 config
             } catch (e: Exception) {
@@ -227,6 +287,9 @@ data class VpnConfig(
         if (sni.isNotEmpty()) builder.appendQueryParameter("sni", sni)
         if (alpn.isNotEmpty()) builder.appendQueryParameter("alpn", alpn)
         if (fingerprint.isNotEmpty()) builder.appendQueryParameter("fp", fingerprint)
+        if (cipherSuites.isNotEmpty()) builder.appendQueryParameter("cs", cipherSuites)
+        if (finalMask.isNotEmpty()) builder.appendQueryParameter("fm", finalMask)
+        if (ech.isNotEmpty()) builder.appendQueryParameter("ech", ech)
         if (protocol == "vless" && flow.isNotEmpty()) builder.appendQueryParameter("flow", flow)
         if (tls == "reality") {
             if (publicKey.isNotEmpty()) builder.appendQueryParameter("pbk", publicKey)

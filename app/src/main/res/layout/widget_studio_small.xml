@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A small studio widget: the design as one picture (StudioPainter), and two tap regions over it.
+    The top part opens the method, the rest connects or disconnects: the same split the painter
+    keeps its button inside (StudioPainter.SMALL_TOP = 0.38).
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/widget_image"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitCenter" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <FrameLayout
+            android:id="@+id/zone_open"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="38" />
+
+        <FrameLayout
+            android:id="@+id/zone_toggle"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="62" />
+    </LinearLayout>
+</FrameLayout>

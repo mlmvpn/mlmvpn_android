@@ -33,6 +33,15 @@
         <item name="editTextStyle">@style/Widget.AppCompat.EditText</item>
     </style>
 
+    <!-- The invisible window every home-screen widget tap lands on (WidgetActionActivity): no
+         picture, no dim, no animation; the tap's effect is all the user should see. -->
+    <style name="Theme.Widget.Trampoline" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+
     <!-- Google Blue outlined button -->
     <style name="App.Button.Outlined" parent="Widget.MaterialComponents.Button.OutlinedButton">
         <item name="strokeColor">@color/gs_primary</item>

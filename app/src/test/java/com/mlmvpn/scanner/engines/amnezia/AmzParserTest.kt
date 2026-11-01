@@ -28,7 +28,7 @@ object AmzFixtures {
         "wireguard://${enc(PRIV)}@$host:$port?address=${enc("172.16.0.2/32")}&reserved=181%2C54%2C101&publickey=${enc(WARP)}" +
             "&mtu=1280&keepalive=5&wnoise=random&wnoisecount=5&wnoisedelay=2-5&wpayloadsize=5-10#${enc(name).replace("+", "%20")}"
 
-    /** FastNodes' sub/wireguard/*.conf. */
+    /** FastNodes configuration files under sub/wireguard. */
     fun conf(endpoint: String = "162.159.192.0:859", extra: String = "") = """
         [Interface]
         PrivateKey = $PRIV
@@ -219,7 +219,10 @@ class AmzParserTest {
         val servers = AmzParser.parseText(listOf(AmzFixtures.hy2(), AmzFixtures.wgUri()).joinToString("\n"), "src", now).servers
         val s = AmzState(
             servers = servers,
-            stats = mapOf("net1" to mapOf(servers[0].id to AmzStat(ok = 2, ewmaMs = 120.5, lastMs = 110, lastOkAt = now, lastTestAt = now))),
+            stats = mapOf("net1" to mapOf(
+                servers[0].id to AmzStat(ok = 2, ewmaMs = 120.5, lastMs = 110, lastOkAt = now, lastTestAt = now),
+                servers[1].id to AmzStat(ok = 1, ewmaMs = 900.0, lastMs = 900, lastOkAt = now, lastTestAt = now, via = AmzStat.VIA_CF),
+            )),
             netSeen = mapOf("net1" to now), sources = mapOf("src" to AmzSourceStat(10, 3)),
             tombstones = mapOf("gone" to now), prefs = AmzPrefs(obfuscate = false), lastRefreshAt = now, lastConnectedId = servers[1].id,
         )

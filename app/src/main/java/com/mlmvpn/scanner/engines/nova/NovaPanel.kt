@@ -106,7 +106,7 @@ object NovaPanel {
     }
 
     private fun client(context: Context): OkHttpClient =
-        com.mlmvpn.scanner.update.UpdateNet.client(context, 15, 30).newBuilder().followRedirects(false).build()
+        com.mlmvpn.scanner.update.UpdateNet.client(context, 15, 30, directFirst = true).newBuilder().followRedirects(false).build()
     private val JSON = "application/json".toMediaType()
 
     /** `POST /login`, form `password=`; the session cookie(s) as one Cookie header value. */

@@ -157,7 +157,7 @@ fun QuickConnectTab(onBack: () -> Unit = {}) {
         val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
         val isProxyMode = com.mlmvpn.scanner.utils.NetworkSettings.proxyMode(context)
         val localPort = com.mlmvpn.scanner.utils.LocalPort.getString(context)
-        context.startService(
+        com.mlmvpn.scanner.utils.SafeStart.service(context, 
             Intent(context, MyVpnService::class.java).apply {
                 putExtra("NODE_URI", uri)
                 putExtra("NODE_ID", id)
@@ -206,7 +206,7 @@ fun QuickConnectTab(onBack: () -> Unit = {}) {
     fun disconnect() {
         statusLine = ""
         egress = null
-        context.startService(Intent(context, MyVpnService::class.java).apply { action = "STOP" })
+        com.mlmvpn.scanner.utils.SafeStart.service(context, Intent(context, MyVpnService::class.java).apply { action = "STOP" })
     }
 
     /**
@@ -421,6 +421,7 @@ fun QuickConnectTab(onBack: () -> Unit = {}) {
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
                 )
+                com.mlmvpn.scanner.ui.RouteChips()
                 Spacer(Modifier.height(14.dp))
             }
 

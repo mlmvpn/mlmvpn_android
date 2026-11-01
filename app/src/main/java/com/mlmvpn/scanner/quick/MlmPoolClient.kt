@@ -45,7 +45,7 @@ object MlmPoolClient {
      * update -- D1's free allowance is per account, and at roughly sixteen thousand daily users
      * this one runs out.
      */
-    private const val DEFAULT_ENDPOINT = "https://mlm-pool-7f3a2c.ehsan2novenic2.workers.dev"
+    private const val DEFAULT_ENDPOINT = "https://pool.redacted.invalid"
 
     /** Marks nodes that came from the pool, so the rest of the app can treat them as locked. */
     const val SOURCE = "mlmvpn"
@@ -79,7 +79,7 @@ object MlmPoolClient {
         }
     }
 
-    private val client = OkHttpClient.Builder().protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
+    private val client = OkHttpClient.Builder().protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory())
         .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns(dohDns))

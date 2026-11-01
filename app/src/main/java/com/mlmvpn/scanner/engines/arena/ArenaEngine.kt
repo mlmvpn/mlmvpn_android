@@ -354,16 +354,14 @@ object ArenaEngine {
      */
     private suspend fun speed(context: Context, config: VpnConfig): Double? = kotlinx.coroutines.withContext(Dispatchers.IO) {
         val port = (20000..30000).random()
-        var core: libv2ray.CoreController? = null
+        // A test core, in the test host process (XrayHosts): a panel that panics Xray ends that
+        // process, not the app.
+        var core: com.mlmvpn.core.warp.VlessXrayInjector? = null
         try {
-            CombineEngine.ensureCoreEnv(context)
             val json = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(config, port, includeTun = false)
-            core = libv2ray.Libv2ray.newCoreController(object : libv2ray.CoreCallbackHandler {
-                override fun onEmitStatus(status: Long, message: String): Long = 0
-                override fun shutdown(): Long = 0
-                override fun startup(): Long = 0
-            })
-            core.startLoop(json, 0)
+            val c = com.mlmvpn.core.warp.VlessXrayInjector(0, quiet = true)
+            if (!c.start(context, json, port)) return@withContext null
+            core = c
             delay(500)
             val client = okhttp3.OkHttpClient.Builder()
                 .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", port + 10000)))
@@ -379,7 +377,7 @@ object ArenaEngine {
             Log.i(TAG, "speed: ${e.message}")
             null
         } finally {
-            runCatching { core?.stopLoop() }
+            runCatching { core?.stop() }
         }
     }
 

@@ -126,9 +126,7 @@ fun UpdateCheckScreen(onBack: () -> Unit, backLabel: String) {
                 errorText = errorText,
                 onDownload = {
                     errorText = null
-                    scope.launch {
-                        UpdateChecker.downloadAndInstall(context, s.info) { err -> errorText = err }
-                    }
+                    UpdateChecker.startDownload(context, s.info) { err -> errorText = err }
                 },
             )
         }

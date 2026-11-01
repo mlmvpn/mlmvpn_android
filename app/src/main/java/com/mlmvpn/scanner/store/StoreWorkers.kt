@@ -32,8 +32,14 @@ object StoreWorkers {
 
     private const val API = "https://api.cloudflare.com/client/v4"
 
-    // The Cloudflare API is not filtered in Iran — the whole app deploys through it directly.
+    // api.cloudflare.com is reachable in much of Iran directly, but not everywhere: on the networks
+    // that read the TLS server name it is cut like any other. So the deploy goes through the same
+    // route the rest of the app uses for Cloudflare -- a proven edge address (WorkerRoute.dns) with
+    // the ClientHello split so the name is not in one packet (CfFront) -- which is a no-op where the
+    // API was reachable anyway.
     private val client = OkHttpClient.Builder()
+        .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns())
+        .socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory())
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)

@@ -44,7 +44,7 @@ object ProfileRuntime {
             if (!first.isNullOrBlank()) lines.add("cipher $first")
         }
 
-        val moveToTcp = (tcp || relayPort != null) && isTunnelBear(profile)
+        val moveToTcp = (tcp && isTunnelBear(profile)) || relayPort != null
         if (moveToTcp) {
             for (i in lines.indices) {
                 val t = lines[i].trim()

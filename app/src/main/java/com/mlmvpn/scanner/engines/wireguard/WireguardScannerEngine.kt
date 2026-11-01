@@ -222,7 +222,8 @@ object WireguardScannerEngine {
                 val newPings = _realPings.value.toMutableMap()
                 
                 val batches = allEps.chunked(25)
-                val injector = VlessXrayInjector(0)
+                // In the test host process (XrayHosts): a WireGuard core that panics ends that process, not the app.
+                val injector = VlessXrayInjector(0, quiet = true)
                 
                 // Reset progress tracking for test phase
                 var completed = 0

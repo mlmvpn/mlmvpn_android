@@ -1,0 +1,409 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools"
+    android:installLocation="auto">
+
+    <supports-screens android:anyDensity="true"
+                      android:largeScreens="true"
+                      android:normalScreens="true"
+                      android:resizeable="true"
+                      android:smallScreens="true"
+                      android:xlargeScreens="true"/>
+
+    <uses-feature android:glEsVersion="0x00020000" android:required="false"/>
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <uses-feature android:name="android.hardware.screen.PORTRAIT" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera2" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.proximity" android:required="false" />
+
+    <uses-permission android:name="android.permission.READ_CLIPBOARD"/>
+    <!-- MLMCHAT: Gereh «nearby» over Bluetooth LE (SPEC 16), asked for only when the user turns it on.
+         Android 6 to 11 also needs ACCESS_FINE_LOCATION to scan (declared by the app, capped at 32). -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- MLMCHAT: permission FOREGROUND_SERVICE_MEDIA_PROJECTION removed -->
+    <!-- MLMCHAT: permission FOREGROUND_SERVICE_CAMERA removed -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- MLMCHAT: permission FOREGROUND_SERVICE_MICROPHONE removed -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- MLMCHAT: Gereh's private LAN beacons arrive as broadcast/multicast (SPEC 14.8) -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+    <!-- MLMCHAT: permission GET_ACCOUNTS removed -->
+    <!-- MLMCHAT: permission READ_CONTACTS removed -->
+    <!-- MLMCHAT: permission WRITE_CONTACTS removed -->
+    <!-- MLMCHAT: permission MANAGE_ACCOUNTS removed -->
+    <!-- MLMCHAT: permission READ_PROFILE removed -->
+    <!-- MLMCHAT: permission WRITE_SYNC_SETTINGS removed -->
+    <!-- MLMCHAT: permission READ_SYNC_SETTINGS removed -->
+    <!-- MLMCHAT: permission AUTHENTICATE_ACCOUNTS removed -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- MLMCHAT: permission SYSTEM_ALERT_WINDOW removed -->
+    <!-- MLMCHAT: permission READ_PHONE_STATE removed -->
+    <!-- MLMCHAT: permission RECEIVE_BOOT_COMPLETED removed -->
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.INSTALL_SHORTCUT" />
+    <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
+    <uses-permission android:name="com.android.launcher.permission.UNINSTALL_SHORTCUT"/>
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- MLMCHAT: permission BLUETOOTH removed -->
+    <!-- MLMCHAT: permission MANAGE_OWN_CALLS removed -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    <!-- MLMCHAT: permission REQUEST_INSTALL_PACKAGES removed -->
+    <!-- MLMCHAT: permission READ_PHONE_NUMBERS removed -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <!-- MLMCHAT: permission com.sec.android.provider.badge.permission.READ removed -->
+    <!-- MLMCHAT: permission com.sec.android.provider.badge.permission.WRITE removed -->
+    <!-- MLMCHAT: permission com.htc.launcher.permission.READ_SETTINGS removed -->
+    <!-- MLMCHAT: permission com.sonyericsson.home.permission.BROADCAST_BADGE removed -->
+    <!-- MLMCHAT: permission com.sonymobile.home.permission.PROVIDER_INSERT_BADGE removed -->
+    <!-- MLMCHAT: permission com.anddoes.launcher.permission.UPDATE_COUNT removed -->
+    <!-- MLMCHAT: permission com.majeur.launcher.permission.UPDATE_BADGE removed -->
+    <!-- MLMCHAT: permission com.huawei.android.launcher.permission.CHANGE_BADGE removed -->
+    <!-- MLMCHAT: permission com.huawei.android.launcher.permission.READ_SETTINGS removed -->
+    <!-- MLMCHAT: permission com.huawei.android.launcher.permission.WRITE_SETTINGS removed -->
+    <!-- MLMCHAT: permission READ_APP_BADGE removed -->
+    <!-- MLMCHAT: permission com.oppo.launcher.permission.READ_SETTINGS removed -->
+    <!-- MLMCHAT: permission com.oppo.launcher.permission.WRITE_SETTINGS removed -->
+    <!-- MLMCHAT: permission me.everything.badger.permission.BADGE_COUNT_READ removed -->
+    <!-- MLMCHAT: permission me.everything.badger.permission.BADGE_COUNT_WRITE removed -->
+    <!-- MLMCHAT: permission com.android.vending.BILLING removed -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="replace" />
+
+    <!-- MLMCHAT: permission ACCESS_BACKGROUND_LOCATION removed -->
+
+    <uses-sdk tools:overrideLibrary="com.google.mlkit.vision.segmentation.subject"/>
+
+    <queries>
+        <package android:name="com.google.android.apps.maps"/>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="ton"/>
+        </intent>
+    </queries>
+
+    <!-- MLMCHAT: permissions Telegram's Google libraries would add (purchases, Firebase push, Google
+         services, an HTC launcher badge): none of them belongs in MLMVPN. -->
+    <uses-permission android:name="com.android.vending.BILLING" tools:node="remove" />
+    <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" tools:node="remove" />
+    <uses-permission android:name="com.google.android.providers.gsf.permission.READ_GSERVICES" tools:node="remove" />
+
+    <application>
+        <!-- MLMCHAT: MLMVPN's own <application> element applies. Telegram's application-wide attributes
+             (Application class, backup agent, large heap, cleartext, supportsRtl=false...) were removed;
+             MlmApp extends ApplicationLoader and starts Telegram only in the :chat process. -->
+        <!-- MLMCHAT: no Google component starts on its own (PLAN 13.4; the phase-0 offline test found
+             Firebase and ML Kit's Data Transport reaching Google with tgnet off). -->
+        <provider android:name="com.google.firebase.provider.FirebaseInitProvider" tools:node="remove" />
+        <provider android:name="com.google.mlkit.common.internal.MlKitInitProvider" tools:node="remove" />
+        <service android:name="com.google.firebase.components.ComponentDiscoveryService" tools:node="remove" />
+        <service android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService" tools:node="remove" />
+        <service android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery" tools:node="remove" />
+        <service android:name="com.google.android.datatransport.runtime.scheduling.jobscheduling.JobInfoSchedulerService" tools:node="remove" />
+        <receiver android:name="com.google.android.datatransport.runtime.scheduling.jobscheduling.AlarmManagerSchedulerBroadcastReceiver" tools:node="remove" />
+        <receiver android:name="com.google.firebase.iid.FirebaseInstanceIdReceiver" tools:node="remove" />
+
+        <!-- usesCleartextTraffic for browser supporting opening http:// links -->
+
+        <!-- MLMCHAT: removed activity-alias DefaultIcon -->
+
+        <!-- MLMCHAT: removed activity-alias VintageIcon -->
+
+        <!-- MLMCHAT: removed activity-alias AquaIcon -->
+
+        <!-- MLMCHAT: removed activity-alias PremiumIcon -->
+
+        <!-- MLMCHAT: removed activity-alias TurboIcon -->
+
+        <!-- MLMCHAT: removed activity-alias NoxIcon -->
+
+        <!-- MLMCHAT: only MLMVPN's MLM CHAT tile opens this (no launcher icon, no t.me or tg: links) -->
+        <activity android:process=":chat"
+            android:name="org.telegram.ui.LaunchActivity"
+            android:theme="@style/Theme.TMessages.Start"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode|smallestScreenSize|screenLayout"
+            android:supportsPictureInPicture="true"
+            android:hardwareAccelerated="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="false">
+            <meta-data android:name="android.service.chooser.chooser_target_service" android:value="androidx.sharetarget.ChooserTargetServiceCompat" />
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
+            <meta-data
+                android:name="com.google.mlkit.vision.DEPENDENCIES"
+                android:value="subject_segment" />
+        </activity>
+        <!-- MLMCHAT: removed activity-alias CallsActivity -->
+        <activity android:process=":chat"
+            android:name="org.telegram.ui.BubbleActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize"
+            android:allowEmbedded="true"
+            android:documentLaunchMode="always"
+            android:resizeableActivity="true"/>
+        <!-- MLMCHAT: removed activity ShareActivity -->
+        <!-- MLMCHAT: removed activity ExternalActionActivity -->
+        <!-- MLMCHAT: removed activity ChatsWidgetConfigActivity -->
+        <!-- MLMCHAT: removed activity ContactsWidgetConfigActivity -->
+<!--        <activity-->
+<!--            android:name="org.telegram.ui.FeedWidgetConfigActivity"-->
+<!--            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode"-->
+<!--            android:hardwareAccelerated="true"-->
+<!--            android:windowSoftInputMode="adjustPan">-->
+<!--            <intent-filter android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">-->
+<!--                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>-->
+<!--            </intent-filter>-->
+<!--        </activity>-->
+        <activity android:process=":chat"
+            android:name="org.telegram.messenger.OpenChatReceiver"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode"
+            android:exported="true">
+        </activity>
+        <!-- MLMCHAT: removed activity OpenAttachedMenuBotReceiver -->
+        <activity android:process=":chat"
+            android:name="org.telegram.ui.PopupNotificationActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:theme="@style/Theme.TMessages.PopupNotification"
+            android:resizeableActivity="false"
+            android:windowSoftInputMode="adjustResize|stateHidden">
+        </activity>
+        <!-- MLMCHAT: removed activity VoIPPermissionActivity -->
+        <!-- MLMCHAT: removed activity VoIPFeedbackActivity -->
+
+        <receiver android:process=":chat"
+            android:name=".AutoMessageHeardReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.telegram.messenger.ACTION_MESSAGE_HEARD"/>
+            </intent-filter>
+        </receiver>
+
+        <receiver android:process=":chat"
+            android:name=".CopyCodeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.telegram.messenger.ACTION_COPY_CODE"/>
+            </intent-filter>
+        </receiver>
+
+        <receiver android:process=":chat"
+            android:name=".NotificationsDisabledReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.app.action.NOTIFICATION_CHANNEL_BLOCK_STATE_CHANGED"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- MLMCHAT: removed receiver SmsReceiver -->
+
+        <!-- MLMCHAT: removed receiver CallReceiver -->
+
+        <!-- MLMCHAT: removed service AuthenticatorService -->
+
+        <!-- MLMCHAT: removed service ContactsSyncAdapterService -->
+
+        <service android:process=":chat"
+            android:name=".KeepAliveJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:foregroundServiceType="dataSync"
+        />
+        <service android:process=":chat"
+            android:name=".BringAppForegroundService"
+            android:enabled="true"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback"
+        />
+        <service android:process=":chat"
+            android:name=".NotificationsService"
+            android:enabled="true"
+            android:exported="true"
+            android:foregroundServiceType="dataSync"
+        />
+        <service android:process=":chat"
+            android:name=".NotificationRepeat"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+        />
+        <service android:process=":chat"
+            android:name=".VideoEncodingService"
+            android:enabled="true"
+            android:exported="true"
+            android:foregroundServiceType="dataSync"
+        />
+        <!-- MLMCHAT: removed service StoryUploadingService -->
+        <!-- MLMCHAT: removed service ImportingService -->
+        <service android:process=":chat"
+            android:name=".LocationSharingService"
+            android:enabled="true"
+            android:exported="true"
+            android:foregroundServiceType="location|dataSync"
+        />
+        <!-- MLMCHAT: removed service VoIPService -->
+        <service android:process=":chat"
+            android:name=".MusicPlayerService"
+            android:exported="true"
+            android:enabled="true"
+            android:foregroundServiceType="mediaPlayback"
+        />
+        <!-- MLMCHAT: removed service MusicBrowserService -->
+        <!-- MLMCHAT: removed service TelegramConnectionService -->
+
+		<receiver android:process=":chat" android:name=".MusicPlayerReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="org.telegram.android.musicplayer.close" />
+                <action android:name="org.telegram.android.musicplayer.pause" />
+                <action android:name="org.telegram.android.musicplayer.next" />
+                <action android:name="org.telegram.android.musicplayer.play" />
+                <action android:name="org.telegram.android.musicplayer.previous" />
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+                <action android:name="android.media.AUDIO_BECOMING_NOISY" />
+            </intent-filter>
+        </receiver>
+        <!-- MLMCHAT: removed receiver VoIPMediaButtonReceiver -->
+
+        <!-- MLMCHAT: removed receiver AppStartReceiver -->
+
+        <!-- MLMCHAT: removed receiver RefererReceiver -->
+
+        <!-- MLMCHAT: removed receiver WearReplyReceiver -->
+
+        <!-- MLMCHAT: removed service WearAuthListenerService -->
+
+        <receiver android:process=":chat" android:name=".StopLiveLocationReceiver" android:enabled="true"/>
+
+        <receiver android:process=":chat" android:name=".PopupReplyReceiver" android:enabled="true"/>
+
+        <receiver android:process=":chat" android:name=".NotificationCallbackReceiver" android:enabled="true" android:exported="false"/>
+
+        <receiver android:process=":chat" android:name=".ShareBroadcastReceiver" android:enabled="true"/>
+
+        <receiver android:process=":chat" android:name=".CustomTabsCopyReceiver" android:enabled="true"/>
+
+        <receiver android:process=":chat" android:name=".NotificationDismissReceiver" android:exported="false"/>
+
+        <!-- MLMCHAT: removed receiver VoIPActionsReceiver -->
+
+        <receiver android:process=":chat" android:name=".ShortcutResultReceiver" android:exported="false"/>
+
+        <provider android:process=":chat"
+            android:name="org.mlmvpn.chat.bridge.ChatFileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/provider_paths"/>
+        </provider>
+
+        <provider android:process=":chat"
+            android:authorities="${applicationId}.notification_image_provider"
+            android:name=".NotificationImageProvider"
+            android:exported="false"
+            android:grantUriPermissions="true"/>
+
+        <!-- MLMCHAT: removed provider CallNotificationSoundProvider -->
+
+        <!-- MLMCHAT: removed receiver ChatsWidgetProvider -->
+
+        <!-- MLMCHAT: removed service ChatsWidgetService -->
+
+        <!-- MLMCHAT: removed receiver ContactsWidgetProvider -->
+
+        <!-- MLMCHAT: removed service ContactsWidgetService -->
+
+<!--        <receiver android:name=".FeedWidgetProvider">-->
+<!--            <meta-data android:name="android.appwidget.provider"-->
+<!--                android:resource="@xml/feed_widget_info" />-->
+<!--            <intent-filter>-->
+<!--                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />-->
+<!--            </intent-filter>-->
+<!--        </receiver>-->
+
+<!--        <service android:name=".FeedWidgetService"-->
+<!--            android:permission="android.permission.BIND_REMOTEVIEWS"-->
+<!--            android:exported="false" />-->
+        <service android:process=":chat"
+            android:name=".FilesMigrationService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+        />
+
+        <uses-library android:name="com.sec.android.app.multiwindow" android:required="false" />
+        <meta-data android:name="com.sec.android.support.multiwindow" android:value="true" />
+        <meta-data android:name="com.sec.android.multiwindow.DEFAULT_SIZE_W" android:value="632dp" />
+        <meta-data android:name="com.sec.android.multiwindow.DEFAULT_SIZE_H" android:value="598dp" />
+        <meta-data android:name="com.sec.android.multiwindow.MINIMUM_SIZE_W" android:value="632dp" />
+        <meta-data android:name="com.sec.android.multiwindow.MINIMUM_SIZE_H" android:value="598dp" />
+
+        <meta-data android:name="com.google.android.gms.wallet.api.enabled" android:value="true" />
+
+        <!--
+        <meta-data android:name="com.google.android.gms.car.notification.SmallIcon" android:resource="@drawable/ic_player" />
+        <meta-data android:name="com.google.android.gms.car.application" android:resource="@xml/automotive_app_desc" />
+
+        <service
+            android:name="org.telegram.messenger.car.TelegramCarAppService"
+            android:exported="true"
+            android:foregroundServiceType="connectedDevice">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.MESSAGING" />
+            </intent-filter>
+        </service>
+
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="5" />
+        -->
+
+        <meta-data android:name="com.google.android.gms.vision.DEPENDENCIES" android:value="face,barcode" />
+
+        <meta-data android:name="android.max_aspect" android:value="2.5" />
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="org.telegram.messenger.chromecast.ChromecastOptionsProvider" />
+
+        <!-- MLMCHAT: Gereh keeps listening for messages with no chat screen open (T7, «always reachable») -->
+        <service android:process=":chat"
+            android:name="org.mlmvpn.chat.bridge.GerehService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Serverless phone-to-phone messaging: keeps this phone reachable for incoming messages, as there is no push server" />
+        </service>
+        <receiver android:process=":chat"
+            android:name="org.mlmvpn.chat.bridge.GerehBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

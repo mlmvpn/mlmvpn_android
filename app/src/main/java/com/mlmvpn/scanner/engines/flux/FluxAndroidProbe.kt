@@ -76,7 +76,10 @@ class FluxAndroidProbe(
         } catch (e: Exception) {
             runCatching { raw.close() }; return@withContext FluxProbe.Reach(false, reason = FailReason.TCP_REFUSED)
         }
-        if (c.node.security == Security.NONE || c.node.sni.isEmpty()) {
+        // A shaped handshake (ECH, a cut hello) exists because the plain one is reset here: judging
+        // it by a plain handshake would drop exactly the candidates that can get through. TCP is
+        // all stage 1 asks of them; stage 2 runs their real handshake.
+        if (c.node.security == Security.NONE || c.node.sni.isEmpty() || c.fragment != com.mlmvpn.scanner.engines.flux.core.model.FragmentProfile.OFF) {
             runCatching { raw.close() }
             return@withContext FluxProbe.Reach(true, (System.nanoTime() - start) / 1_000_000)
         }

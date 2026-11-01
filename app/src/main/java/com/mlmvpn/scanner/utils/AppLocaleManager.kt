@@ -29,11 +29,14 @@ object AppLocaleManager {
 
     fun setLanguage(context: Context, languageCode: String) {
         val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_LANGUAGE, languageCode).apply()
+        // commit, not apply: Gereh (the :chat process) reads this file as soon as it is told below.
+        prefs.edit().putString(KEY_LANGUAGE, languageCode).commit()
         _currentLanguage.value = languageCode
         // Loc caches a Resources pinned to the old locale; without this the activity would be
         // recreated correctly and every non-composable string would still be in the old language.
         Loc.bind(context)
+        // Gereh follows MLMVPN's language unless its own setting says otherwise (GerehLocale).
+        org.mlmvpn.chat.bridge.GerehService.languageChanged(context)
     }
 
     /**

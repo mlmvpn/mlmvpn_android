@@ -211,6 +211,8 @@ internal fun EmergencyStatusLine(
             )
         }
     }
+    // Every method page shows what the app-wide settings do to its connection.
+    com.mlmvpn.scanner.ui.RouteChips()
 }
 
 

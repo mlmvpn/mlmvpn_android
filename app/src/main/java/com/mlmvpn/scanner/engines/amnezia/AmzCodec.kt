@@ -6,7 +6,8 @@ import org.json.JSONObject
 /** [AmzState] to and from JSON. Short keys: the pool is a few thousand servers. */
 object AmzCodec {
 
-    private const val VERSION = 1
+    /** 2: Hysteria2 with a self-signed certificate is usable (pinned), so its old removals are lifted once. */
+    private const val VERSION = 2
 
     fun encode(s: AmzState): String {
         val o = JSONObject().put("v", VERSION)
@@ -17,14 +18,17 @@ object AmzCodec {
                     .put("h", sv.host).put("p", sv.port)
                     .put("c", sv.country ?: "").put("cf", sv.countryFrom.code)
                     .put("s", sv.sourceId).put("a", sv.addedAt)
-                    .put("w", sv.warp).put("x", sv.needsAwgCore))
+                    .put("w", sv.warp).put("x", sv.needsAwgCore)
+                    .apply { if (sv.selfSigned) put("ss", true) }
+                    .apply { if (sv.seenAt > 0) put("sn", sv.seenAt) })
             }
         })
         o.put("stats", JSONObject().also { nets ->
             s.stats.forEach { (net, m) ->
                 nets.put(net, JSONObject().also { mo ->
                     m.forEach { (id, st) ->
-                        mo.put(id, JSONArray().put(st.ok).put(st.fail).put(st.streak).put(st.ewmaMs).put(st.lastMs).put(st.lastOkAt).put(st.lastTestAt))
+                        mo.put(id, JSONArray().put(st.ok).put(st.fail).put(st.streak).put(st.ewmaMs).put(st.lastMs).put(st.lastOkAt).put(st.lastTestAt)
+                            .apply { if (st.via.isNotEmpty()) put(st.via) })
                     }
                 })
             }
@@ -49,7 +53,8 @@ object AmzCodec {
                     name = x.optString("n"), host = x.optString("h"), port = x.optInt("p"),
                     country = x.optString("c").ifEmpty { null }, countryFrom = CountryFrom.of(x.optString("cf")),
                     sourceId = x.optString("s"), addedAt = x.optLong("a"),
-                    warp = x.optBoolean("w"), needsAwgCore = x.optBoolean("x"),
+                    warp = x.optBoolean("w"), needsAwgCore = x.optBoolean("x"), selfSigned = x.optBoolean("ss"),
+                    seenAt = x.optLong("sn"),
                 )
             }
         }
@@ -60,7 +65,7 @@ object AmzCodec {
                 val m = HashMap<String, AmzStat>()
                 mo.keys().forEach { id ->
                     val a = mo.optJSONArray(id) ?: return@forEach
-                    m[id] = AmzStat(a.optInt(0), a.optInt(1), a.optInt(2), a.optDouble(3, 0.0), a.optLong(4, -1), a.optLong(5), a.optLong(6))
+                    m[id] = AmzStat(a.optInt(0), a.optInt(1), a.optInt(2), a.optDouble(3, 0.0), a.optLong(4, -1), a.optLong(5), a.optLong(6), a.optString(7, ""))
                 }
                 stats[net] = m
             }
@@ -71,6 +76,9 @@ object AmzCodec {
         o.optJSONObject("src")?.let { j -> j.keys().forEach { k -> j.optJSONArray(k)?.let { a -> src[k] = AmzSourceStat(a.optInt(0), a.optInt(1)) } } }
         val tomb = HashMap<String, Long>()
         o.optJSONObject("tomb")?.let { j -> j.keys().forEach { tomb[it] = j.optLong(it) } }
+        // Before version 2 a self-signed Hysteria2 server could only fail and be removed: its
+        // removal says nothing now, so the next refresh brings it back to be tested properly.
+        if (o.optInt("v", 1) < 2) tomb.keys.removeAll { it.startsWith("h") }
         val p = o.optJSONObject("prefs")
         return AmzState(
             servers = servers, stats = stats, netSeen = seen, sources = src, tombstones = tomb,

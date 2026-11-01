@@ -43,11 +43,18 @@ object AccountPolicy {
             compareBy<Account> { if (it.usage?.fresh(now) == true) 1 else 0 }
                 .thenBy { if (it.auth == AuthState.ACCEPTED && now - (it.lastConnected ?: 0) in 0..86_400_000L) 1 else 0 }
                 .thenBy { if (it.usage?.fresh(now) == true) it.usage.remaining else -1L }
-                .thenBy { it.lastConnected ?: 0 }
+                // 0L, not 0: with a plain 0 the key was a Long for one account and an Integer for
+                // another, and comparing the two threw ClassCastException (OpenVPN screen, 1.2.41).
+                .thenBy { it.lastConnected ?: 0L }
         )
 }
 
 data class Remote(val host: String, val port: Int, val protocol: String)
+/** Official Windscribe TLS/WebSocket proxy. It receives no account credentials. */
+data class WsProxy(val host: String, val port: Int, val webSocket: Boolean, val padding: Boolean = false, val sni: String = "") {
+    init { require(host.matches(Regex("[A-Za-z0-9.:-]+")) && port in 1..65535 && sni.none { it == '\n' || it == '\r' }) }
+    val remote get() = if (webSocket) "wss://$host:$port/tcp/127.0.0.1/1194" else "https://$host:$port"
+}
 data class ProbeResult(
     val millis: Long?, val checkedAt: Long, val method: String, val error: String? = null,
     /**
@@ -60,8 +67,10 @@ data class ProbeResult(
 class Profile(
     val id: String, val name: String, val config: String, val remotes: List<Remote>,
     val authenticatedControl: Boolean = false, val favorite: Boolean = false, val probe: ProbeResult? = null,
+    val splitTcp: Boolean = false,
+    val wsProxy: WsProxy? = null,
 ) {
-    fun withFavorite(value: Boolean) = Profile(id, name, config, remotes, authenticatedControl, value, probe)
+    fun withFavorite(value: Boolean) = Profile(id, name, config, remotes, authenticatedControl, value, probe, splitTcp, wsProxy)
 
     /** The username and password the file itself carries (an inline auth-user-pass block), if any. */
     val ownCredentials: Pair<String, String>? get() = inlineCredentials(config)
@@ -84,7 +93,7 @@ class Profile(
             return body.getOrNull(0)?.let { it to body.getOrElse(1) { "" } }
         }
     }
-    fun withProbe(value: ProbeResult) = Profile(id, name, config, remotes, authenticatedControl, favorite, value)
+    fun withProbe(value: ProbeResult) = Profile(id, name, config, remotes, authenticatedControl, favorite, value, splitTcp, wsProxy)
     override fun toString() = "OpenVPN profile $id"
 }
 

@@ -51,7 +51,7 @@ class StudioDeployer(private val context: Context) {
 
     private val client = OkHttpClient.Builder()
         .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns())
-        .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
+        .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory()).proxySelector(com.mlmvpn.scanner.engines.cloud.CfTunnel.selector())
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -89,6 +89,19 @@ class StudioDeployer(private val context: Context) {
         account: CloudAccount,
         force: Boolean = false,
         onProgress: (Int, String) -> Unit = { _, _ -> },
+    ): Result = try {
+        installSteps(account, force, onProgress)
+    } catch (e: java.io.IOException) {
+        // A dropped or filtered connection to api.cloudflare.com mid-install (reset, timeout,
+        // no DNS) used to escape as an exception and crash the app. It is a failed install.
+        Log.w("StudioDeployer", "install: ${e.javaClass.simpleName}")
+        Result.Failed("ارتباط با Cloudflare قطع شد؛ اینترنت یا فیلترشکن را بررسی کنید و دوباره بزنید")
+    }
+
+    private suspend fun installSteps(
+        account: CloudAccount,
+        force: Boolean,
+        onProgress: (Int, String) -> Unit,
     ): Result = withContext(Dispatchers.IO) {
         val cloud = CloudManager(context)
         val headers = cloud.authHeadersFor(account)

@@ -51,6 +51,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
+import com.mlmvpn.scanner.engines.game.booster.probe.ProbeBudget
+import com.mlmvpn.scanner.engines.game.booster.probe.Anchors
+import com.mlmvpn.scanner.utils.GameSessionOwner
 import java.net.InetSocketAddress
 
 /**
@@ -101,22 +104,27 @@ class BoostOrchestrator(
         val measureOnly: Boolean = false,
         /** The decision as the learning side records it; null for a measure-only run. */
         val record: SessionRecord? = null,
+        val owner: String? = null,
     )
 
     private val socks = InetSocketAddress("127.0.0.1", AetherEngine.AETHER_SOCKS_PORT)
     private var aetherStartedHere = false
-
-    /** Time left in the run. */
-    private class Budget(totalMs: Long) {
-        private val end = System.currentTimeMillis() + totalMs
-        fun left(): Long = end - System.currentTimeMillis()
-        fun allows(ms: Long): Boolean = left() >= ms
-    }
+    private val owner = java.util.UUID.randomUUID().toString()
+    private val aetherOwner = Any()
+    @Volatile private var engineRoute: RouteKind? = null
 
     suspend fun run(plan: Plan): Session? {
+        GameSessionOwner.register(owner)
+        val total = if (plan.depth == ProbeDepth.THOROUGH || plan.profile.prefs.blocked ||
+            plan.profile.prefs.route.isTunnelPin || plan.profile.prefs.route == RouteChoice.WARP ||
+            plan.forceWarp) THOROUGH_BUDGET_MS else QUICK_BUDGET_MS
+        return withTimeoutOrNull(total) { runWithin(plan, ProbeBudget(total)) }
+            ?: throw IllegalStateException("boost_timeout")
+    }
+
+    private suspend fun runWithin(plan: Plan, budget: ProbeBudget): Session? {
         val profile = plan.profile
         val thorough = plan.depth == ProbeDepth.THOROUGH
-        val budget = Budget(if (thorough) THOROUGH_BUDGET_MS else QUICK_BUDGET_MS)
         val sliceMs = if (thorough) 4000L else 2000L
         GameBoostController.update {
             BoostUiState(
@@ -151,9 +159,17 @@ class BoostOrchestrator(
         // this game on this operator, or where the owner switched it off. Never a pinned choice.
         val crowdSkipsWarp = choice == RouteChoice.AUTO && !thorough && remembered == null &&
             (crowd.warpRarelyWins(profile.id) || !crowd.enabled("warp"))
-        val warpWanted = when (choice) {
+        // «بازی‌ام فیلتر یا تحریم است» (or «وصل نمی‌شه» / «آپدیت نمی‌شه» from «مشکل داری؟», or a
+        // tunnel pinned by name): the direct line is no candidate. Every tunnel that leaves the
+        // filter is raced to the game's own region instead (TunnelRace) and the fastest is taken.
+        val mustTunnel = profile.prefs.blocked || choice.isTunnelPin || choice == RouteChoice.WARP ||
+            plan.symptom == com.mlmvpn.scanner.engines.game.booster.model.Symptom.CANT_CONNECT ||
+            plan.symptom == com.mlmvpn.scanner.engines.game.booster.model.Symptom.UPDATE
+        val applyReserve = if (mustTunnel) TUNNEL_APPLY_RESERVE_MS else APPLY_RESERVE_MS
+        val warpWanted = if (mustTunnel) false else when (choice) {
             RouteChoice.DIRECT -> false
             RouteChoice.WARP -> true
+            RouteChoice.WIREGUARD, RouteChoice.AMNEZIA, RouteChoice.FENIX -> false
             RouteChoice.AUTO -> !crowdSkipsWarp && (remembered?.route?.isWarp()
                 ?: (thorough || !memory.memory.shouldSkipWarp(net.key, profile.id)))
         }
@@ -166,7 +182,7 @@ class BoostOrchestrator(
         // Started now so its gateway scan overlaps everything else -- over TCP (MASQUE h2) on a line
         // known to drop foreign UDP, where the QUIC variant could never connect.
         val warpOverTcp = NetworkTraits.udpSilent(ctx, net.key)
-        val warpOptions = AetherTunEngine.optionsOf(warpConfig(if (warpOverTcp) "h2" else "h3"))
+        var warpOptions = AetherTunEngine.optionsOf(warpConfig(if (warpOverTcp) "h2" else "h3"))
         if (warpWanted) startAetherIfNeeded(warpOptions)
 
         val cachedDoctor = GameDoctor.cached(net.key, profile.id)
@@ -175,7 +191,7 @@ class BoostOrchestrator(
                 cachedDoctor ?: withTimeoutOrNull(DOCTOR_MS) { GameDoctor.examine(profile.accessHosts(), network) }
                     ?.also { GameDoctor.remember(net.key, profile.id, it) }
             }
-            val s = async { withTimeoutOrNull(SWEEP_MS) { RegionSweep.run(profile.regions, network, sliceMs) }.orEmpty() }
+            val s = async { RegionSweep.run(profile.regions, network, sliceMs, budget.cap(SWEEP_MS)) }
             val l = async { Preflight.backgroundLoad() }
             Triple(d.await() ?: GameDoctor.Report.EMPTY, s.await(), l.await())
         }
@@ -236,6 +252,7 @@ class BoostOrchestrator(
             GameBoostController.stage(StageId.DIRECT, StageStatus.RUNNING)
             val echoTarget = target?.echoTarget
             val tcpTarget = target?.tcpTarget
+            val tunnelTarget = Anchors.tunnelTarget(anchor)
             val directEcho = SliceAccumulator()
             val directTcp = SliceAccumulator()
             // The sweep's slice of this region is the first direct slice.
@@ -252,7 +269,7 @@ class BoostOrchestrator(
             val sweptEcho = target?.echo
             val echoForSlices = if (sweptEcho != null && !sweptEcho.stats.answered) null else echoTarget
             for (i in 0 until moreSlices) {
-                if (!budget.allows(sliceMs + APPLY_RESERVE_MS)) break
+                if (!budget.allows(sliceMs + applyReserve)) break
                 val (e, t) = slice(echoForSlices, tcpTarget, directFlows(network), network, sliceMs)
                 directEcho.add(e); directTcp.add(t)
                 GameBoostController.stage(StageId.DIRECT, StageStatus.RUNNING, pick(directEcho, directTcp).stats())
@@ -274,15 +291,15 @@ class BoostOrchestrator(
                 // A game that cannot sign in directly may still sign in through WARP: give it the
                 // time it needs. Otherwise WARP gets what the budget has left.
                 val readyBudget = if (doctor.coreNeedsTunnel || choice == RouteChoice.WARP) WARP_READY_BLOCKED_MS
-                else minOf(WARP_READY_MS, (budget.left() - APPLY_RESERVE_MS - 2 * sliceMs).coerceAtLeast(0))
-                val ready = readyBudget > 0 && awaitAether(readyBudget)
+                else minOf(WARP_READY_MS, (budget.left() - applyReserve - 2 * sliceMs).coerceAtLeast(0))
+                val ready = readyBudget > 0 && awaitAether(budget.cap(readyBudget), warpOptions)
                 if (ready) {
                     val warpAcc = SliceAccumulator()
                     val sessions = if (method == ProbeMethod.ECHO) SocksUdpSession.openMany(socks, BEACON_FLOWS_SOCKS) else emptyList()
                     try {
                         val slices = if (thorough) 5 else 3
                         for (i in 0 until slices) {
-                            if (i > 0 && !budget.allows(sliceMs + APPLY_RESERVE_MS)) break
+                            if (i > 0 && !budget.allows(sliceMs + applyReserve)) break
                             // The two paths are measured at the same time, so both see the same
                             // minute of the same line: a fair comparison, and half the wait.
                             val (w, d) = coroutineScope {
@@ -319,6 +336,34 @@ class BoostOrchestrator(
                 }
             } else {
                 GameBoostController.stage(StageId.WARP, StageStatus.SKIPPED)
+            }
+
+            // ── 4b. a game the line cannot carry: the tunnels, raced to the game's region ─────
+            var racePick: TunnelRace.Result? = null
+            if (mustTunnel && tunnelTarget != null) {
+                GameBoostController.stage(StageId.WARP, StageStatus.RUNNING)
+                val order = when (choice) {
+                    RouteChoice.WIREGUARD -> listOf(RouteKind.WARP_WG)
+                    RouteChoice.AMNEZIA -> listOf(RouteKind.AMNEZIA)
+                    RouteChoice.FENIX -> listOf(RouteKind.FENIX)
+                    RouteChoice.WARP -> listOf(if (warpOverTcp) RouteKind.WARP_MASQUE_H2 else RouteKind.WARP_MASQUE_H3)
+                    // What won for this game on this network goes first; all are measured anyway.
+                    else -> TunnelRace.CANDIDATES.sortedByDescending { k ->
+                        if (remembered?.route == k) 2.0 else brain.brain.planRate(net.key, profile.id, Brain.planCode(k)) ?: 0.5
+                    }
+                }
+                val results = TunnelRace(ctx, aetherOwner).run(tunnelTarget, order, warpOverTcp, RACE_EACH_MS,
+                    totalMs = (budget.left() - applyReserve).coerceAtLeast(0)) { r ->
+                    GameBoostController.stage(StageId.WARP, StageStatus.RUNNING, r.stats.takeIf { r.reachable })
+                }
+                racePick = results.filter { it.reachable }.maxByOrNull { it.score }
+                racePick?.aether?.let { warpOptions = it }
+                if (racePick != null) {
+                    warpM = PathMeasurement(racePick.route, ProbeMethod.TLS_HANDSHAKE, racePick.stats)
+                    warpNote = WarpNote.MEASURED
+                }
+                GameBoostController.stage(StageId.WARP, if (racePick != null) StageStatus.DONE else StageStatus.FAILED, racePick?.stats)
+                Log.i(TAG, "tunnel race for ${profile.id}: " + results.joinToString { "${it.route}=${it.stats.p50}" } + " -> ${racePick?.route}")
             }
 
             // ── 5. decide ─────────────────────────────────────────────────────────────────────
@@ -361,14 +406,20 @@ class BoostOrchestrator(
             // ── 6. apply ──────────────────────────────────────────────────────────────────────
             GameBoostController.update { it.copy(phase = BoostPhase.APPLYING) }
             GameBoostController.stage(StageId.APPLY, StageStatus.RUNNING)
-            var route = policy.route
+            // A game the line cannot carry goes to the fastest tunnel that reached it, never direct.
+            var route = racePick?.route ?: policy.route
+            if (mustTunnel && racePick == null) throw IllegalStateException("no_reachable_tunnel")
             var fellBack = false
             val tuning = if (plan.measureOnly) {
                 GameBoostController.stage(StageId.APPLY, StageStatus.SKIPPED)
                 DeviceTuner.Applied(false, false)
             } else {
-                val applied = apply(route, plan, pins, sanctionPick, fragments, tcpTarget, warpOptions, network)
+                val applied = withTimeoutOrNull(budget.left()) {
+                    apply(route, plan, pins, sanctionPick, fragments, tcpTarget, warpOptions, network, racePick?.amneziaServer)
+                } == true
                 if (!applied) {
+                    stopOwnedEngine()
+                    if (mustTunnel) throw IllegalStateException("tunnel_apply_failed")
                     fellBack = route != RouteKind.DIRECT
                     // What the DNS-only session was built from did not hold up from inside it:
                     // ask the line again next time instead of reusing it for six hours.
@@ -389,8 +440,11 @@ class BoostOrchestrator(
                 sdnsPrefs.edit().putString(sdnsKey(net.key), sanctionPick.provider.id).apply()
             }
 
-            val chosen = if (route.isWarp()) warpM?.stats else directM.stats
-            val claims = if (route.isWarp() && warpM != null) RouteDecider.claims(directM.stats, warpM.stats) else Claims.NONE
+            val tunnelled = route.isWarp() || route == RouteKind.AMNEZIA || route == RouteKind.FENIX
+            val chosen = if (tunnelled) warpM?.stats else directM.stats
+            val chosenMethod = if (tunnelled) warpM?.method ?: method else method
+            val claims = if (tunnelled && warpM != null && warpM.method == directM.method && directM.reachable)
+                RouteDecider.claims(directM.stats, warpM.stats) else Claims.NONE
             val sanctionApplied = route == RouteKind.DIRECT_DNS && sanctionPick != null
             val classLines = found.perClass
                 .filter { (_, o) -> o != Obstacle.OK && o != Obstacle.UNKNOWN }
@@ -461,8 +515,8 @@ class BoostOrchestrator(
                         anchorLabelFa = anchor.labelFa,
                         anchorLabelEn = anchor.labelEn,
                         route = route,
-                        verdict = policy.verdictKind,
-                        method = method,
+                        verdict = if (racePick != null) VerdictKind.MUST_TUNNEL else policy.verdictKind,
+                        method = chosenMethod,
                         direct = directM.stats,
                         warp = warpM?.stats,
                         chosen = chosen,
@@ -518,14 +572,33 @@ class BoostOrchestrator(
                 "policy=${policy.verdictKind} access=${policy.access} kind=${found.kind} sdns=${sanctionPick?.provider?.id} " +
                 "advice=${advice?.best}(${advice?.gainMs}) udpSilent=$udpSilent warp=$warpNote left=${budget.left()}ms")
 
-            Session(route, method, echoTarget, tcpTarget, network, chosen, plan.measureOnly, record)
+            Session(route, chosenMethod, echoTarget,
+                if (chosenMethod == ProbeMethod.TLS_HANDSHAKE) tunnelTarget else tcpTarget,
+                network, chosen, plan.measureOnly, record, owner)
         }
     }
 
     /** Clean up anything this run started, e.g. when the user stops it half-way. */
     fun abort() {
+        GameSessionOwner.release(owner)
+        stopOwnedEngine()
+        if (MyVpnService.isRunning && MyVpnService.activeGameSessionId == owner) {
+            com.mlmvpn.scanner.utils.SafeStart.service(ctx, Intent(ctx, MyVpnService::class.java).apply {
+                action = "STOP"
+                putExtra(GameSessionOwner.EXPECTED, owner)
+            })
+        }
         stopAetherIfOurs()
         tuner.release()
+    }
+
+    private fun stopOwnedEngine() {
+        when (engineRoute) {
+            RouteKind.AMNEZIA -> com.mlmvpn.scanner.engines.amnezia.AmzEngine.disconnectAsync(ctx, owner)
+            RouteKind.FENIX -> com.mlmvpn.scanner.engines.fenix.FenixEngine.disconnectAsync(ctx, owner)
+            else -> Unit
+        }
+        engineRoute = null
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────────────────
@@ -580,25 +653,24 @@ class BoostOrchestrator(
             // engine of this booster's that never connected with other options (h3 on a line
             // that drops UDP) is replaced by the one this line needs.
             val servingTunnel = MyVpnService.isRunning && MyVpnService.connectedNodeId == NODE_WARP
-            if (running == options || eng.state.value.connected || servingTunnel || !aetherStartedHere) return
-            try { eng.stop() } catch (_: Exception) {}
+            if (running == options || servingTunnel || !aetherStartedHere) return
+            try { eng.stopOwned(aetherOwner) } catch (_: Exception) {}
+            if (eng.runningOptions != null) return
         }
-        aetherStartedHere = eng.start(options) { msg -> Log.w(TAG, "aether start: $msg") }
+        aetherStartedHere = eng.startOwned(options, aetherOwner) { msg -> Log.w(TAG, "aether start: $msg") }
     }
 
     private fun stopAetherIfOurs() {
-        if (!aetherStartedHere) return
         aetherStartedHere = false
-        // Only if no tunnel adopted it in the meantime -- a WARP route owns it from then on.
-        if (MyVpnService.isRunning && MyVpnService.connectedNodeId == NODE_WARP) return
-        try { AetherEngine.get(ctx).stop() } catch (_: Exception) {}
+        try { AetherEngine.get(ctx).stopOwned(aetherOwner) } catch (_: Exception) {}
     }
 
-    private suspend fun awaitAether(budgetMs: Long): Boolean {
+    private suspend fun awaitAether(budgetMs: Long, options: com.mlmvpn.core.aether.AetherOptions): Boolean {
         val eng = AetherEngine.get(ctx)
         val t0 = System.currentTimeMillis()
         while (System.currentTimeMillis() - t0 < budgetMs) {
             val s = eng.state.value
+            if (eng.runningOptions != options) return false
             if (s.connected && eng.isSocksAlive()) return true
             if (s.stage in FAILED_STAGES) return false
             delay(300)
@@ -626,6 +698,7 @@ class BoostOrchestrator(
         route: RouteKind, plan: Plan, pins: Map<String, List<String>>, sanction: SanctionDns.Pick?,
         fragments: Map<String, String>,
         tcpTarget: InetSocketAddress?, warpOptions: com.mlmvpn.core.aether.AetherOptions, network: Network?,
+        amneziaServer: String? = null,
     ): Boolean {
         val pkg = plan.gamePackage
         // A per-game route needs the VPN permission; without it the direct line is the answer.
@@ -679,6 +752,21 @@ class BoostOrchestrator(
                 awaitVpnConnected(30_000)
             }
             RouteKind.ACCESS_HELPER -> false // phase 3
+            // The two tunnels with engines of their own: brought up by those engines (their own
+            // server choice, canary and reconnect), for the whole device rather than the game
+            // alone, and taken down with the boost.
+            RouteKind.AMNEZIA -> {
+                engineRoute = route
+                com.mlmvpn.scanner.engines.amnezia.AmzEngine.connectAsync(ctx, serverId = amneziaServer, owner = owner).join()
+                com.mlmvpn.scanner.engines.amnezia.AmzEngine.connect.value is com.mlmvpn.scanner.engines.amnezia.AmzConnect.Connected &&
+                    MyVpnService.activeGameSessionId == owner
+            }
+            RouteKind.FENIX -> {
+                engineRoute = route
+                com.mlmvpn.scanner.engines.fenix.FenixEngine.connectAsync(ctx, owner = owner).join()
+                com.mlmvpn.scanner.engines.fenix.FenixEngine.conn.value is com.mlmvpn.scanner.engines.fenix.FenixEngine.Conn.Connected &&
+                    MyVpnService.activeGameSessionId == owner
+            }
         }
     }
 
@@ -686,12 +774,13 @@ class BoostOrchestrator(
         val intent = Intent(ctx, MyVpnService::class.java).apply {
             putExtra("NODE_URI", nodeUri)
             putExtra("NODE_ID", nodeId)
+            putExtra(GameSessionOwner.EXTRA, owner)
             putExtra("GAME_MODE", true)
             putExtra("GAME_PACKAGE", pkg)
             putExtra("GAME_ROUTE_PROFILE", profile)
             if (splitRoutes.isNotEmpty()) putExtra("GAME_SPLIT_ROUTES", splitRoutes.joinToString(","))
         }
-        ctx.startService(intent)
+        com.mlmvpn.scanner.utils.SafeStart.service(ctx, intent)
     }
 
     private suspend fun awaitVpnConnected(timeoutMs: Long): Boolean {
@@ -700,7 +789,7 @@ class BoostOrchestrator(
         return withTimeoutOrNull(timeoutMs) {
             while (true) {
                 when (MyVpnService.connectionPhaseFlow.value) {
-                    MyVpnService.Phase.CONNECTED -> return@withTimeoutOrNull true
+                    MyVpnService.Phase.CONNECTED -> if (MyVpnService.activeGameSessionId == owner) return@withTimeoutOrNull true else delay(250)
                     MyVpnService.Phase.FAILED -> return@withTimeoutOrNull false
                     else -> delay(250)
                 }
@@ -749,12 +838,17 @@ class BoostOrchestrator(
         private const val TAG = "GameBoost"
         const val NODE_DNS = "game_dns"
         const val NODE_WARP = "game_warp"
+
+        /** One tunnel of the race, measured at most this long (WARP's gateway scan is the slow one). */
+        const val RACE_EACH_MS = 60_000L
+
         private const val PREFS = "game_booster_prefs"
 
         private const val QUICK_BUDGET_MS = 25_000L
         private const val THOROUGH_BUDGET_MS = 70_000L
         /** Kept free at the end of the measuring for applying the route and its canary. */
         private const val APPLY_RESERVE_MS = 4_000L
+        private const val TUNNEL_APPLY_RESERVE_MS = 15_000L
         private const val DOCTOR_MS = 9_000L
         private const val SWEEP_MS = 8_000L
         private const val SDNS_MS = 7_000L

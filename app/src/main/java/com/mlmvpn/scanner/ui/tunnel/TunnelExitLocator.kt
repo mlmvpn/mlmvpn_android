@@ -130,7 +130,7 @@ object TunnelExitLocator {
                 }
                 if (result == null || result.ip.isBlank()) return@repeat
 
-                app.startService(
+                com.mlmvpn.scanner.utils.SafeStart.service(app, 
                     Intent(app, TunnelVpnService::class.java).apply {
                         action = TunnelVpnService.ACTION_NOTIFICATION_HEALTH
                         putExtra(TunnelVpnService.EXTRA_NOTIFICATION_IP, result.ip)

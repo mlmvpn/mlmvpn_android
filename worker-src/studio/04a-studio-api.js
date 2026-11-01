@@ -17,7 +17,7 @@
 // Without that binding -- every build-5 installation -- none of this is reachable, and the worker
 // behaves exactly as it did before.
 
-const STUDIO_API_VERSION = 22;
+const STUDIO_API_VERSION = 24;
 
 /** How recently someone must have moved traffic to count as online (see `studioDashboard`). */
 const STUDIO_ONLINE_WINDOW_MS = 180000;

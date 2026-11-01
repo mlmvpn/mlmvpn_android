@@ -75,8 +75,18 @@ object CoreConfig {
      *   [SOCKS_PORT]. Only the outer leg of Psiphon-over-WARP uses this: Psiphon
      *   owns [SOCKS_PORT] in that mode, so the core has to move aside.
      */
-    fun json(context: Context, protocol: String?, listenOverride: Int?): String {
+    fun json(context: Context, protocol: String?, listenOverride: Int?): String =
+        json(context, protocol, listenOverride, migratePreferences = true)
+
+    fun json(context: Context, protocol: String?, listenOverride: Int?, migratePreferences: Boolean): String {
         val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        // Once: the MASQUE transport moves to «خودکار». A fixed h2 left over from a test meant the
+        // core never tried HTTP/3 or its alternate ports (device, 2026-10-04: h2 only, every
+        // gateway timed out, while WireGuard worked on UDP 1701 in the same minute).
+        if (migratePreferences && !prefs.getBoolean("masque_transport_auto_v1", false)) {
+            prefs.edit().putString("default_masque_transport", MasqueCarrier.AUTO)
+                .putBoolean("masque_transport_auto_v1", true).apply()
+        }
         fun text(key: String, fallback: String = "") =
             prefs.getString(key, fallback)?.trim().orEmpty()
         val manualObfuscation = JSONObject().apply {
@@ -89,7 +99,12 @@ object CoreConfig {
 
         return JSONObject().apply {
             put("config_path", File(context.filesDir, "tunnel.toml").absolutePath)
-            put("protocol", protocol ?: text("default_protocol", "masque"))
+            val selected = protocol ?: text("default_protocol", "masque")
+            // The picker used to save its choice without ever selecting the existing chain service.
+            val psiphonOuter = text(CHAIN_OUTER_MODE_PREF, "direct")
+            put("protocol", if (listenOverride == null && selected.equals("psiphon", true) &&
+                (psiphonOuter == CHAIN_OUTER_AUTO || psiphonOuter in CHAIN_OUTER_LADDER))
+                TunnelVpnService.CHAIN_PROTOCOL_MARKER else selected)
             // The app is VPN-mode only: the whole device is tunnelled and there is
             // no user-facing proxy any more. `listen` is still sent because the
             // core requires the field, but in VPN mode no SOCKS listener is ever
@@ -98,12 +113,20 @@ object CoreConfig {
             // LocalSocksProxyPort. Taken from the app's Local Port setting so a
             // proxy configured once keeps working whichever engine is running.
             put("listen", "127.0.0.1:${listenOverride ?: socksPort(context)}")
-            put("scan_mode", text("default_scan_mode", "balanced"))
+            // «توربو» unless the user picked another: the first endpoint that carries data. Measured
+            // 2026-10-07 (Irancell line, WARP-in-WARP): balanced 37-47 s -- it collects five endpoints
+            // and then waits for a quiet spell -- turbo 17 s. The core rescans by itself when a turbo
+            // pass finds nothing, with a fresh sample, so a hard line is not given up on sooner.
+            put("scan_mode", text(TunnelPreferences.SCAN_MODE, TunnelPreferences.DEFAULT_SCAN_MODE))
             // Chosen per network unless the user asked for v6 or both (CfFamily.warpScanFamily).
             put("ip_scan", com.mlmvpn.scanner.data.CfFamily.warpScanFamily(context, text("default_scan", "v4")))
             put("endpoint_cache_path", File(context.filesDir, "masque-gateway-cache.json").absolutePath)
             put("endpoint_discovery", text("endpoint_discovery", "cache"))
-            put("masque_transport", text("default_masque_transport", "h3"))
+            // «خودکار» (the default): HTTP/3 with the core's own fallback to HTTP/2, or straight to
+            // HTTP/2 where this network is known to need it (MasqueCarrier). A fixed choice is
+            // still honoured for whoever set one on purpose.
+            put("masque_transport", text("default_masque_transport", MasqueCarrier.AUTO)
+                .let { if (it == MasqueCarrier.AUTO) MasqueCarrier.startOn(context) else it })
             // A manual peer pins ONE address, and it belongs to whichever transport
             // the user entered it for. Handing it to the chain's ladder would send a
             // MASQUE gateway to the WireGuard rung, where it cannot work — so the
@@ -121,7 +144,10 @@ object CoreConfig {
             put("h2_fragmentation", text("h2_fragmentation", "on") == "on")
             putOpt("dns_servers", text("dns_servers").ifBlank { null })
             putOpt("route_block", text("route_block").ifBlank { null })
-            putOpt("route_direct", text("route_direct").ifBlank { null })
+            // The Smart Iran route adds every .ir name to the user's own direct list; Iran's
+            // addresses already leave outside the tunnel at the VPN builder (SmartIranRoute).
+            putOpt("route_direct", (listOf(text("route_direct")).filter { it.isNotBlank() } + SmartIranRoute.transportDirect(context))
+                .joinToString(", ").ifBlank { null })
             putOpt("team", SecureStore.getSecret(context, "zero_trust_team").ifBlank { null })
             putOpt("access_client_id", SecureStore.getSecret(context, "zero_trust_client_id").ifBlank { null })
             putOpt("access_client_secret", SecureStore.getSecret(context, "zero_trust_client_secret").ifBlank { null })
@@ -314,6 +340,10 @@ object CoreConfig {
             java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
         } catch (_: java.net.SocketException) {
             return null
+        } catch (_: RuntimeException) {
+            // Android's own list can trip over an interface that went away while it was being read
+            // (NullPointerException inside NetworkInterface.getAll, on the Outline screen, 1.2.41).
+            return null
         }
         val survey = surveyNetworks(context)
         val excluded = survey.excludedNames
@@ -433,6 +463,15 @@ object CoreConfig {
             @Suppress("DEPRECATION")
             for (network in cm.allNetworks) {
                 val caps = cm.getNetworkCapabilities(network) ?: continue
+                // A VPN's LinkProperties carry its whole route table, and reading them back costs
+                // the square of its size: OpenVPN split around the WARP edge holds hundreds of
+                // routes, and this runs on the main thread (a Windscribe crash report of
+                // 2026-10-11 caught it there). Its tun interfaces are excluded by name instead.
+                if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) {
+                    tunNames().forEach { names.add(it) }
+                    notes.add("tun*=vpn")
+                    continue
+                }
                 val iface = cm.getLinkProperties(network)?.interfaceName ?: continue
                 val transports = mutableListOf<String>()
                 if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)) {
@@ -466,6 +505,14 @@ object CoreConfig {
             lan,
             notes.joinToString(" ").ifEmpty { "no networks" },
         )
+    }
+
+    /** The phone's VPN interfaces by name (tun0, ppp0, ipsec…): what a VPN network sits on. */
+    private fun tunNames(): List<String> = try {
+        java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty().map { it.name }
+            .filter { it.startsWith("tun") || it.startsWith("ppp") || it.startsWith("ipsec") }
+    } catch (_: Exception) {
+        emptyList()
     }
 
     /**

@@ -30,13 +30,13 @@ object CrashClient {
     private const val TAG = "CrashClient"
 
     /** Also in worker-src/crash/worker.js. Shipped in every APK: it keeps out URL scanners, no more. */
-    const val APP_KEY = "mlmvpn-crash-collector-v1"
+    const val APP_KEY = "redacted-crash-key"
 
     /**
      * The crash collector, on a Cloudflare account the pool does not use.
      * scripts/deploy-crash-worker.mjs deploys it and rewrites this line when the address differs.
      */
-    const val ENDPOINT = "https://mlm-crash-3d91c7.mlm-770adbce.workers.dev"
+    const val ENDPOINT = "https://crash.redacted.invalid"
 
     private val dohDns = object : okhttp3.Dns {
         override fun lookup(hostname: String): List<java.net.InetAddress> {
@@ -50,7 +50,7 @@ object CrashClient {
     }
 
     private val http by lazy {
-        OkHttpClient.Builder().protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
+        OkHttpClient.Builder().protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory())
             .connectTimeout(12, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS)
             .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns(dohDns))
@@ -107,14 +107,24 @@ object CrashClient {
         return id
     }
 
+    /**
+     * "1.2.41 (77412345)": the release's base versionCode times a million plus the minute the APK
+     * was built. The collector files a report on a closed issue only when its number is higher than
+     * any it saw before, and test builds share one versionCode: with the plain code, a new APK's
+     * crash on an issue closed as fixed was counted in silence (2026-10-11). The base code, without
+     * the per-ABI offset, so an armeabi build does not read as older than an arm64 one.
+     */
     private fun appVersion(context: Context): String = try {
         val pi = context.packageManager.getPackageInfo(context.packageName, 0)
         @Suppress("DEPRECATION")
         val code = if (android.os.Build.VERSION.SDK_INT >= 28) pi.longVersionCode else pi.versionCode.toLong()
-        "${pi.versionName} ($code)"
+        "${pi.versionName} (${buildNumber(code, com.mlmvpn.scanner.BuildConfig.BUILD_STAMP)})"
     } catch (e: Exception) {
         "?"
     }
+
+    internal fun buildNumber(versionCode: Long, stamp: Long): Long =
+        (versionCode % 1_000_000) * 1_000_000 + stamp.coerceIn(0, 999_999)
 
     private fun hmac(key: String, message: String): String {
         val mac = Mac.getInstance("HmacSHA256")

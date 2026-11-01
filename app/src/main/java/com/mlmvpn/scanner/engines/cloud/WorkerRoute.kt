@@ -40,7 +40,25 @@ object WorkerRoute {
     /** Wraps [base] so `*.workers.dev` names get the checked, healthy-first answer. */
     fun dns(base: Dns = Dns.SYSTEM): Dns = object : Dns {
         override fun lookup(hostname: String): List<InetAddress> =
-            if (hostname.endsWith(".workers.dev", ignoreCase = true)) ordered(hostname, base) else base.lookup(hostname)
+            if (isCloudflareName(hostname)) CfTunnel.capDirect(ordered(hostname, base)) else base.lookup(hostname)
+    }
+
+    /**
+     * OkHttp's raw-socket factory for clients that talk to Cloudflare: it splits the first TLS
+     * ClientHello so the server name is not in one packet for the filter to read. See [CfFront].
+     * Pair it with [dns] -- the DNS picks an edge that answers, the split gets the handshake past
+     * the name filter -- on every client that adds an account, deploys, or fetches a config.
+     */
+    fun cfSocketFactory(): javax.net.SocketFactory = CfFront.socketFactory
+
+    /**
+     * Names served by any Cloudflare edge, so any edge that answers on this network can carry them.
+     * The account API and dashboard joined the Workers here after the Doctor reports (2026-10-03):
+     * their DNS answer was dead or bogus on some lines while other edges carried them fine.
+     */
+    fun isCloudflareName(host: String): Boolean = host.lowercase().let {
+        it.endsWith(".workers.dev") || it.endsWith(".pages.dev") ||
+            it == "api.cloudflare.com" || it == "dash.cloudflare.com"
     }
 
     /**
@@ -60,17 +78,25 @@ object WorkerRoute {
     fun latestReport(): String? = reports.values.filter { System.currentTimeMillis() - it.first < TTL_MS }.maxByOrNull { it.first }?.second
 
     private fun ordered(host: String, base: Dns): List<InetAddress> {
+        // A private or reserved answer is the resolver lying (seen on Rightel and MTN Wi-Fi): dropped.
         val resolved = runCatching { base.lookup(host) }.getOrElse { emptyList() }
+            .filterNot { com.mlmvpn.scanner.engines.cfdoctor.CfBogon.isBogon(it.hostAddress?.substringBefore('%').orEmpty()) }
         val now = System.currentTimeMillis()
-        val proven = verdicts.filter { it.value.ok && now - it.value.at < TTL_MS }.keys
+        // Plus the edges proven on this network for anything Cloudflare: DNS hands out a dead
+        // address about half the time, and then these are what carries the request.
+        val proven = verdicts.filter { it.value.ok && now - it.value.at < TTL_MS }.keys + com.mlmvpn.scanner.data.CfEdge.good(null, 3)
         // Cloudflare IPv6 too, whether or not the resolver returned it: any v6 edge address serves
         // any Worker name (2026-09-28: IPv4 carried no tunnel data at all while v6 did), so two
         // fresh edge addresses always join the check.
         val v6 = if (com.mlmvpn.scanner.data.CfFamily.hasIpv6RouteCached()) com.mlmvpn.scanner.data.CfFamily.sampleV6(2) else emptyList()
         val candidates = (resolved.mapNotNull { it.hostAddress?.substringBefore('%') } + proven + v6).distinct()
         if (candidates.isEmpty()) {
-            note(host, com.mlmvpn.scanner.store.tr("نام $host ترجمه نشد (DNS).", "$host did not resolve (DNS)."))
-            return resolved
+            // The name did not resolve at all (or only to a bogus address): any working edge serves it.
+            val found = com.mlmvpn.scanner.data.CfEdge.find(null, host, 3)
+            note(host, if (found.isEmpty()) com.mlmvpn.scanner.store.tr("نام $host ترجمه نشد (DNS).", "$host did not resolve (DNS).")
+                else com.mlmvpn.scanner.store.tr("نام $host ترجمه نشد؛ از آی‌پی سالم کلادفلر ${found.first()} رفت.", "$host did not resolve; went through the working Cloudflare edge ${found.first()}."))
+            if (found.isEmpty()) return resolved
+            return found.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
         }
 
         // Fresh verdicts are reused; the rest are probed together, not one after another.
@@ -83,8 +109,19 @@ object WorkerRoute {
 
         // IPv6 first when it answered: on a filtered IPv4 the small requests pass and the larger
         // ones stall (MLM's config list hung 40 s while its user list answered in 1.5 s).
-        val good = candidates.filter { verdicts[it]?.ok == true }
+        var good = candidates.filter { verdicts[it]?.ok == true }
             .sortedWith(compareBy<String>({ if (it.contains(':')) 0 else 1 }, { verdicts[it]!!.ms }))
+        // Nothing the resolver or the past offered answers: find edges that do, on this network.
+        if (good.isEmpty()) {
+            val found = com.mlmvpn.scanner.data.CfEdge.find(null, host, 3)
+            found.forEach { verdicts[it] = Verdict(true, System.currentTimeMillis(), "edge", 0) }
+            if (found.isNotEmpty()) {
+                note(host, com.mlmvpn.scanner.store.tr(
+                    "آی‌پی‌های DNS برای $host جواب ندادند؛ از آی‌پی سالم کلادفلر ${found.first()} رفت.",
+                    "The DNS addresses for $host did not answer; went through the working Cloudflare edge ${found.first()}."))
+                good = found
+            }
+        }
         val bad = candidates.filter { verdicts[it]?.ok != true }
         val first = resolved.firstOrNull()?.hostAddress
         when {

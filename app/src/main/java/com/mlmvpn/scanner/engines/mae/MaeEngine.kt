@@ -50,7 +50,6 @@ import com.mlmvpn.scanner.engines.mae.route.RouteHealth
 import com.mlmvpn.scanner.engines.mae.route.RouteKind
 import com.mlmvpn.scanner.engines.mae.route.RouteProvider
 import com.mlmvpn.scanner.engines.mae.route.ServerlessRoute
-import com.mlmvpn.scanner.engines.mae.route.UsExitRoute
 import com.mlmvpn.scanner.engines.mae.route.UserConfigRoute
 import com.mlmvpn.scanner.engines.mae.route.WarpRoute
 import com.mlmvpn.scanner.engines.mae.route.WorkerRoute
@@ -124,7 +123,14 @@ object MaeEngine {
     private const val WAKE_CHECK_AFTER_MS = 3 * 60_000L
     /** A heal by reconnecting costs every app a blip: at most this often. */
     private const val HEAL_RECONNECT_GAP_MS = 3 * 60_000L
-    private const val RECONNECT_WAIT_MS = 20_000L
+    /** A background reconnect waits for the app checks to finish, at most this long. */
+    private const val CHECKS_QUIET_WAIT_MS = 3 * 60_000L
+    /** Background reconnects for changed rules (an app added, its sites learned): at most this often. */
+    private const val RULES_RECONNECT_GAP_MS = 2 * 60_000L
+    /** For routes no app could be moved to live: at most this often -- the apps' routes work meanwhile. */
+    private const val ROUTES_RECONNECT_GAP_MS = 15 * 60_000L
+    /** How long Lantern's core outlives MAE's session while MAE is still wanted (its own reconnects). */
+    private const val LANTERN_KEEP_MS = 30_000L
     private const val NET_CACHE_MS = 3_000L
 
     enum class Phase { WAITING, TESTING, READY, NO_FOREIGN_ROUTE, BLOCKED, PAUSED }
@@ -501,6 +507,7 @@ object MaeEngine {
         val net = currentNet()
         val providers = providersCached(state, net)
         val kinds = providers.associate { it.id to it.kind }
+        val byId = providers.associateBy { it.id }
         return state.selected.mapNotNull { sel ->
             val def = serviceDef(sel.id) ?: return@mapNotNull null
             val key = MaeState.sk(def.id, net)
@@ -508,11 +515,19 @@ object MaeEngine {
             val policy = state.policies[key]
             val egress = state.egress[key]
             val kind = policy?.let { kinds[it.routeId] }
+            val geo = d.primary in setOf(Diagnosis.Primary.GEO_RESTRICTED, Diagnosis.Primary.CENSORED_AND_GEO)
+            // An exit abroad recorded for an app that may no longer use it is no exit: Gemini kept
+            // «found: the Worker» from before the fixed-exit rule (PolicyEngine.fixedExitAbroad), so on
+            // the phone (2026-10-20) it read «no working route yet» with nothing to set up, while Google
+            // Flow, measured again since, read «no working foreign route yet» and named FENIX and Proton.
+            val looseExit = def.hints.usExit && egress is ForeignEgressStatus.Proven &&
+                byId[egress.routeId]?.let(PolicyEngine::fixedExitAbroad) != true
             val phase = when {
                 sel.paused -> Phase.PAUSED
                 def.id in testingIds -> Phase.TESTING
-                egress is ForeignEgressStatus.NoneFound && d.primary in setOf(Diagnosis.Primary.GEO_RESTRICTED, Diagnosis.Primary.CENSORED_AND_GEO) -> Phase.NO_FOREIGN_ROUTE
+                egress is ForeignEgressStatus.NoneFound && geo -> Phase.NO_FOREIGN_ROUTE
                 policy != null && proven(state, def.id, net, policy) -> Phase.READY
+                looseExit && geo -> Phase.NO_FOREIGN_ROUTE
                 d.axes.isNotEmpty() -> Phase.BLOCKED
                 else -> Phase.WAITING
             }
@@ -707,12 +722,120 @@ object MaeEngine {
     fun providers(state: MaeState = store.current, net: String = currentNet()): List<RouteProvider> = buildList {
         add(DirectRoute); add(ServerlessRoute); add(FragmentRoute)
         state.warp?.let { w -> MaeWarp.route(w, state.warpEndpoint[net] ?: 0)?.let { add(it) } }
-        state.worker?.let { w -> MaeEgressDeployer.uuidOf(w)?.let { add(WorkerRoute(w.url, it)) } }
-        val configs = userConfigRoutes(state, net) + cloudConfigRoutes(state, net)
-        addAll(configs)
-        usExitRoute(state, net, configs)?.let { add(it) }
+        workerRoute(state)?.let { add(it) }
+        addAll(userConfigRoutes(state, net) + cloudConfigRoutes(state, net))
+        // The old US helper (a Durable Object, the «خروجی آمریکا» of Settings) is no exit of MAE's any
+        // more: it misbehaved for the user (2026-10-18). Gemini and Google Flow are served by the fixed
+        // exits abroad below -- FENIX (the US one too), the user's Outline servers, configs, FLUX.
         // FLUX's proven exits on this network, read from its store (FLUX does not probe for MAE).
         addAll(com.mlmvpn.scanner.engines.flux.FluxRoute.forNet(app, net))
+        // FENIX: the user's Firefox account's exit, when they are signed in (see FenixRoute), and its
+        // American server beside it when the chosen country is another.
+        addAll(runCatching { com.mlmvpn.scanner.engines.fenix.FenixEngine.maeRoutes(app) }.getOrDefault(emptyList()))
+        // Outline: the user's servers that worked on this network (see OutlineMae).
+        addAll(outlineRoutes())
+        // Proton and Windscribe: WireGuard servers of the user's accounts (see AmzMae).
+        addAll(com.mlmvpn.scanner.engines.amnezia.AmzMae.routes(app))
+        // Lantern: its own core beside MAE's tunnel, while it is up (see LanternMae).
+        runCatching { com.mlmvpn.core.lantern.LanternMae.route(app) }.getOrNull()?.let { add(it) }
+        // URnetwork: its own core (a device of its own in the user's account) beside MAE's tunnel,
+        // once providers joined its window (see UrnetworkMae).
+        runCatching { com.mlmvpn.core.urnetwork.UrnetworkMae.route(app) }.getOrNull()?.let { add(it) }
+    }
+
+    /**
+     * MAE's Worker exit: the account's central Worker -- the one every panel rides, BPB's own id on it --
+     * so MAE makes no Worker of its own. A MAE Worker made before is used only while the account has
+     * no central one.
+     */
+    private fun workerRoute(state: MaeState): WorkerRoute? {
+        com.mlmvpn.scanner.engines.gateway.EdgeGateway.anyExit(app)?.let { gw ->
+            return WorkerRoute(gw.host, gw.uuid, gw.wsPath, reachesCloudflare = gw.fallback.isNotBlank())
+        }
+        val w = state.worker ?: return null
+        return MaeEgressDeployer.uuidOf(w)?.let { WorkerRoute(w.url, it) }
+    }
+
+    /** What the Worker exit is now, to tell when it changed: the central Worker, or MAE's own. */
+    private fun workerExitKey(state: MaeState): String =
+        com.mlmvpn.scanner.engines.gateway.EdgeGateway.anyExit(app)?.let { "gw:${it.host}:${it.uuid}:${it.wsPath}" }
+            ?: state.worker?.let { w -> "mae:${w.url}:${MaeEgressDeployer.uuidOf(w)}" }.orEmpty()
+
+    /**
+     * A different Worker behind the same route id invalidates what was proven through the old one:
+     * those verdicts are forgotten and every app is checked again -- once, when the exit changed
+     * (moving onto the central Worker, or its id renewed), never on an ordinary sweep.
+     */
+    private fun syncWorkerExit() {
+        val prefs = app.getSharedPreferences("mae_exit", Context.MODE_PRIVATE)
+        val key = workerExitKey(store.current)
+        val was = prefs.getString("worker", null)
+        if (was == key) return
+        prefs.edit().putString("worker", key).apply()
+        // The first look after an update only records where things stand -- unless that is already the
+        // central Worker, which is a new exit for whoever used MAE's own.
+        if (was == null && !key.startsWith("gw:")) return
+        store.update { s ->
+            s.copy(
+                egress = s.egress.filterValues { it !is ForeignEgressStatus.NoneFound && !(it is ForeignEgressStatus.Proven && it.routeId == WorkerRoute.ID) },
+                proofs = s.proofs.filterKeys { !it.startsWith("${WorkerRoute.ID}:") },
+                metrics = s.metrics.filterKeys { !it.startsWith("${WorkerRoute.ID}|") },
+                policies = s.policies.mapValues { (_, p) -> p.copy(decidedAt = 0) },
+            )
+        }
+        store.current.selected.forEach { enqueue(it.id) }
+        scope.launch { applyIfConnected() }
+    }
+
+    /**
+     * The user switched «استفاده در MAE» on Lantern's screen: its core starts or stops at once when
+     * MAE is the tunnel, and the tunnel follows; otherwise the next session reads the switch.
+     */
+    fun lanternForMaeChanged() {
+        if (!this::app.isInitialized || !isConnected()) return
+        if (com.mlmvpn.scanner.ui.lantern.LanternSettings.forMae(app)) startLantern() else com.mlmvpn.core.lantern.LanternMae.stop()
+        scope.launch { applyIfConnected() }
+    }
+
+    /**
+     * The user switched «استفاده در MAE» on URnetwork's screen: its core starts or stops at once when
+     * MAE is the tunnel, and the tunnel follows; otherwise the next session reads the switch.
+     */
+    fun urnetworkForMaeChanged() {
+        if (!this::app.isInitialized || !isConnected()) return
+        if (com.mlmvpn.core.urnetwork.UrnetworkSettings.forMae(app)) {
+            com.mlmvpn.core.urnetwork.UrnetworkMae.start(app) { scope.launch { applyIfConnected() } }
+        } else com.mlmvpn.core.urnetwork.UrnetworkMae.stop()
+        scope.launch { applyIfConnected() }
+    }
+
+    /**
+     * Lantern's and URnetwork's cores for this session; when a route appears or goes, the tunnel is
+     * brought up to date.
+     */
+    private fun startLantern() {
+        lanternStop?.cancel()
+        lanternStop = null
+        com.mlmvpn.core.lantern.LanternMae.start(app) { scope.launch { applyIfConnected() } }
+        com.mlmvpn.core.urnetwork.UrnetworkMae.start(app) { scope.launch { applyIfConnected() } }
+    }
+
+    /**
+     * MAE's own reconnects (a route found dead, a rule change) take the session down for a few
+     * seconds: the core is kept through them -- the next tunnel is compiled with it, on the same port --
+     * and stopped once MAE is down for good, or at once when the user disconnected.
+     */
+    @Volatile private var lanternStop: Job? = null
+
+    private fun stopLanternSoon() {
+        lanternStop?.cancel()
+        lanternStop = scope.launch {
+            if (wantConnected) delay(LANTERN_KEEP_MS)
+            if (!isConnected()) {
+                com.mlmvpn.core.lantern.LanternMae.stop()
+                com.mlmvpn.core.urnetwork.UrnetworkMae.stop()
+            }
+        }
     }
 
     /** [providers] for the screen, which asks on every change: kept a few seconds. */
@@ -728,71 +851,17 @@ object MaeEngine {
      * identity, WARP is left to the live check while the tunnel is up.
      */
     private fun probeProviders(state: MaeState, net: String): List<RouteProvider> {
-        val all = providers(state, net)
+        // A Proton or Windscribe server is one WireGuard session per key, like WARP: while the tunnel
+        // carries it, a probe of the same server would take the session from it.
+        val all = providers(state, net).let { p ->
+            if (isConnected()) p.filterNot { com.mlmvpn.scanner.engines.amnezia.WgExitRoute.isWgExitRoute(it.id) } else p
+        }
         val probeWarp = state.warpProbe?.let { MaeWarp.route(it, state.warpEndpoint[net] ?: 0) }
         return when {
             probeWarp != null -> all.map { if (it.id == WarpRoute.ID) probeWarp else it }
             isConnected() -> all.filterNot { it.id == WarpRoute.ID }
             else -> all
         }
-    }
-
-    /**
-     * The US exit, when one is set up: reached through the user's config that carries it on this
-     * network -- kept while it works (a different config each time would rebuild the tunnel).
-     */
-    private fun usExitRoute(state: MaeState, net: String, configs: List<RouteProvider>): RouteProvider? {
-        val exit = com.mlmvpn.scanner.utils.NetworkSettings.geminiExit(app) ?: return null
-        if (configs.isEmpty()) return null
-        fun lastOk(id: String) = state.metrics.filterKeys { it.startsWith("$id|") && it.endsWith("|$net") }.values.maxOfOrNull { it.lastOkAt } ?: 0L
-        val via = state.usExitVia[net]?.let { id -> configs.firstOrNull { it.id == id && !configDead(state, id, net) } }
-            ?: configs.maxByOrNull { lastOk(it.id) } ?: return null
-        // The both-families variant: the exit resolves names itself, from North America, to IPv4.
-        val tunnel = via.outbounds().firstOrNull { it.optString("tag") == via.tag(FamilyPolicy.BOTH) } ?: return null
-        return com.mlmvpn.scanner.utils.XrayJsonGenerator.geminiExitOutboundVia(tunnel, exit)?.let { UsExitRoute(it) }
-    }
-
-    @Volatile private var usExitFailedAt = 0L
-
-    /** The exit's build is CloudManager's: one number for this page and Settings' row. */
-    private const val USX_SCRIPT_VERSION = CloudManager.GEMINI_EXIT_VERSION
-    private const val KEY_USX_VER = "usx_script_ver"
-
-    /**
-     * Sets up the US exit on the user's Cloudflare account the first time an app that needs it
-     * (Gemini, Google Flow) is checked -- the same helper as the app's «خروجی آمریکا برای جمنای»,
-     * so a setup from either place serves both. Failure is retried after an hour.
-     */
-    private suspend fun ensureUsExit(def: ServiceDef, ports: Map<String, Int>, providers: List<RouteProvider>): Boolean {
-        if (!def.hints.usExit) return false
-        val prefs = app.getSharedPreferences("mae", Context.MODE_PRIVATE)
-        // An exit set up with an older script is set up again (same name, path and user id, so
-        // nothing that points at it changes).
-        val manager = CloudManager(app)
-        val deployed = manager.accounts.firstOrNull { it.geminiExitStatus == "deployed" }
-        if (com.mlmvpn.scanner.utils.NetworkSettings.geminiExit(app) != null &&
-            (prefs.getInt(KEY_USX_VER, 0) >= USX_SCRIPT_VERSION || (deployed != null && manager.geminiExitBuild(deployed) >= USX_SCRIPT_VERSION))) return false
-        if (System.currentTimeMillis() - usExitFailedAt < 3600_000L) return false
-        val account = deployed ?: manager.accounts.firstOrNull() ?: run { Log.i(TAG, "US exit: no Cloudflare account"); return false }
-        // Cloudflare's API is blocked on some networks (Irancell, 2026-09-30: timeout directly):
-        // through the bypass routes first (they reach Cloudflare fastest), then directly, then
-        // through the foreign exits.
-        fun proxies(kind: RouteKind) = providers.filter { it.kind == kind }
-            .mapNotNull { p -> ports[p.tag(FamilyPolicy.BOTH)] ?: p.families.firstNotNullOfOrNull { ports[p.tag(it)] } }
-            .distinct()
-            .map { java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", it)) }
-        val vias: List<java.net.Proxy?> = proxies(RouteKind.BYPASS) + listOf(null) + proxies(RouteKind.FOREIGN)
-        for (via in vias) {
-            val (ok, why) = manager.deployGeminiExit(account, via = via)
-            if (ok) {
-                prefs.edit().putInt(KEY_USX_VER, USX_SCRIPT_VERSION).apply()
-                Log.i(TAG, "US exit set up (${if (via == null) "directly" else "through a route"})")
-                return true
-            }
-            Log.w(TAG, "US exit not set up ${if (via == null) "directly" else "through a route"}: ${why.take(80)}")
-        }
-        usExitFailedAt = System.currentTimeMillis()
-        return false
     }
 
     /** Outbounds built from config links, by route id (a link does not change under its id). */
@@ -853,6 +922,14 @@ object MaeEngine {
             outboundFor(id, n.uri)?.let { UserConfigRoute(id, it, n.name) }
         }
     }
+
+    /** The user's Outline servers that worked here, each as a Shadowsocks outbound (see OutlineMae). */
+    private fun outlineRoutes(): List<RouteProvider> = runCatching {
+        com.mlmvpn.scanner.engines.outline.OutlineMae.servers(app).mapNotNull { s ->
+            val id = com.mlmvpn.scanner.engines.outline.OutlineRoute.idFor(s.id)
+            outboundFor(id, s.uri)?.let { com.mlmvpn.scanner.engines.outline.OutlineRoute(id, it, s.country) }
+        }
+    }.getOrDefault(emptyList())
 
     @Volatile private var cloudOpened: Pair<List<String>, List<String>>? = null
 
@@ -936,8 +1013,27 @@ object MaeEngine {
         (if (early) soon else queue).trySend(Job2(serviceId, false))
     }
 
+    /**
+     * Gemini and Google Flow on an exit that is not one fixed server abroad -- decided before that rule
+     * (Lantern, the Worker, the old US helper, a panel config) -- are decided again at once: they looked
+     * open there and were refused at the first prompt.
+     */
+    private fun dropLooseUsExits() {
+        fun fixedAbroad(id: String) = com.mlmvpn.scanner.engines.fenix.FenixRoute.isFenixRoute(id) ||
+            com.mlmvpn.scanner.engines.outline.OutlineRoute.isOutlineRoute(id) ||
+            com.mlmvpn.scanner.engines.amnezia.WgExitRoute.isWgExitRoute(id) ||
+            id.startsWith(UserConfigRoute.PREFIX) || com.mlmvpn.scanner.engines.flux.FluxRoute.isFluxRoute(id)
+        val loose = store.current.policies.filterValues { p ->
+            !p.pinned && p.decidedAt > 0 && serviceDef(p.serviceId)?.hints?.usExit == true && !fixedAbroad(p.routeId)
+        }.keys
+        if (loose.isEmpty()) return
+        store.update { s -> s.copy(policies = s.policies.mapValues { (k, p) -> if (k in loose) p.copy(decidedAt = 0) else p }) }
+    }
+
     /** Re-verify every stale service; called on connect, on network change and while connected. */
     fun refreshStale() {
+        syncWorkerExit()
+        dropLooseUsExits()
         val net = currentNet()
         val now = System.currentTimeMillis()
         val s = store.current
@@ -982,7 +1078,9 @@ object MaeEngine {
         val tags = providers.filter { it.kind != RouteKind.DIRECT }.flatMap { p -> p.families.map { p.tag(it) } }.distinct()
         val ports = tags.associateWith { freePort() }
         val cfg = MaeConfigCompiler.compileProbe(base(), providers, ports, dns)
-        val core = VlessXrayInjector(0)
+        // In MAE's own host process: a panic there (MAE's WARP and Worker outbounds) used to close
+        // the app on opening MAE, and it must not take a test's core down with it either.
+        val core = VlessXrayInjector(0, com.mlmvpn.core.warp.XrayHosts.MAE)
         if (!core.start(app, cfg, 0)) error("probe core did not start")
         probeCore = core; probePorts = ports; probeProvidersKey = key
         return ports
@@ -1066,16 +1164,10 @@ object MaeEngine {
             val mayGoAbroad = def.hints.requiresForeign || def.hints.likelyGeoRestricted || def.hints.usExit || repair != null ||
                 PolicyEngine.requirements(store.current, def, net, now).wantsForeign
             if (mayGoAbroad) ensureCloudConfigs()
-            var all = providers(store.current, net)
-            var probeAll = probeProviders(store.current, net)
+            val all = providers(store.current, net)
+            val probeAll = probeProviders(store.current, net)
             val dns = dnsPathFor(net, probeAll)
-            var ports = ensureProbeCore(probeAll, dns)
-            if (ensureUsExit(def, ports, probeAll)) {
-                all = providers(store.current, net)
-                probeAll = probeProviders(store.current, net)
-                ports = ensureProbeCore(probeAll, dns)
-            }
-            rememberUsExitVia(net, all)
+            val ports = ensureProbeCore(probeAll, dns)
             val onLocal = before?.let { p -> all.firstOrNull { it.id == p.routeId }?.kind != RouteKind.FOREIGN } ?: true
             val plan = repair?.let { RepairLadder.plan(it, likelyGeo = def.hints.likelyGeoRestricted || def.hints.requiresForeign, onLocalRoute = onLocal) }
             // A deep repair tries routes still in backoff, too: the user is waiting on this app.
@@ -1159,17 +1251,6 @@ object MaeEngine {
         if (job.incident) incidentPending.remove(id)
         // A repair queued behind this check keeps showing as testing.
         if (job.incident || id !in incidentPending) testing.update { it - id }
-    }
-
-    /** The US exit keeps the config it was proven through on this network. */
-    private fun rememberUsExitVia(net: String, all: List<RouteProvider>) {
-        if (all.none { it.id == UsExitRoute.ID }) return
-        val s = store.current
-        if (s.usExitVia[net]?.let { id -> all.any { it.id == id } } == true) return
-        val configs = all.filter { UserConfigRoute.isConfigRoute(it.id) }
-        fun lastOk(id: String) = s.metrics.filterKeys { it.startsWith("$id|") && it.endsWith("|$net") }.values.maxOfOrNull { it.lastOkAt } ?: 0L
-        val via = configs.maxByOrNull { lastOk(it.id) }?.id ?: return
-        store.update { it.copy(usExitVia = it.usExitVia + (net to via)) }
     }
 
     private fun note(serviceId: String, kind: NoteKind, level: Int = 0, routeId: String? = null, blockers: List<String> = emptyList(), reopen: Boolean = false) {
@@ -1343,6 +1424,17 @@ object MaeEngine {
         return buildConfig()
     }
 
+    /**
+     * MLM Scout: the config a connect would compile on this network, without the live tunnel's
+     * API socket and without becoming [applied] -- a test must not move the running engine.
+     * Null without a Cloudflare account (MAE does not start half-built either).
+     */
+    fun scoutConfig(context: Context): String? {
+        init(context)
+        if (!hasCloudAccount()) return null
+        return runCatching { compileNow(withApi = false).config }.getOrNull()
+    }
+
     fun isConnected(): Boolean =
         MyVpnService.connectedNodeIdFlow.value == NODE_ID && MyVpnService.connectionPhaseFlow.value == MyVpnService.Phase.CONNECTED
 
@@ -1350,8 +1442,9 @@ object MaeEngine {
         val cfg = buildConfig()
         // The user may have pressed Disconnect while this was being built.
         if (!wantConnected) return
-        context.startService(Intent(context, MyVpnService::class.java).apply {
+        com.mlmvpn.scanner.utils.SafeStart.service(context, Intent(context, MyVpnService::class.java).apply {
             putExtra("NODE_URI", cfg)
+            putExtra("MTU_PROFILE", com.mlmvpn.scanner.utils.NetworkSettings.Method.MAE.id)
             putExtra("NODE_ID", NODE_ID)
             putExtra("PROXY_MODE", false)
             putExtra("LOCAL_PORT", com.mlmvpn.scanner.utils.LocalPort.getString(context))
@@ -1378,7 +1471,7 @@ object MaeEngine {
 
     fun stopTunnel(context: Context) {
         wantConnected = false
-        context.startService(Intent(context, MyVpnService::class.java).apply { action = "STOP" })
+        com.mlmvpn.scanner.utils.SafeStart.service(context, Intent(context, MyVpnService::class.java).apply { action = "STOP" })
     }
 
     /**
@@ -1396,8 +1489,10 @@ object MaeEngine {
 
     private fun sessionUp() {
         wantConnected = true
+        lastTunnelBuildAt = System.currentTimeMillis()
         watchNetwork()
         registerScreen()
+        startLantern()
         refreshStale()
         statsJob?.cancel()
         lastStatsAt = 0L
@@ -1445,6 +1540,7 @@ object MaeEngine {
         statsJob?.cancel(); statsJob = null
         healthJob?.cancel(); healthJob = null
         reconnectJob?.cancel()
+        stopLanternSoon()
         netCallback?.let { cb -> runCatching { (app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(cb) } }
         netCallback = null
         screenReceiver?.let { r -> runCatching { app.unregisterReceiver(r) } }
@@ -1538,30 +1634,54 @@ object MaeEngine {
     /**
      * A reconnect costs every app a second of nothing, so while apps are still being checked the
      * reconnects they need are made once, together: after the checks quiet down, and never more
-     * than [RECONNECT_WAIT_MS] late. [urgent] (the user just said an app did not open) goes now.
+     * than [CHECKS_QUIET_WAIT_MS] late, and never closer than the gap to the last rebuild. [urgent] (the user just said an app did not open) goes now.
      */
-    private fun scheduleReconnect(urgent: Boolean) {
+    private fun scheduleReconnect(urgent: Boolean, gapMs: Long = RULES_RECONNECT_GAP_MS) {
         synchronized(this) {
-            if (!urgent && reconnectJob?.isActive == true) return
+            // A pending background reconnect keeps its turn, unless this one may come sooner.
+            if (!urgent && reconnectJob?.isActive == true && gapMs >= pendingGapMs) return
             reconnectJob?.cancel()
+            pendingGapMs = if (urgent) 0L else gapMs
             reconnectJob = scope.launch {
                 if (!urgent) {
-                    val until = System.currentTimeMillis() + RECONNECT_WAIT_MS
+                    // Measured 2026-10-07: every app check that finished, and every WARP endpoint
+                    // rotation, rebuilt the tunnel -- about once a minute, and every app on the
+                    // phone (TikTok: "disconnected / connected") felt each one. Background changes
+                    // now wait for the checks to finish and come at most once per [gapMs].
+                    val until = System.currentTimeMillis() + CHECKS_QUIET_WAIT_MS
                     delay(2_000)
-                    while (testing.value.isNotEmpty() && System.currentTimeMillis() < until) delay(1_000)
+                    while ((testing.value.isNotEmpty() || queued.isNotEmpty()) && System.currentTimeMillis() < until) delay(1_000)
+                    val since = System.currentTimeMillis() - lastTunnelBuildAt
+                    if (since < gapMs) delay(gapMs - since)
                 }
                 applyLock.withLock {
+                    pendingGapMs = Long.MAX_VALUE
                     if (!isConnected() || !wantConnected) return@withLock
                     val next = compileNow(withApi = store.current.liveApiWorks != false)
                     val prev = applied
                     if (prev != null && prev.config == next.config) return@withLock
-                    Log.i(TAG, "applying by reconnect")
+                    Log.i(TAG, "applying by reconnect${if (urgent) " (urgent)" else ""}")
                     selfReconnectAt = System.currentTimeMillis()
+                    lastTunnelBuildAt = selfReconnectAt
                     startTunnel(app)
                 }
             }
         }
     }
+
+    /** The gap of the background reconnect waiting now; MAX when none waits. */
+    @Volatile private var pendingGapMs = Long.MAX_VALUE
+    /** When the running tunnel was built (connect or reconnect): background reconnects keep their distance from it. */
+    @Volatile private var lastTunnelBuildAt = 0L
+
+    /** The outbounds of a compiled config, by tag, as text: what a live switch can point at. */
+    private fun outboundsOf(config: String): Map<String, String> = runCatching {
+        val arr = JSONObject(config).optJSONArray("outbounds") ?: return@runCatching emptyMap()
+        (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.associate { it.optString("tag") to it.toString() }
+    }.getOrDefault(emptyMap())
+
+    /** The structure without the outbounds: the rules, the DNS path, the default route. */
+    private fun rulesOf(structure: String): String = structure.substringAfter('#', "")
 
     /**
      * Push the current decisions into a running tunnel: live when possible, reconnect otherwise.
@@ -1574,7 +1694,16 @@ object MaeEngine {
         val next = compileNow(withApi = store.current.liveApiWorks != false)
         val prev = applied
         if (prev != null && prev.structure == next.structure && prev.targets == next.targets) return@withLock
-        if (!flush && prev != null && prev.structure == next.structure && store.current.liveApiWorks == true) {
+        // Live when the running tunnel already has what the new targets need: the same rules and,
+        // for every target, the very same outbound. A route found or changed that no app uses yet
+        // (a new config, a rotated WARP endpoint) is no reason to cut every app's connections.
+        val sameStructure = prev != null && prev.structure == next.structure
+        val servable = prev != null && !sameStructure && rulesOf(prev.structure) == rulesOf(next.structure) && run {
+            val running = outboundsOf(prev.config)
+            val fresh = outboundsOf(next.config)
+            next.targets.values.all { t -> running[t] != null && running[t] == fresh[t] }
+        }
+        if (!flush && prev != null && (sameStructure || servable) && store.current.liveApiWorks == true) {
             val api = XrayApiClient(apiSocket().absolutePath)
             var allOk = true
             for ((bal, target) in next.targets) {
@@ -1586,9 +1715,17 @@ object MaeEngine {
                 if (r !is XrayApiClient.Result.Ok) { allOk = false; Log.w(TAG, "live switch $bal failed: $r"); break }
                 Log.i(TAG, "live switch $bal -> $target")
             }
-            if (allOk) { applied = next.copy(config = prev.config); return@withLock }
+            // What runs is still the previous config: only its targets moved.
+            if (allOk) { applied = prev.copy(targets = next.targets); return@withLock }
         }
-        scheduleReconnect(urgent || flush)
+        when {
+            urgent || flush -> scheduleReconnect(urgent = true)
+            // The rules changed (an app added or removed, its sites learned): soon, batched.
+            prev == null || rulesOf(prev.structure) != rulesOf(next.structure) -> scheduleReconnect(urgent = false, gapMs = RULES_RECONNECT_GAP_MS)
+            // Only routes no app can be moved to live: the apps keep the route that works for
+            // them now, and the better one arrives with the next rebuild, rarely.
+            else -> scheduleReconnect(urgent = false, gapMs = ROUTES_RECONNECT_GAP_MS)
+        }
     }
 
     private fun watchNetwork() {
@@ -1724,10 +1861,11 @@ object MaeEngine {
      * the throughput estimate of routes that carried real traffic, never invents one.
      */
     private fun samplePassiveStats() {
-        val ctl = VlessXrayInjector.active ?: return
         val net = currentNet()
         val state = store.current
         val providers = providers(state, net)
+        // The tunnel's core runs in its own process (XrayHosts): one round trip for every tag.
+        val counts = VlessXrayInjector.tunnelStats(app, providers.flatMap { p -> p.families.map { p.tag(it) } }.distinct()) ?: return
         // The window is what really passed: sampling stops while the screen is off, and the first
         // read after it covers the whole gap. Spread over minutes the bytes say nothing about what
         // a route can carry, so that read only resets the counters.
@@ -1736,9 +1874,7 @@ object MaeEngine {
         val meaningful = lastStatsAt != 0L && windowSecs <= STATS_EVERY_MS * 1.5 / 1000.0
         lastStatsAt = now
         for (p in providers) {
-            val bytes = p.families.map { p.tag(it) }.distinct().sumOf { tag ->
-                runCatching { ctl.queryStats(tag, "downlink") + ctl.queryStats(tag, "uplink") }.getOrDefault(0L)
-            }
+            val bytes = p.families.map { p.tag(it) }.distinct().sumOf { tag -> counts[tag] ?: 0L }
             if (bytes > 0) Log.i(TAG, "passive: ${p.id} moved $bytes bytes in ${windowSecs.toInt()} s")
             if (!meaningful || bytes < 2_000_000) continue
             val bps = bytes / windowSecs
@@ -1758,28 +1894,20 @@ object MaeEngine {
 
     fun cloudAccounts() = CloudManager(app).accounts.toList()
 
+    /**
+     * MAE's foreign exit is the account's central Worker: installed here when the account has none yet
+     * (once -- every panel and the desktop app use the same one), adopted as it is when it has.
+     * Nothing of MAE's own is deployed any more.
+     */
     suspend fun deployEgress(accountIndex: Int = 0): Result<Unit> = runCatching {
         val account = cloudAccounts().getOrNull(accountIndex) ?: error("no Cloudflare account")
-        val before = store.current.worker
-        val w = MaeEgressDeployer.deploy(app, account, before)
-        // An update or reinstall in place (same address, same key) is the same exit to every app:
-        // nothing they proved through it changes, so nothing is checked again. Measured: an
-        // "update" of an exit already current re-checked every app from scratch.
-        if (before != null && before.url == w.url && before.accountId == w.accountId &&
-            MaeEgressDeployer.uuidOf(before) == MaeEgressDeployer.uuidOf(w)) {
-            store.update { it.copy(worker = w) }
-            return@runCatching
+        val gw = com.mlmvpn.scanner.engines.gateway.EdgeGateway
+        if (!gw.status(app, account).installed) {
+            // Another device may already have one on this account: the sync adopts it, never a second.
+            gw.sync(app, account)
+            if (!gw.status(app, account).installed) gw.deploy(app, account).getOrElse { throw IllegalStateException(gw.localized(it), it) }
         }
-        store.update { s ->
-            // A new exit invalidates what was concluded without it: forget those verdicts and
-            // make every policy stale BEFORE queueing, or the queue skips them as fresh.
-            s.copy(
-                worker = w,
-                egress = s.egress.filterValues { it !is ForeignEgressStatus.NoneFound },
-                policies = s.policies.mapValues { (_, p) -> p.copy(decidedAt = 0) },
-            )
-        }
-        store.current.selected.forEach { enqueue(it.id) }
+        syncWorkerExit()
     }
 
     /**

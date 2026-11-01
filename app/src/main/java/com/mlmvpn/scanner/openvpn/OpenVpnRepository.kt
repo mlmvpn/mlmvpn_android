@@ -106,6 +106,11 @@ class OpenVpnRepository private constructor(private val context: Context) {
     @Synchronized fun updateProfile(id: String, change: (Profile) -> Profile) {
         save(mutable.value.copy(profiles = mutable.value.profiles.map { if (it.id == id) change(it) else it }))
     }
+    @Synchronized fun putProviderProfile(profile: Profile) {
+        require(profile.id.startsWith("windscribe_"))
+        check(OpenVpnRuntime.connection.value.profileId != profile.id || !OpenVpnRuntime.connection.value.active)
+        save(mutable.value.copy(profiles = mutable.value.profiles.filterNot { it.id == profile.id } + profile))
+    }
     @Synchronized fun removeProfile(id: String) {
         check(OpenVpnRuntime.connection.value.profileId != id || !OpenVpnRuntime.connection.value.active)
         save(mutable.value.copy(profiles = mutable.value.profiles.filterNot { it.id == id },
@@ -122,6 +127,9 @@ class OpenVpnRepository private constructor(private val context: Context) {
         } }))
         put("profiles", JSONArray(d.profiles.map { p -> JSONObject().apply {
             put("name", p.name); put("config", p.config); put("favorite", p.favorite)
+            if (p.id.startsWith("windscribe_")) { put("providerId", p.id); put("splitTcp", p.splitTcp) }
+            p.wsProxy?.let { proxy -> put("wsProxy", JSONObject().put("host", proxy.host).put("port", proxy.port)
+                .put("webSocket", proxy.webSocket).put("padding", proxy.padding).put("sni", proxy.sni)) }
             p.probe?.let { put("probe", JSONObject().put("ms", it.millis).put("checked", it.checkedAt).put("method", it.method).put("error", it.error).put("ips", JSONArray(it.healthy))) }
         } }))
     }
@@ -135,6 +143,10 @@ class OpenVpnRepository private constructor(private val context: Context) {
         }
         val profiles = j.getJSONArray("profiles").objects().map { p ->
             var profile = ProfileImporter.parse(p.getString("name"), p.getString("config"), emptyMap()).withFavorite(p.optBoolean("favorite"))
+            p.optString("providerId").takeIf { it.startsWith("windscribe_") }?.let { id ->
+                val proxy = p.optJSONObject("wsProxy")?.let { j -> WsProxy(j.getString("host"), j.getInt("port"), j.getBoolean("webSocket"), j.optBoolean("padding"), j.optString("sni")) }
+                profile = Profile(id, profile.name, profile.config, profile.remotes, profile.authenticatedControl, profile.favorite, splitTcp = p.optBoolean("splitTcp"), wsProxy = proxy)
+            }
             p.optJSONObject("probe")?.let {
                 val ips = it.optJSONArray("ips")?.let { a -> (0 until a.length()).map { i -> a.getString(i) } }.orEmpty()
                 profile = profile.withProbe(ProbeResult(it.longOrNull("ms"), it.getLong("checked"), it.getString("method"), it.stringOrNull("error"), ips))

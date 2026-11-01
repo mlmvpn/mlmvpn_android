@@ -85,8 +85,13 @@ import com.mlmvpn.scanner.utils.S
 /** What a node is, as one short word and one colour. Shared by the row and the detail page. */
 @Composable
 fun nodeBadge(node: VpnNode): Pair<String, Color> {
-    val config = remember(node.uri) { VpnConfig.parseUri(node.uri) }
-    val isSni = config?.address == "127.0.0.1" && node.engineType != "NHN"
+    // Only the address matters here, and a link that names no loopback address has not got it:
+    // a full parse per row as the list scrolls was one of the node list's main-thread stalls.
+    val loopback = remember(node.uri) {
+        (node.uri.startsWith("vmess://", ignoreCase = true) || node.uri.contains("127.0.0.1")) &&
+            VpnConfig.parseUri(node.uri)?.address == "127.0.0.1"
+    }
+    val isSni = loopback && node.engineType != "NHN"
     val isMitm = node.id == com.mlmvpn.scanner.mitm.MitmProfile.NODE_ID
     val isFree = node.engineType == "Manual" &&
         node.groupTitle == com.mlmvpn.scanner.engines.freeconfig.FreeConfigEngine.GROUP_NAME

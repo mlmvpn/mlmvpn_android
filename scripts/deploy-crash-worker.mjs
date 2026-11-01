@@ -47,7 +47,7 @@ function loadOrCreateSecrets() {
     ghToken: '',
     ghRepo: 'mlmvpn/crashes',
     adminToken: crypto.randomBytes(24).toString('hex'),
-    workerName: 'mlm-crash-3d91c7',
+    workerName: 'mlm-crash',
     note: 'Crash collector secrets. Fill in ghToken (fine-grained: Issues read+write on ghRepo only). Keep out of git.',
   };
   fs.writeFileSync(secretsPath, JSON.stringify(s, null, 2));

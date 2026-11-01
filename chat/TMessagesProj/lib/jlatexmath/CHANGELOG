@@ -1,0 +1,422 @@
+jlatexmath (1.0.7)
+	* Fix °C
+
+	* Fix deformed characters in SVG output by changing font scaling
+
+jlatexmath (1.0.6)
+	* Add TeX style macros \bangle, \brace and \brack.
+
+	* Add the macro \questeq.
+
+	* Add the macro \longdiv.
+
+	* Add \qquad as a Java macro rather than a String definition
+
+	* Fix an issue with predefined string commands with a RowAtom (\qquad used two times)
+
+jlatexmath (1.0.5)
+	* Remove ligatures info for cyrillic
+
+	* Add italic correction only in math mode.
+
+	* Add a command \mathnormal.
+
+	* Float.MIN_VALUE is not -Float.MAX_VALUE !
+
+	* Italic correction was not taken into account when making box for a CharSymbol.
+
+	* Support ~ as non breakable space.
+
+jlatexmath (1.0.4)
+	* Fix color displayed with the command bgcolor.
+
+	* Add the linking exception to the license
+
+jlatexmath (1.0.3)
+	* Pound sign was invalid in roman font.
+
+	* Fix paths in MANIFEST.MF
+
+	* By default, slightly increase left and right insets.
+
+	* Allow use of # in code.
+
+        * Add macro \fcscore.
+
+        * CharBox not correctly drawn in multithread context
+
+        * Add macros \texteuro and \euro ( and map char &#8364; on \euro)
+
+	* Add macro \st (i.e. strike-through)
+
+	* Fix arrow shift in \overrightarrow macro
+
+	* Fix several bugs due to modification in VRowAtom.
+
+jlatexmath (1.0.2)
+       	* Fix for ticket 1113: by default interline is 1ex (can be set with TeXIconBuilder::setInterLineSpacing (see Example7))
+
+	* Fix bug with maxwidth.
+
+        * Use default Java font when char is in an unknown unicode block.
+
+        * Fix bug in \LaTeX (due to modification of EM value)
+
+        * Fix bug in parser when no chars after command \cr
+
+        * Add missing glyph in jlm_cmex10.ttf (char 183)
+
+	* jlatexmath-minimal.zip renamed to jlatexmath-minimal-${version}.zip
+
+jlatexmath (1.0.1)
+	* Negative spaces were not taken into accound at the end of a horizontal
+          box.
+
+        * Add command \Join.
+
+        * Fix bad space around \begin{array}...\end{array}
+
+        * There were no spaces around fraction (\nulldelimiterspace).
+
+        * Eat one white (if it exists) after a \cr.
+
+        * Color name must not be case sensitive
+
+        * Add an example to connect C++ and JLaTeXMath in using Giws
+
+        * Fix bad cmex10.ttf rendering with OpenJDK
+
+	* Add \L, \l, \yen, \mathsterling (in unicode too)
+
+	* Handle nbsp, \P and \S
+
+	* Fix ligatures definitions in XML (\textbf{\text{-7}} was printed as \Omega)
+
+	* Handle auto-break after a binop or relation op.
+
+	* Spaces were not ignored in tabular options.
+
+	* Bad positions of the exponent & indice with Bigr{|}_1^3
+
+	* Fix bug with line-breaking (infinite loop on "\\ {abcdef}a" or exceptions).
+
+	* Option added for max. width vs exact width.
+	  Thanks to Felix Natter for the patch.
+
+	* Update the example to use the TeXIconBuilder.
+          Thanks to Felix Natter for the patch.
+
+jlatexmath (1.0.0)
+	* Fix bug 767: U with umlaut was shown as O with umlaut
+
+	* Handle breakline in math mode
+
+	* Remove String::isEmpty for Java 5 compatibility
+
+        * Fix bug 907: bad rendering of text{text{x_1Test}}
+
+jlatexmath (0.9.8)
+	* Bugs 907 fixed: bad rendering of \text{\text{x_1Test}}.
+
+	* Handle breakline.
+
+	* Add a static method TexFormula::getAsText to manage breakline and text
+	  as default.
+
+jlatexmath (0.9.7)
+	* Fix bugs with \bold{\b and \DeclareMathOperator{\ in partial mode.
+
+	* Add a static method TeXFormula.getAsText to break the line according to \n and to convert into a RomanAtom.
+	* newcommand{ threw an exception in partial mode.
+
+	* Fix bug with T carron and L carron.
+
+	* Add the unicode for Euler's constant.
+
+	* Fix bug when getting length.
+
+	* Add the TeX macros: \above and \abovewithdelims.
+
+	* Blanks after a command were skipped in text mode.
+
+	* Extend the way to code colors in \textcolor, \colorbox, \fcolorbox,
+	  fgcolor and bgcolor.
+	  Now \textcolor{color} where color could be 255,0,0 (int RGB) or
+          1.0,0,0 (float RGB) or 1.0,0,0,0.5 (float CMYK) or 0.6 (Gray) or
+          #FF0000 (html RGB) or FF0000 (hexa RGB) are accepted.
+
+	* \v accent was badly scaled in certain font files.
+
+        * Resizebox could lead to a box with NaN as dimensions !
+
+	* Add " for ''
+
+	* Bug with \fg
+
+	* Add a command \jlmXML which can replaces $foo by the value of foo
+	  attribute.
+
+	* Add the possibility to add a break in a line in using \-.
+
+	* Bad type for FencedAtom.
+
+	* Bad translation of &8821; (right guillemet) into LaTeX.
+
+	* Issue with default color in TeXIcon.
+
+	* Fix build problems.
+
+	* Change FSF address in LICENSE files.
+
+	* Add a check !=null in cache.
+
+	* Bugs fix: Columns was not centered in matrix env and \cot was
+          displayed as \cos.
+	* Add an option in jlmDynamic ([i]) to give the possibility to insert
+          a group as if it was not a group.
+
+jlatexmath (0.9.6)
+        * A TeXFormula.root must not be null in partial mode.
+        * Provide a manifest for the fop plugin defining the dependency on the
+          jlatexmath jar package
+
+jlatexmath (0.9.5)
+	* Remove the Java reflection use and reorganization in the fonts dir.
+
+	* Delegate the font rendering to java.
+
+        * add \jlmText,\jlmTextit,\jlmTextbf,\jlmTextitbf and \jlmExternalFont
+
+        * \huge\huge bug definitly fixed
+
+        * \huge\huge foo apply two times the huge factor
+
+        * In \overbrace{a}, the brace were misplaced.
+
+        * Add \(...\) & \[...\], $$...$$, \begin{math}...\end{math} and
+          \begin{displaymath}...\end{displaymath}
+
+        * No display with \left in partial mode
+
+        * The fop plugin is now available with fop 0.95 and 1.0
+
+        * \left(...\right) was inactive in \mathsf
+
+ -- Calixte Denizet <calixte@contrib.scilab.org>
+
+jlatexmath (0.9.4)
+
+        * Update build.xml to add a base directory in zip archives.
+
+        * Add \og and \fg.
+
+        * In text mode, the normal dot must be a punctuation symbol.
+
+        * Add \cal.
+
+        * Add \it, \bf, \sc, ...
+
+        * Add commands \textsc and \textcircled.
+
+        * Fix a bug in the FOP plugin when latex is mixed with other
+          image source.
+
+        * $...$ was ignored
+
+        * Add \raisebox and \romannumeral.
+
+        * Handle options in \includegraphics.
+
+        * Add a static method TeXFormula.setDefaultDPI().
+
+        * Add a static method TeXFormula.setDPITarget(float dpi).
+
+        * Add shadowbox, doublebox and ovalbox.
+
+        * Fix bugs on rotatebox (bad default center), with the parser
+          (...\end{foo}a... gave an error)) and improve the debug mode.
+
+        * Add Unicode chars again and forgotten commands
+
+        * Avoid the loading of Greek fonts in math mode in GeoGebra.
+
+        * Add characters in Unicode.
+
+        * Fix a bug on \bigtriangleup and \bigtriangledown (use stmary ones)
+
+        * Add support for few Unicode characters.
+
+        * Fix a bug of cyclic referency between atoms coming from Unicode
+          mapping.
+
+        * Convert foreign numbers into roman ones
+
+        * Add a preview of an error in partial mode
+
+        * Add the left quote and reduce slightly the space under for underarrows
+
+        * The percent for comments was not handled
+
+        * HTML entity &#8495; forgotten
+
+        * Fix bug in aligned & alignedat env. (thanks to Graeme Kidd)
+
+        * Add a thread-safe cache to cache the images generated from a formula
+
+        * Can use dollar in \text or \mbox to switch into math mode
+
+        * Add a static method TeXFormula.getPartialTeXFormula(String) which
+          ignores errors and returns a partial TeXFormula (with no errors).
+          Useful to display LaTeX on typing.
+
+        * JLM is now ready for support FOP 1.0 :)
+
+        * Fix a bug in jlmDynamic where the contents where preprocessed
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>
+
+jlatexmath (0.9.3)
+
+        * 0.9.3 version
+
+        * Fix bug of size with colored box
+
+        * Add a map between Unicode (math) and LaTeX symbols
+          (e.g. &#8734; => \infty)
+
+        * problem with @{blah} in array env.
+
+jlatexmath (0.9.2)
+
+        * add new commands \tiny, \footnotesize,... and \overwithdelims,...
+
+        * Handle vertical and horizontal lines in array environment
+
+        * Fix bug in the render of (over|under)braces
+
+        * Fix bug with A{\scriptstyle BCD}E
+
+        * Fix bug with \left(A\leftarrow B\right)
+
+        * Fix bug with option *{20}c in array env.
+
+        * An argument beginning with \left must be closed by \right (thanks to Juan Enrique)
+
+        * Fix bug with \over (http://bugzilla.scilab.org/show_bug.cgi?id=7226)
+
+        * Improve the render of a cfrac (thanks to Juan Enrique)
+
+        * Improve the way to get the arguments of a macro (thanks to Juan Enrique)
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>
+
+        * Add cfrac macro
+
+        * Possibility to have empty columns in array
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>
+
+jlatexmath (0.9.1)
+        * Few modifications in fop-plugin and improve \includegraphics
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>
+
+        * Moved fop.properties at the root directory (this is only needed to
+        build and run fop plugin)
+
+        * examples/Export/build.xml uses fop.properties
+
+ -- Sylvestre Ledru <sylvestre.ledru@scilab.org> Tue, 16 Feb 2010 10:51:04 +0100
+
+jlatexmath (0.9)
+         * Avoid two generations of labels with fop.
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Fri, 12 Feb 2010 18:23:56 +0100
+
+jlatexmath (0.8.9)
+         * Add new environments of amsmath : gather, flalign, alignat...
+
+         * Add commands genfrac, rule, underscore, hdotsfor, multicolumn, ...
+
+         * Add commands \textsuperscript et \textsubscript
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Thu, 11 Feb 2010 15:32:27 +0100
+
+jlatexmath (0.8.7)
+         * Add the command \prescript
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Mon, 11 Jan 2010 19:07:18 +0100
+
+         * Add the commands \mathclap, \mathrlap, \mathllap, \clap, \rlap and \llap
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Mon, 11 Jan 2010 16:29:51 +0100
+
+         * A basic (without options) \includegraphics command added
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Sun, 10 Jan 2010 22:17:04 +0100
+
+jlatexmath (0.8.6)
+         * \over, \hspace and \vspace are supported
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Sun, 10 Jan 2010 14:59:45 +0100
+
+jlatexmath (0.8.5)
+         * add a stroke T
+
+         * Fix few bugs of rendering : cedilla, mathbf
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Sun, 03 Jan 2010 18:35:12 +0100
+         * Complete unicode table for latin alphabets
+
+         * Fix few bugs of rendering
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Sat, 02 Jan 2010 20:03:36 +0100
+
+jlatexmath (0.8.4)
+         * Greek support added
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Thu, 31 Dec 2009 16:10:23 +0100
+
+jlatexmath (0.8.3)
+         * Cyrillic is now supported with unicode encoding (so we can search a cyrillic string in a pdf)
+
+         * Fix several little bugs
+
+         * Usage of commands such as \mathrm, \mathit, ... has been improved
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Wed, 30 Dec 2009 17:33:47 +0100
+
+         * Adds \fgcolor and \bgcolor
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Sat, 26 Dec 2009 21:05:38 +0100
+
+         * Fixes a bug with kerns pairs.
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Fri, 25 Dec 2009 00:03:44 +0100
+
+         * Provides a target to build the doc "ant doc"
+
+ -- Sylvestre Ledru <Sylvestre.ledru@scilab.org>  Wed, 16 Dec 2009 14:33:26 +0100
+
+jlatexmath (0.8.2)
+         * Fixes a bad sqrt symbol and adds a little space after an atom under a sqrt
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Thu, 17 Dec 2009 21:27:38 +0100
+
+jlatexmath (0.8.1)
+
+         * Fixes a regression in the version 0.8
+
+ -- Sylvestre Ledru <Sylvestre.ledru@scilab.org>  Wed, 16 Dec 2009 14:33:26 +0100
+
+jlatexmath (0.8)
+
+         * Jlatexmath can now compile under Java 1.5 (registerFont is disabled
+         in this case).
+
+ -- Sylvestre Ledru <Sylvestre.ledru@scilab.org>  Tue, 15 Dec 2009 17:46:18 +0100
+
+jlatexmath (0.7)
+
+         * Bad name in MANIFEST for stmary
+
+ -- Calixte Denizet <Calixte.Denizet@ac-rennes.fr>  Thu, 12 Dec 2009 15:50:38 +0100

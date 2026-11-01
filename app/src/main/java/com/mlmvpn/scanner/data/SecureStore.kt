@@ -18,9 +18,8 @@ import javax.crypto.spec.GCMParameterSpec
  * Output is `v1:` + base64(iv ‖ ciphertext‖tag). [open] returns null for anything it cannot open
  * (wrong key after a reinstall, corrupted bytes) and never throws; callers decide what that means.
  *
- * Some devices ship a broken Keystore. [available] is false there, and callers keep the old
- * behaviour rather than lose the user's accounts -- losing them silently would be worse than the
- * plaintext this replaces.
+ * Some devices ship a broken Keystore. [available] is false there. Callers retain previously
+ * saved ciphertext and fail closed instead of writing a new plaintext credential.
  */
 object SecureStore {
     private const val TAG = "SecureStore"

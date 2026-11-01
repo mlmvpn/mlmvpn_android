@@ -62,16 +62,17 @@ object CrashText {
         if (':' in process) ":" + process.substringAfterLast(':') else "main"
 
     private val SIGNAL = Regex("\\b(SIG[A-Z]{2,7})\\b")
-    private val LIBRARY = Regex("(/[^\\s()'\"]+\\.so)\\b")
+    // Not a word boundary at the end: a tombstone's strings run into the next field ("libgojni.so0").
+    private val LIBRARY = Regex("(/[^\\s()'\"]+\\.so)(?![A-Za-z_])")
     private val ABORT_HINTS = listOf("Abort message", "fdsan", "FORTIFY", "panicked", "CHECK failed", "assertion")
 
     /**
      * The one line a native crash is grouped by: its signal, the first of the app's own libraries
-     * in the trace, the process, and the abort message when there is one.
+     * in the trace, the process, the screen the user was on ([area]), and the abort message.
      *
      * `error: native crash SIGABRT in libtun2proxy.so (:tun): fdsan: attempted to close file descriptor #, …`
      */
-    fun nativeHeadline(process: String, trace: String): String {
+    fun nativeHeadline(process: String, trace: String, area: String? = null): String {
         val lines = trace.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
         val signal = lines.firstNotNullOfOrNull { SIGNAL.find(it)?.groupValues?.get(1) }
         val libraries = lines.flatMap { line -> LIBRARY.findAll(line).map { it.groupValues[1] }.toList() }
@@ -84,12 +85,33 @@ object CrashText {
             if (signal != null) append(' ').append(signal)
             if (library != null) append(" in ").append(library)
             append(" (").append(processLabel(process)).append(')')
+            if (area != null) append(" [").append(area).append(']')
             if (abort != null) append(": ").append(normalize(abort.removePrefix("Abort message:").trim().trim('\'')).take(160))
         }
     }
 
-    /** The one line an ANR is grouped by: the process and what the system said it waited for. */
-    fun anrHeadline(process: String, description: String?): String =
-        "error: ANR (${processLabel(process)})" +
+    /**
+     * The lines of a whole tombstone worth reading first: every library of the app's own that appears
+     * in it (full path, so [nativeHeadline] still finds it) and any abort message. A report keeps only
+     * the top of the tombstone, and the thread that aborted can come after the cut: a crash on
+     * 2026-10-11 arrived with nothing but idle threads and no library at all.
+     */
+    fun keyLines(trace: String): String {
+        val lines = trace.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val libraries = lines.flatMap { line -> LIBRARY.findAll(line).map { it.groupValues[1] }.toList() }
+            .filter { "/data/app/" in it }.distinct()
+        val aborts = lines.filter { line -> ABORT_HINTS.any { line.contains(it, ignoreCase = true) } }.distinct().take(5)
+        if (libraries.isEmpty() && aborts.isEmpty()) return ""
+        return buildString {
+            appendLine("--- in the whole tombstone ---")
+            libraries.forEach { appendLine(it) }
+            aborts.forEach { appendLine(it.take(300)) }
+            appendLine("---")
+        }
+    }
+
+    /** The one line an ANR is grouped by: the process, the screen, and what the system said it waited for. */
+    fun anrHeadline(process: String, description: String?, area: String? = null): String =
+        "error: ANR (${processLabel(process)})" + (area?.let { " [$it]" } ?: "") +
             (description?.takeIf { it.isNotBlank() }?.let { ": " + normalize(it).take(160) } ?: "")
 }

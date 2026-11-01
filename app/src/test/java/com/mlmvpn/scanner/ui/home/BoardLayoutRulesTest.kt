@@ -295,4 +295,63 @@ class BoardLayoutRulesTest {
         assertNull(BoardLayoutRules.rename(base, "tools", "   ", factoryTitle = "Tools")!!.folders.getValue("tools").title)
         assertEquals("Work", BoardLayoutRules.rename(base, "tools", "Work", factoryTitle = "Tools")!!.folders.getValue("tools").title)
     }
+
+    // ------------------------------------------------------------------ a new icon onto page one
+    //
+    // Four to a page here; the store uses the phone's 24. «لنترن» (1.2.42) came in at the end of an
+    // arranged board, on its second page.
+
+    private val arranged = BoardLayout(
+        listOf("scout", "masque", "tor", "store", "iran", "@tools", "lantern"),
+        mapOf("tools" to FolderRecord(null, listOf("lan", "usage"))),
+    )
+
+    @Test
+    fun aNewIconTakesTheLastCellOfPageOneAndOnlyThatIconMoves() {
+        val l = BoardLayoutRules.promoteToFirstPage(arranged, "lantern", perPage = 4)!!
+        // The icon in the last cell starts page two; the rest of page two follows it, unmoved.
+        assertEquals(listOf("scout", "masque", "tor", "lantern", "store", "iran", "@tools"), l.order)
+        assertEquals(arranged.folders, l.folders)
+        assertEquals(everyId(arranged).sorted(), everyId(l).sorted())
+    }
+
+    @Test
+    fun aKeptIconHoldsItsCellAndTheOneBeforeItIsUsed() {
+        // Scout was lifted to the last cell of page one by an earlier release.
+        val board = BoardLayout(listOf("masque", "tor", "store", "scout", "iran", "lantern"), emptyMap())
+        val l = BoardLayoutRules.promoteToFirstPage(board, "lantern", perPage = 4, keep = setOf("scout"))!!
+        assertEquals(listOf("masque", "tor", "lantern", "scout", "store", "iran"), l.order)
+    }
+
+    @Test
+    fun nothingMovesWhenTheIconIsAlreadyOnPageOneOrInAFolder() {
+        val onPageOne = BoardLayout(listOf("masque", "lantern", "tor", "store", "iran"), emptyMap())
+        assertNull(BoardLayoutRules.promoteToFirstPage(onPageOne, "lantern", perPage = 4))
+        val inFolder = BoardLayout(
+            listOf("masque", "tor", "store", "iran", "@connect"),
+            mapOf("connect" to FolderRecord(null, listOf("lantern", "geph"))),
+        )
+        assertNull(BoardLayoutRules.promoteToFirstPage(inFolder, "lantern", perPage = 4))
+        assertNull(BoardLayoutRules.promoteToFirstPage(arranged, "gone", perPage = 4))
+    }
+
+    @Test
+    fun twoNewIconsBothReachPageOneAndTheEarlierOnesStay() {
+        // «URnetwork» and «NPV» came in together, after «لنترن» had been lifted to page one.
+        val board = BoardLayout(listOf("masque", "tor", "store", "lantern", "iran", "urnetwork", "npv"), emptyMap())
+        val keep = setOf("scout", "lantern", "urnetwork", "npv")
+        val one = BoardLayoutRules.promoteToFirstPage(board, "urnetwork", perPage = 4, keep = keep)!!
+        val two = BoardLayoutRules.promoteToFirstPage(one, "npv", perPage = 4, keep = keep)!!
+        assertEquals(listOf("masque", "npv", "urnetwork", "lantern", "tor", "store", "iran"), two.order)
+        assertEquals(everyId(board).sorted(), everyId(two).sorted())
+    }
+
+    @Test
+    fun aFolderInTheLastCellMovesToPageTwoWhole() {
+        val board = BoardLayout(listOf("masque", "tor", "store", "@tools", "iran", "lantern"),
+            mapOf("tools" to FolderRecord("Mine", listOf("lan"))))
+        val l = BoardLayoutRules.promoteToFirstPage(board, "lantern", perPage = 4)!!
+        assertEquals(listOf("masque", "tor", "store", "lantern", "@tools", "iran"), l.order)
+        assertEquals("Mine", l.folders.getValue("tools").title)
+    }
 }

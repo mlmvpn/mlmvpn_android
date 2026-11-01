@@ -31,7 +31,7 @@ class AmneziaWgInjector(@Suppress("unused") private val fd: Int) : IVpnEngine {
         val app = context.applicationContext
         appContext = app
         val reply = AwgHostClient.tunnel.call(app, AwgHostService.MSG_START, Bundle().apply {
-            putString(AwgHostService.KEY_CONFIG, config)
+            putString(AwgHostService.KEY_CONFIG, withSplitTunnel(app, config))
         }, START_TIMEOUT_MS)
         val ok = reply?.getBoolean(AwgHostService.KEY_OK) == true
         lastError = if (ok) null else (reply?.getString(AwgHostService.KEY_ERROR) ?: "no answer from the :awg process")
@@ -56,6 +56,33 @@ class AmneziaWgInjector(@Suppress("unused") private val fd: Int) : IVpnEngine {
 
     companion object {
         private const val TAG = "AmneziaWgInjector"
+
+        /**
+         * The app-wide split tunnel (Settings > Advanced VPN) written into the config's [Interface], as
+         * the Xray tunnels apply it with their VpnService builder. This app stays inside: the engines
+         * prove the tunnel with its own request. A config that already names its apps keeps them.
+         */
+        internal fun withSplitTunnel(context: Context, config0: String): String {
+            // Smart Iran route: Iran's large ranges are routed around (WireGuard has no exclusions,
+            // only AllowedIPs), and Iranian apps are left outside below.
+            val config = com.mlmvpn.core.tunnel.SmartIranRoute.wireGuardAllowedIps(context, config0)
+            if (config.contains("IncludedApplications", ignoreCase = true) || config.contains("ExcludedApplications", ignoreCase = true)) return config
+            val split = com.mlmvpn.core.tunnel.SplitTunnelSettings(context)
+            val apps = split.packages() - context.packageName
+            val iranian = if (com.mlmvpn.core.tunnel.SmartIranRoute.enabled(context)) com.mlmvpn.core.tunnel.SmartIranRoute.outsideApps(context).toSet() else emptySet()
+            val line = when (split.mode()) {
+                com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.INCLUDE -> (apps - iranian).let { inc ->
+                    if (inc.isEmpty()) iranian.takeIf { it.isNotEmpty() }?.let { "ExcludedApplications = " + it.joinToString(", ") }
+                    else "IncludedApplications = " + (inc + context.packageName).joinToString(", ")
+                }
+                com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.EXCLUDE ->
+                    (apps + iranian).takeIf { it.isNotEmpty() }?.let { "ExcludedApplications = " + it.joinToString(", ") }
+                com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.ALL ->
+                    iranian.takeIf { it.isNotEmpty() }?.let { "ExcludedApplications = " + it.joinToString(", ") }
+            } ?: return config
+            val at = Regex("""(?im)^[ \t]*\[Interface][ \t]*$""").find(config) ?: return config
+            return config.substring(0, at.range.last + 1) + "\n" + line + config.substring(at.range.last + 1)
+        }
         private const val START_TIMEOUT_MS = 25_000L
         private const val STOP_TIMEOUT_MS = 4_000L
     }

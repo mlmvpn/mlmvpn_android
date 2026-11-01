@@ -78,6 +78,26 @@ async function handleRequest(request, env, ctx) {
     url.pathname.startsWith('/s/') || url.pathname.startsWith('/p/') ||
     (studioPrefix !== null && url.pathname.startsWith(studioPrefix));
 
+  // XHTTP packet-up through the session's own Durable Object (build 23).
+  //
+  // A packet-up session is a download GET plus upload POSTs that must meet in ONE isolate, and on
+  // workers.dev they did not: the POSTs landed in other isolates and were lost (measured
+  // 2026-09-26), which is why XHTTP was taken out of every create flow. A Durable Object is the one
+  // place Cloudflare guarantees they meet -- every request named `x:{session}` reaches the same
+  // object, in the same isolate -- so each of them is handed to that object, which runs this very
+  // routing again (marked, so it is not forwarded twice) and finds the session it already holds.
+  // Without the SESSIONS binding (an install where Durable Objects were unavailable) nothing changes.
+  if (env.SESSIONS && !reserved && request.headers.get(STUDIO_XHTTP_HOP) !== '1') {
+    const m = url.pathname.match(/^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/(0|[1-9][0-9]*))?$/i);
+    if (m && ((request.method === 'GET' && m[2] === undefined) || (request.method === 'POST' && m[2] !== undefined))) {
+      dbg(env, ctx, 'ROUTE xhttp-do ' + request.method + ' ' + url.pathname);
+      const stub = env.SESSIONS.get(env.SESSIONS.idFromName('x:' + m[1].toLowerCase()));
+      const hop = new Request(request);
+      hop.headers.set(STUDIO_XHTTP_HOP, '1');
+      return await stub.fetch(hop);
+    }
+  }
+
   // XHTTP packet-up's download: the GET runs the whole connection (09-xhttp.js).
   if (request.method === 'GET' && !reserved) {
     const matchGet = url.pathname.match(/^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);

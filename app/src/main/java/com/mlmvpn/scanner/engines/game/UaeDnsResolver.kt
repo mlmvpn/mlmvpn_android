@@ -31,7 +31,7 @@ import javax.net.ssl.X509TrustManager
 object UaeDnsResolver {
 
     private const val TAG = "UaeDnsResolver"
-    const val BASE = "https://194.50.233.133:8443"
+    const val BASE = "https://203.0.113.20:8443"
 
     // SHA-256 of the server cert's SubjectPublicKeyInfo (base64). Pins the KEY, so rotating the
     // cert with the same key keeps working. MUST match /opt/uae-dns/cert.pem on the server.

@@ -51,6 +51,32 @@ import com.mlmvpn.scanner.data.studio.domain.UserStatus
 class StudioIndex private constructor(context: Context) :
     SQLiteOpenHelper(context.applicationContext, DB_NAME, null, DB_VERSION) {
 
+    private val appContext = context.applicationContext
+    @Volatile private var checked = false
+
+    /*
+     * A damaged file ("file is not a database", seen on a phone with 1.2.39) failed every query
+     * and crashed the screen that asked. This is a cache that re-syncs from the installations, so
+     * the cure is to throw the file away once and start empty.
+     */
+    override fun getReadableDatabase(): SQLiteDatabase = checkedOpen { super.getReadableDatabase() }
+    override fun getWritableDatabase(): SQLiteDatabase = checkedOpen { super.getWritableDatabase() }
+
+    @Synchronized
+    private fun checkedOpen(open: () -> SQLiteDatabase): SQLiteDatabase {
+        if (checked) return open()
+        val db = try {
+            open().also { it.rawQuery("PRAGMA schema_version", null).use { c -> c.moveToFirst() } }
+        } catch (e: android.database.sqlite.SQLiteDatabaseCorruptException) {
+            android.util.Log.w("StudioIndex", "index file damaged; starting it again")
+            runCatching { close() }
+            appContext.deleteDatabase(DB_NAME)
+            open()
+        }
+        checked = true
+        return db
+    }
+
     companion object {
         private const val DB_NAME = "studio_index.db"
 

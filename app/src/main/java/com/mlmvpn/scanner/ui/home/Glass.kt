@@ -152,6 +152,16 @@ fun Modifier.fadingTopEdge(height: Dp): Modifier = this
     .fadingEdges(top = height, bottom = 0.dp)
 
 /**
+ * A small phone (Android 8, or a heap under 200 MB -- the TV boxes and the entry-level phones of the
+ * freeze reports) does without the cosmetic fades. Each one is a full-screen offscreen layer the
+ * whole page is drawn into on every frame, and on those phones that layer is what kept the main
+ * thread drawing for seconds and ran the app out of memory (freeze and OOM reports, 1.2.41).
+ */
+internal val liteRendering: Boolean by lazy {
+    android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.P || Runtime.getRuntime().maxMemory() < 200L * 1024 * 1024
+}
+
+/**
  * The same fade at BOTH ends of a scrolling surface.
  *
  * The bottom one exists for the same reason as the top one and had simply been missing: content
@@ -162,7 +172,7 @@ fun Modifier.fadingTopEdge(height: Dp): Modifier = this
  * One pass, not two: each fade is a `DstIn` gradient over the same offscreen buffer, and running
  * them as separate modifiers would allocate a second layer for the whole scrolling surface.
  */
-fun Modifier.fadingEdges(top: Dp, bottom: Dp): Modifier = this
+fun Modifier.fadingEdges(top: Dp, bottom: Dp): Modifier = if (liteRendering) this else this
     .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
     .drawWithContent {
         drawContent()

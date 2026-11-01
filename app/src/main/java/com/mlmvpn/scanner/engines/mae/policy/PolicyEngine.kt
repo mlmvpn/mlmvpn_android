@@ -26,6 +26,17 @@ object PolicyEngine {
     fun isStale(p: ServicePolicy?, now: Long): Boolean =
         p == null || now - p.decidedAt > ttlMs(p.confidence)
 
+    /**
+     * An exit that is one fixed server abroad: foreign, the same address for a whole session, and not
+     * a Cloudflare colo (the Worker, the old US helper, the user's panel configs). What an app that
+     * opens only from a real place abroad -- Gemini, Google Flow -- is given (see [decide]).
+     */
+    fun fixedExitAbroad(p: RouteProvider): Boolean =
+        p.kind == RouteKind.FOREIGN && p.caps.stableExit &&
+            p.id != com.mlmvpn.scanner.engines.mae.route.WorkerRoute.ID &&
+            p.id != com.mlmvpn.scanner.engines.mae.route.UsExitRoute.ID &&
+            !p.id.startsWith(com.mlmvpn.scanner.engines.mae.route.UserConfigRoute.CLOUD_PREFIX)
+
     fun requirements(state: MaeState, service: ServiceDef, net: String, now: Long = System.currentTimeMillis()): ObservedRequirements {
         val key = MaeState.sk(service.id, net)
         val d = state.diagnoses[key] ?: Diagnosis()
@@ -101,12 +112,13 @@ object PolicyEngine {
         // anything else is there -- a routine re-check must not walk back into a reported failure.
         state.userEvidence[key]?.failedRoutes(now)?.takeIf { it.isNotEmpty() }?.let { bad -> narrow { it.routeId !in bad } }
 
-        // An app that needs the US exit takes it whenever it is proven here: other Cloudflare
-        // exits can pass a page check and still be refused per prompt (Gemini, error 1060).
-        if (service.hints.usExit) {
-            cands.filter { it.routeId == com.mlmvpn.scanner.engines.mae.route.UsExitRoute.ID && it.acceptedFamilies.isNotEmpty() && it.health != Health.UNAVAILABLE }
-                .takeIf { it.isNotEmpty() }?.let { cands = it }
-        }
+        // An app that opens only from a real place abroad (Gemini, Google Flow) is given nothing but
+        // an exit that is one fixed server there -- FENIX, Outline, the user's own configs, FLUX. A
+        // Cloudflare exit leaves from the colo nearest the phone, which Google places in Iran or
+        // Russia, and an exit that moves between servers (Lantern) both pass a page check and are then
+        // refused at the first prompt (error 1060; the user, 2026-10-18). Strict on purpose: "no exit
+        // found" is the truth when there is none, a route that only looks open is not.
+        if (service.hints.usExit) cands = cands.filter { c -> byId[c.routeId]?.let(::fixedExitAbroad) == true }
         if (plan != null) {
             narrow { it.routeId !in plan.excludedRoutes }
             if (plan.requireUdp) narrow { byId[it.routeId]?.caps?.udp == true }

@@ -73,6 +73,9 @@ private sealed class AddPage {
     data class Manual(val type: AddNodeFormType) : AddPage()
 }
 
+/** The largest file read as a config list: well past any real list, far below a video. */
+private const val MAX_IMPORT_CHARS = 16 * 1024 * 1024
+
 @Composable
 fun AddNodeScreen(
     onBack: () -> Unit,
@@ -125,11 +128,32 @@ fun AddNodeScreen(
                 // listed in the picker looking exactly like the real file, and opening it throws
                 // ENOENT. That is not a bad config, and answering it with "invalid config" sends
                 // the user off to fix the one thing that was never wrong.
+                // At most 16 MB of text: a video picked by mistake was read whole and the app ran
+                // out of memory (crashes #697, #702).
+                var tooLarge = false
                 val text = try {
-                    context.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
-                } catch (e: Exception) {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        val r = input.bufferedReader()
+                        val sb = StringBuilder()
+                        val buf = CharArray(64 * 1024)
+                        while (true) {
+                            val n = r.read(buf)
+                            if (n < 0) break
+                            sb.append(buf, 0, n)
+                            if (sb.length > MAX_IMPORT_CHARS) { tooLarge = true; break }
+                        }
+                        if (tooLarge) null else sb.toString()
+                    }
+                } catch (e: Throwable) {
                     android.util.Log.e("AddNodeScreen", "cannot read $uri", e)
+                    if (e is OutOfMemoryError) tooLarge = true
                     null
+                }
+                if (tooLarge) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, context.getString(R.string.file_too_large_to_import), Toast.LENGTH_LONG).show()
+                    }
+                    return@launch
                 }
                 if (text.isNullOrBlank()) {
                     withContext(Dispatchers.Main) {
@@ -272,7 +296,8 @@ fun AddNodeScreen(
             SettingsActionRow(S(R.string.from_the_clipboard), Icons.Default.ContentPaste) { handleClipboard() }
             Separator()
             SettingsActionRow(S(R.string.from_a_file), Icons.Default.UploadFile) {
-                filePickerLauncher.launch(arrayOf("*/*"))
+                try { filePickerLauncher.launch(arrayOf("*/*")) }
+                catch (_: android.content.ActivityNotFoundException) { Toast.makeText(context, S(R.string.amz_no_file_picker), Toast.LENGTH_LONG).show() }
             }
         }
         SettingsFooter(

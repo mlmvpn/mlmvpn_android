@@ -12,7 +12,7 @@
 
 set -u
 
-ADB="/c/Users/ehsan computer/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe"
+ADB="/c/Users/user/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe"
 PKG="com.mlmvpn.scanner"
 
 if [ ! -x "$ADB" ]; then

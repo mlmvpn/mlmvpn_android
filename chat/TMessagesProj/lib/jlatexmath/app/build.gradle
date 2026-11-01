@@ -1,0 +1,31 @@
+apply plugin: 'com.android.application'
+
+android {
+
+    compileSdkVersion config['target-sdk']
+    buildToolsVersion config['build-tools']
+
+    defaultConfig {
+        applicationId "ru.noties.jlatexmath.android.app"
+        minSdkVersion config['min-sdk']
+        targetSdkVersion config['target-sdk']
+        versionCode 1
+        versionName version
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
+
+dependencies {
+
+    implementation project(':jlatexmath')
+    implementation project(':jlatexmath-font-cyrillic')
+    implementation project(':jlatexmath-font-greek')
+
+    deps.with {
+        implementation it['x-annotations']
+        implementation it['debug']
+    }
+}

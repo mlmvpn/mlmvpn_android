@@ -203,6 +203,21 @@ fun ConfigStudioHost(
     val atRoot = stack.isEmpty()
     val basePadding = LocalSystemBottomPadding.current
 
+    // The home tiles count people. Back on them after a change of who exists or who is on (made,
+    // deleted, switched on or off), they are read again at once -- they used to keep the old numbers
+    // until a pull, so a person just made was not there. Only on a change: an engine's count is a
+    // database read, and coming back to the home screen is not a reason to spend one.
+    var countedAt by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(atRoot, tab, state.indexedUsers, state.indexedActive) {
+        val counts = state.indexedUsers to state.indexedActive
+        val before = countedAt
+        if (before == null) { countedAt = counts; return@LaunchedEffect }
+        if (atRoot && tab == StudioTab.HOME && counts != before) {
+            countedAt = counts
+            store.refreshDashboard()
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         // A tab root scrolls under the tab bar, so it leaves room for it at its foot.
         CompositionLocalProvider(
@@ -265,7 +280,9 @@ fun ConfigStudioHost(
                         // Replaced rather than pushed past, so backing out of the configs returns to
                         // where the question was asked instead of re-asking it.
                         pop()
-                        push(StudioRoute.Configs(installationId, userId, user?.username.orEmpty()))
+                        // A central-Worker person's configs are on their own page.
+                        if (store.isCentral(installationId)) push(StudioRoute.UserDetail(installationId, userId))
+                        else push(StudioRoute.Configs(installationId, userId, user?.username.orEmpty()))
                     },
                     onNewUser = { push(StudioRoute.NewUser) },
                     onBack = ::pop,
@@ -279,7 +296,9 @@ fun ConfigStudioHost(
                     onOpenUser = { installationId, userId ->
                         val user = store.cached(installationId, userId)
                         pop()
-                        push(StudioRoute.Combine(installationId, userId, user?.username.orEmpty()))
+                        // A central-Worker person's addresses are the central Worker's own settings.
+                        if (store.isCentral(installationId)) push(StudioRoute.UserDetail(installationId, userId))
+                        else push(StudioRoute.Combine(installationId, userId, user?.username.orEmpty()))
                     },
                     onNewUser = { push(StudioRoute.NewUser) },
                     onBack = ::pop,
@@ -356,7 +375,9 @@ fun ConfigStudioHost(
                     onBack = ::pop,
                 )
 
-                is StudioRoute.AccountDetail -> StudioAccountDetailScreen(
+                is StudioRoute.AccountDetail -> if (store.isCentral(route.installationId)) StudioCentralAccountScreen(
+                    store = store, installationId = route.installationId, onBack = ::pop, onRemoved = ::pop,
+                ) else StudioAccountDetailScreen(
                     store = store, installationId = route.installationId, onBack = ::pop, onRemoved = ::pop,
                 )
 
@@ -395,7 +416,9 @@ fun ConfigStudioHost(
                     store = store, state = state, existing = route.plan, onBack = ::pop, onSaved = ::pop,
                 )
 
-                is StudioRoute.NewUser -> StudioNewUserScreen(
+                // New people are made on an account's central Worker (the operator's choice,
+                // 2026-10-18); the engines keep the people they already have.
+                is StudioRoute.NewUser -> StudioCentralNewUserScreen(
                     store = store,
                     state = state,
                     onBack = ::pop,
@@ -404,15 +427,23 @@ fun ConfigStudioHost(
                         pop()
                         push(StudioRoute.UserDetail(installationId, userId))
                     },
+                    onAddAccount = { push(StudioRoute.AddAccount) },
                 )
 
                 is StudioRoute.BulkAction -> StudioBulkActionScreen(
                     store = store, state = state, targets = route.targets, onBack = ::pop, onDeleted = ::pop,
                 )
 
-                is StudioRoute.BulkUsers -> StudioBulkUsersScreen(store = store, state = state, onBack = ::pop, onDone = ::pop)
+                is StudioRoute.BulkUsers -> StudioCentralBulkUsersScreen(
+                    store = store, state = state, onBack = ::pop, onDone = ::pop, onAddAccount = { push(StudioRoute.AddAccount) },
+                )
 
-                is StudioRoute.UserDetail -> StudioUserDetailScreen(
+                is StudioRoute.UserDetail -> if (store.isCentral(route.installationId)) StudioCentralUserScreen(
+                    store = store,
+                    installationId = route.installationId,
+                    userId = route.userId,
+                    onBack = ::pop,
+                ) else StudioUserDetailScreen(
                     store = store,
                     installationId = route.installationId,
                     userId = route.userId,
@@ -420,6 +451,11 @@ fun ConfigStudioHost(
                     onCombine = { username -> push(StudioRoute.Combine(route.installationId, route.userId, username)) },
                     onEditLocations = { username -> push(StudioRoute.EditLocations(route.installationId, route.userId, username)) },
                     onBack = ::pop,
+                    onMoved = { installationId, userId ->
+                        // To the person's new page on the central Worker, in place of the old one.
+                        pop()
+                        push(StudioRoute.UserDetail(installationId, userId))
+                    },
                 )
 
                 is StudioRoute.EditLocations -> StudioLocationsEditScreen(

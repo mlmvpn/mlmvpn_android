@@ -6,6 +6,7 @@ import com.mlmvpn.scanner.engines.flux.core.model.FragmentProfile
 import com.mlmvpn.scanner.engines.flux.core.model.Proto
 import com.mlmvpn.scanner.engines.flux.core.model.Security
 import com.mlmvpn.scanner.engines.flux.core.model.Transport
+import com.mlmvpn.scanner.engines.cfnet.CfShape
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -22,6 +23,13 @@ object FluxOutbounds {
 
     private const val BROWSER_UA =
         "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+    /**
+     * Cloudflare's ECH key (base64), fetched on the real line by the engine before a race. Written
+     * into [FragmentProfile.ECH] outbounds as is, so the core never has to ask a resolver for it
+     * (UDP to 1.1.1.1 is dropped on some lines). Null: the core fetches it itself.
+     */
+    @Volatile var echKey: String? = null
 
     fun outbound(c: FluxCandidate, tag: String): JSONObject {
         val n = c.node
@@ -55,6 +63,21 @@ object FluxOutbounds {
 
     /** Fragmenting splits the TLS ClientHello; meaningless on QUIC. */
     fun fragmentable(c: FluxCandidate): Boolean = c.node.proto != Proto.HY2
+
+    /**
+     * The handshakes worth racing for [c] besides its plain one, most promising first. A
+     * Cloudflare dial gets ECH (the name hidden) and PattNG's cut hello; any other TLS dial gets
+     * the cut hellos only. REALITY borrows another site's certificate, so ECH cannot apply there.
+     */
+    fun shapes(c: FluxCandidate, cloudflare: Boolean): List<FragmentProfile> {
+        if (!fragmentable(c)) return emptyList()
+        return when {
+            c.node.security == Security.TLS && cloudflare -> listOf(FragmentProfile.ECH, FragmentProfile.PATTNG, FragmentProfile.BALANCED)
+            c.node.security == Security.TLS -> listOf(FragmentProfile.PATTNG, FragmentProfile.BALANCED)
+            c.node.security == Security.REALITY -> listOf(FragmentProfile.BALANCED)
+            else -> emptyList()
+        }
+    }
 
     private fun stream(c: FluxCandidate): JSONObject {
         val n = c.node
@@ -99,6 +122,15 @@ object FluxOutbounds {
                 }
                 if (alpn.isNotEmpty()) put("alpn", JSONArray().also { a -> alpn.forEach { a.put(it) } })
                 if (n.cipherSuites.isNotEmpty()) put("cipherSuites", n.cipherSuites)
+                // A self-signed server: exactly its own certificate, by hash (allowInsecure is gone).
+                if (n.certPin.isNotEmpty()) put("pinnedPeerCertSha256", n.certPin)
+            }.also { tls ->
+                // The Doctor's two Cloudflare handshakes, exactly as it proves them.
+                when (c.fragment) {
+                    FragmentProfile.ECH -> CfShape.applyEch(tls, echKey ?: CfShape.ECH_DEFAULT)
+                    FragmentProfile.PATTNG -> CfShape.applyFragFp(s, tls, s.optString("network"))
+                    else -> Unit
+                }
             })
             Security.NONE -> Unit
         }
@@ -118,7 +150,8 @@ object FluxOutbounds {
                 .put("settings", JSONObject().put("password", n.obfsPassword))))
         }
         val tcp = when (c.fragment) {
-            FragmentProfile.OFF -> return null
+            // ECH sends one whole hello; PattNG's cut is written with its TLS settings above.
+            FragmentProfile.OFF, FragmentProfile.ECH, FragmentProfile.PATTNG -> return null
             // The publisher's own tested fragment is this node's balanced profile when it has one.
             FragmentProfile.BALANCED -> n.finalmask?.let { runCatching { JSONObject(it).optJSONArray("tcp") }.getOrNull() } ?: balanced()
             FragmentProfile.CONSERVATIVE -> JSONArray().put(fragment("tlshello", listOf("0", "104", "1"), listOf("0"), "0"))

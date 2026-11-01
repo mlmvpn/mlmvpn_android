@@ -28,8 +28,15 @@ class GstEngine : IVpnEngine {
             return true
         }
 
-        // 1. Initialize data directory for the rust core
-        Native.setDataDir(context.filesDir.absolutePath)
+        // 1. Initialize data directory for the rust core. A library that loaded but lacks the call
+        // (an older or another ABI's copy of libmhrv_rs.so) threw UnsatisfiedLinkError out of the VPN
+        // service and closed the app (1.2.42 #2215): the connect fails instead.
+        try {
+            Native.setDataDir(context.filesDir.absolutePath)
+        } catch (e: UnsatisfiedLinkError) {
+            GstLog.e("GstEngine", "GST core is not usable on this phone: ${e.javaClass.simpleName}")
+            return false
+        }
 
         // 2. We fetch relays and best front IP
         val relays = GstConfigManager.getRelays(context)
@@ -41,21 +48,30 @@ class GstEngine : IVpnEngine {
         GstLog.i("GstEngine", "Configured relays: ${validRelays.size} " +
             "(deploymentIds=${validRelays.joinToString { GstLog.redact(it.deploymentId) }})")
 
-        val snis = GstConfigManager.getSelectedSniList(context)
-        val ips = GstConfigManager.getSelectedCleanIpList(context)
+        // One auth_key serves every script_id in the core, so only the relays sharing the
+        // tunnel's password go in. A relay with its own password would answer every request
+        // with the decoy page: it tested healthy on its own and moved nothing in the tunnel.
+        val authKey = GstConfigManager.tunnelAuthKey(validRelays) ?: validRelays.first().authKey
+        val tunnelRelays = validRelays.filter { it.authKey == authKey }
+        if (tunnelRelays.size < validRelays.size) {
+            GstLog.w("GstEngine", "${validRelays.size - tunnelRelays.size} relay(s) left out: " +
+                "their password differs from the tunnel's (${GstLog.redact(authKey)})")
+        }
 
-        // Defaults MUST match the upstream mhrv-rs reference config
-        // (therealaleph/MasterHttpRelayVPN-RUST config.example.toml): a fixed Google
-        // frontend IP + www.google.com. Random IPs (especially the Cloudflare ones that
-        // used to be in the default list) break the direct Google tunnel that carries
-        // YouTube/Google traffic. Only override when the user explicitly scanned/selected.
-        val sni = if (snis.isNotEmpty()) snis.random() else "www.google.com"
-        val finalIp = if (ips.isNotEmpty()) ips.random() else GstConfigManager.DEFAULT_GOOGLE_IP
+        // Dial the front that actually answers on this network instead of a random tick
+        // (see GstFront). Defaults still match the upstream mhrv-rs reference config:
+        // 216.239.38.120 + www.google.com.
+        val front = GstFront.pick(context)
+        if (front == null) {
+            GstLog.e("GstEngine", "No Google front answered on this network; trying the reference pair anyway")
+        }
+        val sni = front?.sni ?: "www.google.com"
+        val finalIp = front?.ip ?: GstConfigManager.DEFAULT_GOOGLE_IP
 
-        GstLog.i("GstEngine", "Selected front IP=$finalIp, SNI=$sni")
+        GstLog.i("GstEngine", "Selected front IP=$finalIp, SNI=$sni (${front?.ms ?: "?"} ms)")
 
         // 3. Create config payload
-        val tomlContent = createConfigPayload(context, localPort, validRelays, finalIp, sni)
+        val tomlContent = createConfigPayload(context, localPort, tunnelRelays, authKey, finalIp, sni)
         GstLog.d("GstEngine", "Core config:\n${maskConfig(tomlContent)}")
 
         // 4. Start the proxy via JNI
@@ -98,10 +114,10 @@ class GstEngine : IVpnEngine {
         context: Context,
         localPort: Int,
         relays: List<GstRelay>,
+        authKey: String,
         frontIp: String,
         sni: String
     ): String {
-        val authKey = relays.first().authKey
 
         // IMPORTANT: the mhrv-rs core's TOML schema rejects unknown keys under [relay]
         // (verified from live logs: adding relay_url/parallel_relay makes startProxy

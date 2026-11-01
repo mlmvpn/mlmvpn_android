@@ -1,0 +1,27 @@
+apply plugin: 'com.android.library'
+
+android {
+
+    namespace 'ru.noties.jlatexmath.android'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+
+    defaultConfig {
+        minSdk 21
+    }
+
+    sourceSets {
+        // disable original tests as they rely on image creation
+        test.java.srcDirs = []
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
+
+// MLMCHAT: no project repositories; MLMVPN's settings.gradle owns them (FAIL_ON_PROJECT_REPOS).
+
+dependencies {
+    api 'androidx.annotation:annotation:1.7.0'
+}

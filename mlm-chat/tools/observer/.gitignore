@@ -1,0 +1,5 @@
+target/
+# The observer's private key and the card made from it: personal, never in git.
+observer-key.json
+observer-card.txt
+observer-card.svg

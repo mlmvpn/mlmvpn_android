@@ -177,6 +177,8 @@ class AetherScanService : Service() {
     }
 
     private fun createChannel() {
+        // Channels exist from Android 8; below it the class itself is missing (crash on 7.1.1).
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {
             val channel = NotificationChannel(CHANNEL_ID, "Aether engine",
@@ -237,7 +239,7 @@ class AetherScanService : Service() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(i)
                 } else {
-                    context.startService(i)
+                    com.mlmvpn.scanner.utils.SafeStart.service(context, i)
                 }
             } catch (t: Throwable) {
                 android.widget.Toast.makeText(context,
@@ -248,7 +250,7 @@ class AetherScanService : Service() {
 
         fun stop(context: Context) {
             val i = Intent(context, AetherScanService::class.java).apply { action = ACTION_STOP }
-            context.startService(i)
+            com.mlmvpn.scanner.utils.SafeStart.service(context, i)
         }
     }
 }

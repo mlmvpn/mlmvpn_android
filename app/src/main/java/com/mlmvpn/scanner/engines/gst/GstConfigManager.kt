@@ -27,8 +27,8 @@ object GstConfigManager {
         "mail.google.com",
         "www.youtube.com",
         "youtubei.googleapis.com",
-        "googlevideo.com",
-        "ytimg.com",
+        // googlevideo.com and ytimg.com were here; bare, neither has a certificate on
+        // Google's frontends, so the core (verify_ssl = true) could not open the tunnel.
         "play.google.com",
         "drive.google.com",
         "translate.google.com",
@@ -37,7 +37,6 @@ object GstConfigManager {
 
     val ITEM_DESCRIPTIONS = mapOf(
         "youtubei.googleapis.com" to S(R.string.best_for_the_youtube_app),
-        "googlevideo.com" to S(R.string.great_for_fast_video_loading),
         "www.youtube.com" to S(R.string.the_youtube_website),
         "mtalk.google.com" to S(R.string.high_stability),
         "142.250.186.110" to S(R.string.google_s_own_edge_server),
@@ -65,6 +64,47 @@ object GstConfigManager {
         "142.251.32.14"    // Google edge
     )
 
+    /**
+     * The bare Deployment ID out of whatever was pasted. People paste the whole web-app URL
+     * (".../macros/s/AKfy.../exec"), which turned into ".../s/https://.../exec/exec" and a
+     * Google 404, or carry a stray space or line break from the clipboard.
+     */
+    fun normalizeDeploymentId(raw: String): String {
+        val text = raw.trim()
+        Regex("/macros/s/([A-Za-z0-9_-]+)").find(text)?.let { return it.groupValues[1] }
+        return text.filter { it.isLetterOrDigit() && it.code < 128 || it == '_' || it == '-' }
+    }
+
+    /**
+     * A relay password as typed: Persian/Arabic digits become Latin ones, and spaces and
+     * invisible characters go. The same cleaned text is baked into the script, tested and
+     * saved, so the three can no longer disagree (a trailing space used to be in the script
+     * but trimmed from the saved copy, which read later as "wrong password").
+     */
+    fun normalizeAuthKey(raw: String): String = buildString {
+        for (c in raw) {
+            when (c) {
+                in '۰'..'۹' -> append('0' + (c - '۰'))
+                in '٠'..'٩' -> append('0' + (c - '٠'))
+                // Quotes and backslashes would break the script's JS string and the core's TOML.
+                else -> if (c.code in 33..126 && c !in "\"\\'") append(c)
+            }
+        }
+    }
+
+    /**
+     * The core takes ONE auth_key for every script_id. The password shared by the most relays
+     * (ties go to the first) is the one the tunnel uses; a relay with any other password is
+     * left out of the tunnel, because every request sent to it would come back as the decoy.
+     */
+    fun tunnelAuthKey(relays: List<GstRelay>): String? {
+        val usable = relays.filter { it.deploymentId.isNotBlank() && it.authKey.isNotBlank() }
+        if (usable.isEmpty()) return null
+        val counts = usable.groupingBy { it.authKey }.eachCount()
+        val best = counts.values.maxOrNull() ?: return null
+        return usable.first { counts[it.authKey] == best }.authKey
+    }
+
     fun getRelays(context: Context): List<GstRelay> {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val relaysJson = prefs.getString(PREFS_KEY_RELAYS, "[]") ?: "[]"
@@ -76,8 +116,8 @@ object GstConfigManager {
                 list.add(
                     GstRelay(
                         id = obj.getString("id"),
-                        deploymentId = obj.getString("deploymentId"),
-                        authKey = obj.getString("authKey")
+                        deploymentId = normalizeDeploymentId(obj.getString("deploymentId")),
+                        authKey = obj.getString("authKey").trim()
                     )
                 )
             }
@@ -103,7 +143,9 @@ object GstConfigManager {
     fun getSelectedSniList(context: Context): List<String> {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val json = prefs.getString(PREFS_KEY_SNI_LIST, null)
-        if (json == null) return listOf("www.google.com", "googleapis.com") // default fallback
+        // The upstream reference cover name. This used to be a random pick between it and
+        // googleapis.com, so two connects in a row could take different paths.
+        if (json == null) return listOf("www.google.com")
         
         val list = mutableListOf<String>()
         try {

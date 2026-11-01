@@ -1,0 +1,99 @@
+# Proguard rules specific to the core module.
+
+# Constructors accessed via reflection in DefaultRenderersFactory
+-dontnote androidx.media3.decoder.vp9.LibvpxVideoRenderer
+-keepclassmembers class androidx.media3.decoder.vp9.LibvpxVideoRenderer {
+  <init>(long, android.os.Handler, androidx.media3.exoplayer.video.VideoRendererEventListener, int);
+}
+-dontnote androidx.media3.decoder.av1.Libdav1dVideoRenderer
+-keepclassmembers class androidx.media3.decoder.av1.Libdav1dVideoRenderer {
+  <init>(long, android.os.Handler, androidx.media3.exoplayer.video.VideoRendererEventListener, int);
+}
+-dontnote androidx.media3.decoder.ffmpeg.ExperimentalFfmpegVideoRenderer
+-keepclassmembers class androidx.media3.decoder.ffmpeg.ExperimentalFfmpegVideoRenderer {
+  <init>(long, android.os.Handler, androidx.media3.exoplayer.video.VideoRendererEventListener, int);
+}
+-dontnote androidx.media3.decoder.opus.LibopusAudioRenderer
+-keepclassmembers class androidx.media3.decoder.opus.LibopusAudioRenderer {
+  <init>(android.os.Handler, androidx.media3.exoplayer.audio.AudioRendererEventListener, androidx.media3.exoplayer.audio.AudioSink);
+}
+-dontnote androidx.media3.decoder.flac.LibflacAudioRenderer
+-keepclassmembers class androidx.media3.decoder.flac.LibflacAudioRenderer {
+  <init>(android.os.Handler, androidx.media3.exoplayer.audio.AudioRendererEventListener, androidx.media3.exoplayer.audio.AudioSink);
+}
+-dontnote androidx.media3.decoder.iamf.IamfAudioRenderer$Builder
+-keepclasseswithmembers class androidx.media3.decoder.iamf.IamfAudioRenderer$Builder {
+  <init>(androidx.media3.exoplayer.audio.AudioSink);
+  androidx.media3.decoder.iamf.IamfAudioRenderer$Builder setEventHandlerAndListener(android.os.Handler, androidx.media3.exoplayer.audio.AudioRendererEventListener);
+  androidx.media3.decoder.iamf.IamfAudioRenderer$Builder setOutputSampleType(int);
+  androidx.media3.decoder.iamf.IamfAudioRenderer$Builder setChannelOrdering(int);
+  androidx.media3.decoder.iamf.IamfAudioRenderer$Builder setRequestedOutputLayout(int);
+  androidx.media3.decoder.iamf.IamfAudioRenderer$Builder setRequestedMixPresentationId(long);
+  androidx.media3.decoder.iamf.IamfAudioRenderer$Builder setEnableIntegratedBinaural(boolean);
+  androidx.media3.decoder.iamf.IamfAudioRenderer build();
+}
+-dontnote androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer
+-keepclassmembers class androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer {
+  <init>(android.os.Handler, androidx.media3.exoplayer.audio.AudioRendererEventListener, androidx.media3.exoplayer.audio.AudioSink);
+}
+-dontnote androidx.media3.decoder.midi.MidiRenderer
+-keepclassmembers class androidx.media3.decoder.midi.MidiRenderer {
+  <init>(android.content.Context, android.os.Handler, androidx.media3.exoplayer.audio.AudioRendererEventListener, androidx.media3.exoplayer.audio.AudioSink);
+}
+-dontnote androidx.media3.decoder.mpegh.MpeghAudioRenderer
+-keepclassmembers class androidx.media3.decoder.mpegh.MpeghAudioRenderer {
+  <init>(android.os.Handler, androidx.media3.exoplayer.audio.AudioRendererEventListener, androidx.media3.exoplayer.audio.AudioSink);
+}
+
+# Constructors accessed via reflection in DefaultDownloaderFactory
+-dontnote androidx.media3.exoplayer.dash.offline.DashDownloader$Factory
+-keepclassmembers class androidx.media3.exoplayer.dash.offline.DashDownloader$Factory {
+  <init>(androidx.media3.datasource.cache.CacheDataSource$Factory);
+}
+-dontnote androidx.media3.exoplayer.hls.offline.HlsDownloader$Factory
+-keepclassmembers class androidx.media3.exoplayer.hls.offline.HlsDownloader$Factory {
+  <init>(androidx.media3.datasource.cache.CacheDataSource$Factory);
+}
+-dontnote androidx.media3.exoplayer.smoothstreaming.offline.SsDownloader$Factory
+-keepclassmembers class androidx.media3.exoplayer.smoothstreaming.offline.SsDownloader$Factory {
+  <init>(androidx.media3.datasource.cache.CacheDataSource$Factory);
+}
+
+# Constructors accessed via reflection in DefaultMediaSourceFactory
+-dontnote androidx.media3.exoplayer.dash.DashMediaSource$Factory
+-keepclasseswithmembers class androidx.media3.exoplayer.dash.DashMediaSource$Factory {
+  <init>(androidx.media3.datasource.DataSource$Factory);
+}
+-dontnote androidx.media3.exoplayer.hls.HlsMediaSource$Factory
+-keepclasseswithmembers class androidx.media3.exoplayer.hls.HlsMediaSource$Factory {
+  <init>(androidx.media3.datasource.DataSource$Factory);
+}
+-dontnote androidx.media3.exoplayer.smoothstreaming.SsMediaSource$Factory
+-keepclasseswithmembers class androidx.media3.exoplayer.smoothstreaming.SsMediaSource$Factory {
+  <init>(androidx.media3.datasource.DataSource$Factory);
+}
+-dontnote androidx.media3.exoplayer.rtsp.RtspMediaSource$Factory
+-keepclasseswithmembers class androidx.media3.exoplayer.rtsp.RtspMediaSource$Factory {
+  <init>();
+}
+
+# Conditional keeps for constructors and methods accessed via reflection in PlaybackVideoGraphWrapper
+-if class * implements androidx.media3.exoplayer.ExoPlayer {
+    public void setVideoEffects(java.util.List);
+}
+-keepclasseswithmembers class androidx.media3.effect.SingleInputVideoGraph$Factory {
+  <init>(androidx.media3.common.VideoFrameProcessor$Factory);
+}
+
+-if class * implements androidx.media3.exoplayer.ExoPlayer {
+    public void setVideoEffects(java.util.List);
+}
+-keepclasseswithmembers class androidx.media3.effect.DefaultVideoFrameProcessor$Factory$Builder {
+  <init>();
+  androidx.media3.effect.DefaultVideoFrameProcessor$Factory build();
+  androidx.media3.effect.DefaultVideoFrameProcessor$Factory$Builder setEnableReplayableCache(boolean);
+}
+
+# These notes are independent of the keep rules
+-dontnote androidx.media3.effect.SingleInputVideoGraph$Factory
+-dontnote androidx.media3.effect.DefaultVideoFrameProcessor$Factory$Builder

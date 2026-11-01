@@ -28,6 +28,7 @@ object Appearance {
     private const val KEY_TEXT_SCALE = "app_text_scale"
     private const val KEY_TEXT_SCALE_AUTO = "app_text_scale_auto"
     private const val KEY_LABEL_SCALE = "home_label_scale"
+    private const val KEY_HOME_WIDGET = "home_connection_widget"
 
     /** Percent. 100 is the size the grid picks for itself from the space available. */
     const val SCALE_MIN = 60
@@ -83,6 +84,16 @@ object Appearance {
     var labelScale by mutableStateOf(100)
         private set
 
+    /**
+     * Whether the connection widget sits at the top of the home board (HomeConnectionWidget).
+     *
+     * On by default: it is the answer to "am I connected, through what, and where" the app's home
+     * screen otherwise gives one lamp at a time. A user who removes it from the board turns this
+     * off; Settings > Display and Widget Studio turn it back on.
+     */
+    var homeWidget by mutableStateOf(true)
+        private set
+
     /** Seeds everything from disk. Called once, at activity start. */
     fun init(context: Context) {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
@@ -95,6 +106,13 @@ object Appearance {
         textScaleAuto = prefs.getBoolean(KEY_TEXT_SCALE_AUTO, true)
         textScale = prefs.getInt(KEY_TEXT_SCALE, 100).coerceIn(SCALE_MIN, SCALE_MAX)
         labelScale = prefs.getInt(KEY_LABEL_SCALE, 100).coerceIn(SCALE_MIN, SCALE_MAX)
+        homeWidget = prefs.getBoolean(KEY_HOME_WIDGET, true)
+    }
+
+    fun setHomeWidget(context: Context, enabled: Boolean) {
+        PreferenceManager.getDefaultSharedPreferences(context)
+            .edit().putBoolean(KEY_HOME_WIDGET, enabled).apply()
+        homeWidget = enabled
     }
 
     fun setIconScale(context: Context, percent: Int) {

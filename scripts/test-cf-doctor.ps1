@@ -20,7 +20,7 @@ $out = Join-Path $repo 'build/doctor-tests'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 $main = Join-Path $repo 'app/src/main/java/com/mlmvpn/scanner/engines/cfdoctor'
 $files = @()
-if (Test-Path $main) { $files += Get-ChildItem $main -Filter '*.kt' | Where-Object { $_.Name -notmatch '^(Android|ConfigProbes|St1RealPath|NativeProbe|ScannerStage|DoctorEngine)' } | ForEach-Object FullName }
+if (Test-Path $main) { $files += Get-ChildItem $main -Filter '*.kt' | Where-Object { $_.Name -notmatch '^(Android|ConfigProbes|St1RealPath|NativeProbe|ScannerStage|DoctorEngine|DeepNet|DeepReport|DeepStages|DeepScan|DeepSources|NetInfo)' } | ForEach-Object FullName }
 $files += Join-Path $repo 'app/src/main/java/com/mlmvpn/scanner/utils/SecretRedactor.kt'
 $tests = Get-ChildItem (Join-Path $repo 'app/src/test/java/com/mlmvpn/scanner/engines/cfdoctor') -Filter '*.kt'
 $files += $tests | ForEach-Object FullName

@@ -16,6 +16,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import com.mlmvpn.scanner.utils.GameSessionOwner
 
 class OpenVpnService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -24,14 +25,17 @@ class OpenVpnService : VpnService() {
     @Volatile private var session: Session? = null
     @Volatile private var shuttingDown = false
     private var latestStartId = 0
+    private var currentOwner: String? = null
     private var quotaSwitchFrom: Session? = null
     private val attempted = mutableSetOf<String>()
     private val repo by lazy { OpenVpnRepository.get(this) }
     private data class Command(val profile: String? = null, val account: String? = null,
-        val automatic: Boolean = false, val startId: Int = 0, val finished: Session? = null)
+        val automatic: Boolean = false, val startId: Int = 0, val finished: Session? = null,
+        val owner: String? = null, val expectedOwner: String? = null)
 
     override fun onCreate() {
         super.onCreate()
+        com.mlmvpn.scanner.utils.SafeStart.attach(this)
         if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "OpenVPN", NotificationManager.IMPORTANCE_LOW))
         scope.launch {
@@ -58,6 +62,13 @@ class OpenVpnService : VpnService() {
                     } else if (latestStartId == finished.requestId) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelfResult(finished.requestId)
+                    }
+                    continue
+                }
+                if (command.expectedOwner != null && command.expectedOwner != currentOwner) continue
+                if (command.profile != null && !GameSessionOwner.accepts(command.owner)) {
+                    if (session == null && latestStartId == command.startId) {
+                        stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(command.startId)
                     }
                     continue
                 }
@@ -100,17 +111,28 @@ class OpenVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val owner = intent?.getStringExtra(GameSessionOwner.EXTRA)
+        val expected = intent?.getStringExtra(GameSessionOwner.EXPECTED)
+        if (intent?.action == CONNECT && !GameSessionOwner.accepts(owner)) {
+            if (session == null && !OpenVpnRuntime.connection.value.active) {
+                startForeground(NOTIFICATION, notification("DISCONNECTED"))
+                stopForeground(STOP_FOREGROUND_REMOVE); stopSelfResult(startId)
+            }
+            return START_NOT_STICKY
+        }
+        if (expected != null && expected != currentOwner) return START_NOT_STICKY
         latestStartId = startId
         if (intent?.action == CONNECT) {
+            currentOwner = owner
             startForeground(NOTIFICATION, notification("CONNECTING"))
             val p = intent.getStringExtra("profile"); val a = intent.getStringExtra("account")
             if (p != null && a != null) {
                 if (!OpenVpnRuntime.connection.value.active) OpenVpnRuntime.mutable.value = OpenVpnConnection(ConnectionPhase.CONNECTING, p, a)
-                commands.trySend(Command(p, a, startId = startId))
+                commands.trySend(Command(p, a, startId = startId, owner = owner))
             } else { commands.trySend(Command(startId = startId)) }
         } else {
             session?.stop()
-            commands.trySend(Command(startId = startId))
+            commands.trySend(Command(startId = startId, expectedOwner = expected))
         }
         // Do not resurrect credentials or replace another VPN after process death.
         return START_NOT_STICKY
@@ -123,6 +145,7 @@ class OpenVpnService : VpnService() {
     }
 
     private suspend fun startSession(command: Command) {
+        if (!GameSessionOwner.accepts(command.owner)) return
         if (!command.automatic) attempted.clear()
         val account = command.account ?: return
         val profile = command.profile ?: return
@@ -158,6 +181,7 @@ class OpenVpnService : VpnService() {
         }
     }
     override fun onDestroy() {
+        com.mlmvpn.scanner.utils.SafeStart.detach(this)
         shuttingDown = true
         session?.stop()
         commands.close()
@@ -187,6 +211,7 @@ class OpenVpnService : VpnService() {
             stopped.set(true)
             handle.get().takeIf { it != 0L }?.let { runCatching { OpenVpnNative.stop(it) } }
             relay?.let { r -> relay = null; runCatching { r.close() } }
+            proxy?.let { p -> proxy = null; runCatching { p.close() } }
             synchronized(this) { runCatching { retainedTun?.close() }; retainedTun = null }
         }
 
@@ -220,7 +245,14 @@ class OpenVpnService : VpnService() {
                 // through OpenVpnSplitRelay: a direct connection whose opening bytes are cut
                 // into misaligned segments. No second tunnel -- the user ruled that out, and
                 // it would cost the speed this engine exists for.
-                val config = if (ProfileRuntime.isTunnelBear(profile)) {
+                val config = if (profile.wsProxy != null) {
+                    val p = com.mlmvpn.scanner.engines.windscribe.WsProxyClient(this@OpenVpnService) {
+                        terminal = "PROXY_FAILED"; stop()
+                    }
+                    proxy = p
+                    val port = p.start(profile.wsProxy)
+                    ProfileRuntime.effective(profile, tcp = false, relayPort = port)
+                } else if (ProfileRuntime.isTunnelBear(profile)) {
                     // The addresses the delay test saw answer, not a fresh lookup: the name is a
                     // pool of ~20 servers and DNS returns a different one every time.
                     val hosts = (profile.probe?.healthy.orEmpty() + OpenVpnLatency.candidates(profile))
@@ -229,6 +261,12 @@ class OpenVpnService : VpnService() {
                     relay = r
                     r.start()
                     ProfileRuntime.effective(profile, tcp = true, relayPort = r.localPort)
+                } else if (profile.splitTcp && profile.remotes.first().protocol.startsWith("tcp")) {
+                    val remote = profile.remotes.first()
+                    val r = OpenVpnSplitRelay(this@OpenVpnService, listOf(remote.host), remote.port)
+                    relay = r
+                    r.start()
+                    ProfileRuntime.effective(profile, tcp = false, relayPort = r.localPort)
                 } else ProfileRuntime.effective(profile, tcp = false)
                 val id = OpenVpnNative.create()
                 check(id != 0L)
@@ -240,7 +278,9 @@ class OpenVpnService : VpnService() {
             catch (_: Exception) { terminal = "CONNECTION_FAILED" }
             catch (_: LinkageError) { terminal = "CORE_UNAVAILABLE" }
             finally {
+                if (session === this) OpenVpnSocks.stop()
                 relay?.let { r -> relay = null; runCatching { r.close() } }
+                proxy?.let { p -> proxy = null; runCatching { p.close() } }
                 synchronized(this) { runCatching { retainedTun?.close() }; retainedTun = null }
                 handle.getAndSet(0).takeIf { it != 0L }?.let { OpenVpnNative.release(it) }
                 if (session === this) {
@@ -252,29 +292,61 @@ class OpenVpnService : VpnService() {
             }
         }
         @Volatile private var relay: OpenVpnSplitRelay? = null
+        @Volatile private var proxy: com.mlmvpn.scanner.engines.windscribe.WsProxyClient? = null
 
         @Keep fun configureTun(operation: String, value: Int): Boolean = runCatching {
             when (operation) {
                 "new" -> { builder = Builder().setSession("MLMVPN OpenVPN").setBlocking(false); true }
-                "mtu" -> { builder!!.setMtu(value.coerceIn(576, 9000)); true }
+                // The server's value, unless the user set OpenVPN's MTU (or the app-wide one) in Settings.
+                "mtu" -> {
+                    val ns = com.mlmvpn.scanner.utils.NetworkSettings
+                    val own = ns.methodMtu(this@OpenVpnService, com.mlmvpn.scanner.utils.NetworkSettings.Method.OPENVPN).takeIf { it > 0 }
+                        ?: ns.globalMtu(this@OpenVpnService).takeIf { it > 0 }
+                    builder!!.setMtu(own ?: value.coerceIn(576, 9000)); true
+                }
                 "protect" -> protect(value)
                 else -> false
             }
         }.getOrDefault(false)
         @Keep fun addAddress(address: String, prefix: Int) = runCatching { builder!!.addAddress(address, prefix); true }.getOrDefault(false)
-        @Keep fun addRoute(address: String, prefix: Int) = runCatching { builder!!.addRoute(address, prefix); true }.getOrDefault(false)
+        @Keep fun addRoute(address: String, prefix: Int) = runCatching {
+            // A carrier of this tunnel's own connection (Windscribe over WARP) stays outside it.
+            OpenVpnBypass.split(address, prefix).forEach { (a, p) -> builder!!.addRoute(a, p) }; true
+        }.getOrDefault(false)
         @Keep fun addDns(address: String, ignored: Int) = runCatching { builder!!.addDnsServer(address); true }.getOrDefault(false)
         @Keep fun addSearchDomain(domain: String, ignored: Int) = runCatching { builder!!.addSearchDomain(domain); true }.getOrDefault(false)
         @Keep fun establishTun(): Int {
             if (stopped.get()) return -1
             // An IPv6 DNS server also enables that family. Capture all IPv6 explicitly
             // even on IPv4-only profiles so it cannot fall through to the physical link.
-            builder?.addRoute("::", 0)
+            OpenVpnBypass.split("::", 0).forEach { (a, p) -> builder?.addRoute(a, p) }
+            builder?.let { applySplitTunnel(it) }
+            // Smart Iran route: Iran's ranges leave outside the pushed routes (Android 13+).
+            builder?.let { com.mlmvpn.core.tunnel.SmartIranRoute.excludeIranRoutes(this@OpenVpnService, it) }
             val tun = builder?.establish() ?: return -1
             retainedTun?.close()
             retainedTun = tun
             return ParcelFileDescriptor.dup(tun.fileDescriptor).detachFd()
         }
+        /**
+         * The app-wide split tunnel (Settings > Advanced VPN), as the Xray and WireGuard tunnels apply it.
+         * This app stays inside: the tunnel is proven with its own request, and its Local Port
+         * ([OpenVpnSocks]) is how LAN sharing reaches the tunnel.
+         */
+        private fun applySplitTunnel(b: Builder) {
+            val split = com.mlmvpn.core.tunnel.SplitTunnelSettings(this@OpenVpnService)
+            // Smart Iran route: Iranian apps never tunnelled (out of an allow list, or excluded).
+            val (apps, iranian) = com.mlmvpn.core.tunnel.SmartIranRoute.appsFor(this@OpenVpnService, split.mode(), split.packages() - packageName)
+            when (split.mode()) {
+                com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.INCLUDE -> if (apps.isNotEmpty()) {
+                    (apps + packageName).forEach { runCatching { b.addAllowedApplication(it) } }
+                }
+                com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.EXCLUDE -> apps.forEach { runCatching { b.addDisallowedApplication(it) } }
+                com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.ALL -> Unit
+            }
+            if (apps.isEmpty() || split.mode() != com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.INCLUDE) iranian.forEach { runCatching { b.addDisallowedApplication(it) } }
+        }
+
         @Keep fun onCoreEvent(name: String, error: Boolean) {
             if (session !== this || stopped.get()) return
             val phase = when (name) {
@@ -330,6 +402,10 @@ class OpenVpnService : VpnService() {
                         exitIp = exit.first, exitCountry = exit.second,
                     )
                     notifyStatus("CONNECTED")
+                    // So the Quick Settings tile can bring this profile back (LastEngine).
+                    com.mlmvpn.scanner.data.LastEngine.recordOpenVpn(this@OpenVpnService, old.profileId, old.accountId)
+                    // The Local Port, as every Xray engine offers it: LAN sharing and local apps ride it.
+                    OpenVpnSocks.start(this@OpenVpnService)
                     return
                 }
                 if (attempt < 2) Thread.sleep(2_000)

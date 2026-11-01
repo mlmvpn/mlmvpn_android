@@ -75,7 +75,7 @@ class ScannerStage(private val context: Context, private val env: NetEnv, privat
             if (c.sni.isBlank()) c.sni = c.wsHost.ifBlank { c.address }
             if (c.wsHost.isBlank()) c.wsHost = c.address
             c.address = ip
-            val r = safe { native.measure(XrayJsonGenerator.generateSpeedtestConfig(c), 10_000) }
+            val r = safe { native.measure(XrayJsonGenerator.generateSpeedtestConfig(c, strategyStage = null), 10_000) }
             runner.record(Evidence("W4", "scan_core:$shape", if (r?.ms != null) "ok" else "native.${r?.code ?: "internal_error"}",
                 numbers = mapOf("delay" to (r?.ms ?: 0L))))
             if (r?.ms != null) coreOk++

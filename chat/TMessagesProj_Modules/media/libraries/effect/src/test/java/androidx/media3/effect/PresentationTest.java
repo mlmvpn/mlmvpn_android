@@ -1,0 +1,250 @@
+/*
+ * Copyright 2022 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package androidx.media3.effect;
+
+import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertThrows;
+
+import androidx.media3.common.C;
+import androidx.media3.common.util.Size;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+/**
+ * Unit tests for {@link Presentation}.
+ *
+ * <p>See {@code PresentationPixelTest} for pixel tests testing {@link Presentation}.
+ */
+@RunWith(AndroidJUnit4.class)
+public final class PresentationTest {
+  @Test
+  public void configure_noEdits_leavesFramesUnchanged() {
+    int inputWidth = 200;
+    int inputHeight = 150;
+    Presentation presentation = Presentation.createForHeight(C.LENGTH_UNSET);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isTrue();
+    assertThat(outputSize.getWidth()).isEqualTo(inputWidth);
+    assertThat(outputSize.getHeight()).isEqualTo(inputHeight);
+  }
+
+  @Test
+  public void configure_createForHeight_changesDimensions() {
+    int inputWidth = 200;
+    int inputHeight = 150;
+    int requestedHeight = 300;
+    Presentation presentation = Presentation.createForHeight(requestedHeight);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isFalse();
+    assertThat(outputSize.getWidth()).isEqualTo(requestedHeight * inputWidth / inputHeight);
+    assertThat(outputSize.getHeight()).isEqualTo(requestedHeight);
+  }
+
+  @Test
+  public void configure_createForAspectRatio_changesDimensions() {
+    int inputWidth = 300;
+    int inputHeight = 200;
+    float aspectRatio = 2f;
+    Presentation presentation =
+        Presentation.createForAspectRatio(aspectRatio, Presentation.LAYOUT_SCALE_TO_FIT);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isFalse();
+    assertThat(outputSize.getWidth()).isEqualTo(Math.round(aspectRatio * inputHeight));
+    assertThat(outputSize.getHeight()).isEqualTo(inputHeight);
+  }
+
+  @Test
+  public void configure_createForWidthAndHeight_changesDimensions() {
+    int inputWidth = 300;
+    int inputHeight = 200;
+    int requestedWidth = 100;
+    int requestedHeight = 300;
+    Presentation presentation =
+        Presentation.createForWidthAndHeight(
+            requestedWidth, requestedHeight, Presentation.LAYOUT_SCALE_TO_FIT);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isFalse();
+    assertThat(outputSize.getWidth()).isEqualTo(requestedWidth);
+    assertThat(outputSize.getHeight()).isEqualTo(requestedHeight);
+  }
+
+  @Test
+  public void configure_createForShortSideWithPortraitInput_changesDimension() {
+    int inputWidth = 720;
+    int inputHeight = 1280;
+    Presentation presentation = Presentation.createForShortSide(1080);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isFalse();
+    assertThat(outputSize.getWidth()).isEqualTo(1080);
+    assertThat(outputSize.getHeight()).isEqualTo(1920);
+  }
+
+  @Test
+  public void configure_createForShortSideWithPortraitInputNoEdit_leavesFramesUnchanged() {
+    int inputWidth = 720;
+    int inputHeight = 1280;
+    Presentation presentation = Presentation.createForShortSide(inputWidth);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isTrue();
+    assertThat(outputSize.getWidth()).isEqualTo(inputWidth);
+    assertThat(outputSize.getHeight()).isEqualTo(inputHeight);
+  }
+
+  @Test
+  public void configure_createForShortSideWithLandscapeInput_changesDimension() {
+    int inputWidth = 1280;
+    int inputHeight = 720;
+    Presentation presentation = Presentation.createForShortSide(1080);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isFalse();
+    assertThat(outputSize.getWidth()).isEqualTo(1920);
+    assertThat(outputSize.getHeight()).isEqualTo(1080);
+  }
+
+  @Test
+  public void configure_createForShortSideWithLandscapeInputNoEdit_leavesFramesUnchanged() {
+    int inputWidth = 1280;
+    int inputHeight = 720;
+    Presentation presentation = Presentation.createForShortSide(720);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isTrue();
+    assertThat(outputSize.getWidth()).isEqualTo(1280);
+    assertThat(outputSize.getHeight()).isEqualTo(720);
+  }
+
+  @Test
+  public void configure_createForShortSideWithDivisor1_doesNotRoundOutput() {
+    int inputWidth = 1080;
+    int inputHeight = 1920;
+    Presentation presentation = Presentation.createForShortSide(480).copyWithUnsetSideRoundedTo(1);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isFalse();
+    assertThat(outputSize.getWidth()).isEqualTo(480);
+    assertThat(outputSize.getHeight()).isEqualTo(853);
+  }
+
+  @Test
+  public void configure_createForShortSideWithDivisor2_roundsOutput() {
+    int inputWidth = 1080;
+    int inputHeight = 1920;
+    Presentation presentation = Presentation.createForShortSide(480).copyWithUnsetSideRoundedTo(2);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isFalse();
+    assertThat(outputSize.getWidth()).isEqualTo(480);
+    assertThat(outputSize.getHeight()).isEqualTo(854);
+  }
+
+  @Test
+  public void configure_createForHeightWithDivisor1_doesNotRoundOutput() {
+    int inputWidth = 1920;
+    int inputHeight = 1080;
+    Presentation presentation = Presentation.createForHeight(480).copyWithUnsetSideRoundedTo(1);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isFalse();
+    assertThat(outputSize.getWidth()).isEqualTo(853);
+    assertThat(outputSize.getHeight()).isEqualTo(480);
+  }
+
+  @Test
+  public void configure_createForHeightWithDivisor2_roundsOutput() {
+    int inputWidth = 1920;
+    int inputHeight = 1080;
+    Presentation presentation = Presentation.createForHeight(480).copyWithUnsetSideRoundedTo(2);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isFalse();
+    assertThat(outputSize.getWidth()).isEqualTo(854);
+    assertThat(outputSize.getHeight()).isEqualTo(480);
+  }
+
+  @Test
+  public void configure_createForHeightWithDivisor3_doesNotRoundSetSideLength() {
+    int inputWidth = 4;
+    int inputHeight = 5;
+    Presentation presentation = Presentation.createForHeight(4).copyWithUnsetSideRoundedTo(3);
+
+    Size outputSize = presentation.configure(inputWidth, inputHeight);
+    boolean isNoOp = presentation.isNoOp(inputWidth, inputHeight);
+
+    assertThat(isNoOp).isFalse();
+    assertThat(outputSize.getWidth()).isEqualTo(3);
+    assertThat(outputSize.getHeight()).isEqualTo(4);
+  }
+
+  @Test
+  public void copyWithUnsetSideRoundedTo_withWidthAndHeightSet_throwsIllegalStateException() {
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            Presentation.createForWidthAndHeight(480, 854, Presentation.LAYOUT_SCALE_TO_FIT)
+                .copyWithUnsetSideRoundedTo(1));
+  }
+
+  @Test
+  public void copyWithUnsetSideRoundedTo_withAspectRatioSet_throwsIllegalStateException() {
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            Presentation.createForAspectRatio(1.5f, Presentation.LAYOUT_SCALE_TO_FIT)
+                .copyWithUnsetSideRoundedTo(1));
+  }
+
+  @Test
+  public void copyWithUnsetSideRoundedTo_withInvalidDivisor_throwsIllegalStateException() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> Presentation.createForHeight(10).copyWithUnsetSideRoundedTo(0));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> Presentation.createForHeight(10).copyWithUnsetSideRoundedTo(-1));
+  }
+}

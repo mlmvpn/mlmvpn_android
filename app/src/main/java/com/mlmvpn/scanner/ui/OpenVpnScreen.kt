@@ -133,7 +133,13 @@ fun OpenVpnScreen(onBack: () -> Unit, onStore: () -> Unit, onIran: () -> Unit, v
             onServers = { page = Page.SERVERS },
             onAccounts = { page = Page.ACCOUNTS },
             onGuide = { page = Page.GUIDE },
-            onImport = { picker.launch(arrayOf("*/*")) },
+            // A phone with no file picker (TV boxes) has nothing to answer this: said, not a crash (1.2.41).
+            onImport = {
+                try { picker.launch(arrayOf("*/*")) }
+                catch (_: android.content.ActivityNotFoundException) {
+                    android.widget.Toast.makeText(context, context.getString(R.string.amz_no_file_picker), android.widget.Toast.LENGTH_LONG).show()
+                }
+            },
         )
         Page.SERVERS -> ServersPage(
             data = data, connection = connection, testing = testing, testTotal = testTotal, fa = fa,
@@ -171,7 +177,7 @@ fun OpenVpnScreen(onBack: () -> Unit, onStore: () -> Unit, onIran: () -> Unit, v
             },
             onEdit = { a -> editing = a?.id; page = Page.ACCOUNT_EDIT },
             onAutoSwitch = { enabled -> vm.change { it.autoSwitch(enabled) } },
-            onCreate = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.tunnelbear.com/account/signup"))) },
+            onCreate = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.tunnelbear.com/account/signup"))) } /* no browser installed: crash #576 */ },
             onGuide = { page = Page.GUIDE },
         )
         Page.ACCOUNT_EDIT -> AccountEditPage(
@@ -185,7 +191,7 @@ fun OpenVpnScreen(onBack: () -> Unit, onStore: () -> Unit, onIran: () -> Unit, v
             onBack = { page = Page.MAIN },
             onIran = onIran,
             onStore = onStore,
-            onSite = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.tunnelbear.com/account"))) },
+            onSite = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.tunnelbear.com/account"))) } /* no browser installed: crash #576 */ },
         )
     }
 }
@@ -250,6 +256,7 @@ private fun MainPage(
             fontSize = 17.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
         )
+        com.mlmvpn.scanner.ui.RouteChips()
         val sub = when {
             failed -> connection.error?.let { errorText(it) }
             working && connection.detail == "VERIFYING" -> tr("بررسی عبور واقعی داده…", "Checking that data really passes…")

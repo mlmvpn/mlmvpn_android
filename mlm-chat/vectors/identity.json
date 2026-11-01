@@ -1,0 +1,17 @@
+{
+  "about": "SPEC 2 and 14.1: personal code (30 digits) = libsignal NumericFingerprint v0, 5200 SHA-512 iterations over version||sk||ik then ||sk; security number = both codes, smaller first; display name = name·first 4 digits",
+  "alice": {
+    "code": "792543631967221045446520803366",
+    "ed25519_seed": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+    "ik": "2de3dfd5619c685a94342b64c7eda230d9705ffbd23414007f2b3a124d411166",
+    "sk": "b533d8ad9fcfbdde0b481c1b334ddc3c53412fd614564e7e5afd020368d382c3"
+  },
+  "bob": {
+    "code": "490524996602475030587171281161",
+    "ed25519_seed": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+    "ik": "6133878b639bf8cdfd753fc0068bc3167182d798d0b5985c69d9f9a0569a791e",
+    "sk": "705fbac01f5519899f437bc42e40255ae9ab54bff00de3433af7d687d9e71ad5"
+  },
+  "display_name_alice": "alice·7925",
+  "security_number": "490524996602475030587171281161792543631967221045446520803366"
+}

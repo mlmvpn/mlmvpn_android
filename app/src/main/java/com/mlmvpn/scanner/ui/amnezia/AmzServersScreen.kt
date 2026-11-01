@@ -122,6 +122,8 @@ private data class RowModel(
     val pending: Boolean,
     /** 0 none, 1 connecting to it, 2 connected to it. */
     val active: Int,
+    /** Working on this network only from inside Cloudflare. */
+    val cf: Boolean = false,
 )
 
 @Immutable
@@ -216,6 +218,7 @@ internal fun AmzServersScreen(
             item(key = "tools", contentType = "tools") {
                 TestBar(
                     running = progress.running, done = progress.done, total = progress.total, alive = progress.alive,
+                    cf = progress.via == com.mlmvpn.scanner.engines.amnezia.AmzStat.VIA_CF,
                     refreshing = refreshing, groupChip = groupChip,
                     onBest = { AmzEngine.test(AmzTestMode.BEST, kind = segKind(seg)) },
                     onAll = { AmzEngine.test(AmzTestMode.ALL, kind = segKind(seg)) },
@@ -257,6 +260,7 @@ internal fun AmzServersScreen(
                         status = when { st?.alive == true -> 1; st?.tested == true -> 2; else -> 0 },
                         pending = id in pending,
                         active = if (id == activeId) activeLevel else 0,
+                        cf = st?.viaCloudflare == true,
                     )
                     Box(Modifier.animateItemPlacement()) {
                         SwipeRow(
@@ -436,6 +440,7 @@ private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
 private fun TestBar(
     running: Boolean, done: Int, total: Int, alive: Int, refreshing: Boolean, groupChip: String?,
     onBest: () -> Unit, onAll: () -> Unit, onGroup: (String) -> Unit, onDead: () -> Unit, onStop: () -> Unit,
+    cf: Boolean = false,
 ) {
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         AnimatedVisibility(running, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
@@ -444,7 +449,10 @@ private fun TestBar(
                     .padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.amz_testing, fa(done), fa(total), fa(alive)), color = Ios.Label, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.amz_testing, fa(done), fa(total), fa(alive)), color = Ios.Label, fontSize = 13.sp)
+                        if (cf) Text(stringResource(R.string.amz_testing_cf), color = Ios.SecondaryLabel, fontSize = 12.sp)
+                    }
                     Text(
                         stringResource(R.string.amz_stop), color = Ios.Red, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onStop).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -580,6 +588,7 @@ private fun ServerRow(m: RowModel, onClick: () -> Unit, onLongClick: () -> Unit)
             Spacer(Modifier.height(3.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Tag(kindLabel(m.kind), kindColor(m.kind))
+                if (m.cf) { Spacer(Modifier.width(5.dp)); Tag(stringResource(R.string.amz_via_cf), Ios.Orange) }
                 if (m.mine) { Spacer(Modifier.width(5.dp)); Tag(stringResource(R.string.amz_mine_tag), Ios.Blue) }
                 if (m.active == 2) { Spacer(Modifier.width(5.dp)); Tag(stringResource(R.string.amz_status_connected), Ios.Green) }
             }

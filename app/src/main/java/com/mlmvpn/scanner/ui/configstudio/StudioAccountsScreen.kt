@@ -25,6 +25,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.ui.configstudio.parts.CentralKit
+import com.mlmvpn.scanner.store.tr
 import com.mlmvpn.scanner.data.PanelBuild
 import com.mlmvpn.scanner.data.studio.StudioDeployer
 import com.mlmvpn.scanner.data.studio.StudioState
@@ -204,7 +206,12 @@ fun StudioAccountsScreen(
                         }
                     }
                 }
-                InfoCard(S(R.string.studio_capacity_note))
+                // The engines' room is an estimate; a central Worker's is an exact count of ids.
+                if (all.isEmpty() || all.any { !it.isCentral }) InfoCard(S(R.string.studio_capacity_note))
+                if (all.any { it.isCentral }) InfoCard(tr(
+                    "جای ورکر مرکزی دقیق است: هر حساب تعداد مشخصی شناسه می‌پذیرد؛ یکی برای خود ورکر، یکی برای هر پنل وصل‌شده و بقیه برای کاربرانی که الان فعال‌اند. کاربر خاموش یا تمام‌شده جایی نمی‌گیرد.",
+                    "A central Worker's room is exact: each account takes a set number of ids — one for the Worker, one per connected panel, the rest for the people active right now. Someone switched off or ended takes no place.",
+                ))
                 Spacer(Modifier.height(28.dp))
             }
         }
@@ -220,8 +227,10 @@ fun StudioAccountsScreen(
 @Composable
 private fun FleetSummary(all: List<StudioInstallation>) {
     val known = all.filter { it.users >= 0 }
-    val users = known.sumOf { it.users }
-    val room = known.size * ShardCapacity.FULL_AT_USERS
+    // A central Worker counts the places taken right now against its exact room; an engine, its
+    // people against the estimated band.
+    val users = known.sumOf { if (it.isCentral) it.centralLive else it.users }
+    val room = known.sumOf { if (it.isCentral) it.centralRoom.coerceAtLeast(0) else ShardCapacity.FULL_AT_USERS }
     val unreachable = all.count { !it.reachable }
 
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
@@ -298,6 +307,11 @@ private fun ShardRow(inst: StudioInstallation, onClick: () -> Unit) {
 @Composable
 private fun shardSubtitle(inst: StudioInstallation, stale: Boolean): String = when {
     !inst.reachable -> S(R.string.studio_shard_unreachable)
+    // No engine and no database here: what matters is the people and the places left on the Worker.
+    inst.isCentral -> inst.syncError?.let { CentralKit.syncProblemText(it) } ?: (
+        tr("ورکر مرکزی", "Central Worker") + " · " + S(R.string.studio_shard_users).replace("%1\$s", faNum(inst.users.coerceAtLeast(0))) +
+            " · " + tr("${faNum((inst.centralRoom - inst.centralLive).coerceAtLeast(0))} جای خالی", "${(inst.centralRoom - inst.centralLive).coerceAtLeast(0)} places free")
+        )
     inst.migrationError != null -> S(R.string.studio_engine_migration_failed)
     !inst.d1Ok -> S(R.string.studio_shard_no_database)
     stale -> S(R.string.studio_engine_update_available)

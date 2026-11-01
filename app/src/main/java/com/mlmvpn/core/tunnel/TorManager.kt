@@ -1,5 +1,9 @@
 package com.mlmvpn.core.tunnel
 
+import com.mlmvpn.scanner.utils.alive
+import com.mlmvpn.scanner.utils.killHard
+import com.mlmvpn.scanner.utils.waitUpTo
+
 import android.content.Context
 import java.io.BufferedReader
 import java.io.File
@@ -163,7 +167,11 @@ object TorManager {
         DIRECT("direct", "Direct", "No bridge; fastest where Tor is not blocked"),
         OBFS4("obfs4", "obfs4", "Bridge that hides Tor's traffic shape"),
         MEEK("meek", "Meek", "Rides a CDN; slow but hard to block"),
-        SNOWFLAKE("snowflake", "Snowflake", "Volunteer WebRTC proxies");
+        /** HTTPS to an ordinary-looking web server (lyrebird 0.8.1 carries it). */
+        WEBTUNNEL("webtunnel", "WebTunnel", "Looks like an ordinary HTTPS website"),
+        SNOWFLAKE("snowflake", "Snowflake", "Volunteer WebRTC proxies"),
+        /** Unlisted relays reached with plain Tor: no transport, only bridges. Never in AUTO. */
+        VANILLA("vanilla", "Vanilla", "Unlisted relays, no disguise");
 
         companion object {
             fun from(key: String?): TorMode =
@@ -189,6 +197,10 @@ object TorManager {
         Rung(TorMode.DIRECT, DIRECT_TIMEOUT_S),
         Rung(TorMode.MEEK, BRIDGE_TIMEOUT_S),
         Rung(TorMode.OBFS4, BRIDGE_TIMEOUT_S),
+        // WebTunnel after obfs4: fresh webtunnel bridges come from the bridge sources (none are
+        // built in), and a rung with no bridges is skipped in a moment, so it costs nothing where
+        // there are none.
+        Rung(TorMode.WEBTUNNEL, BRIDGE_TIMEOUT_S),
         Rung(TorMode.SNOWFLAKE, BRIDGE_TIMEOUT_S),
     )
 
@@ -283,7 +295,7 @@ object TorManager {
     val isTorActive: Boolean get() = activeMode != null
 
     val isRunning: Boolean
-        get() = torProcess?.isAlive == true
+        get() = torProcess?.alive() == true
 
     /** 0..100, for the connecting screen. */
     val progress: Int
@@ -304,18 +316,28 @@ object TorManager {
      * asked to stand up listeners nobody will dial.
      */
     private fun transportFor(mode: TorMode): String? = when (mode) {
-        TorMode.DIRECT, TorMode.AUTO -> null
+        TorMode.DIRECT, TorMode.AUTO, TorMode.VANILLA -> null
         TorMode.OBFS4 -> "obfs4"
         TorMode.MEEK -> "meek_lite"
+        TorMode.WEBTUNNEL -> "webtunnel"
         TorMode.SNOWFLAKE -> "snowflake"
     }
 
-    private fun bridgeLinesFor(mode: TorMode): List<String> = when (mode) {
-        TorMode.OBFS4 -> TorBridges.OBFS4
-        TorMode.MEEK -> TorBridges.MEEK
-        TorMode.SNOWFLAKE -> TorBridges.SNOWFLAKE
-        else -> emptyList()
+    private fun bridgeTransport(mode: TorMode): com.mlmvpn.core.tunnel.bridge.BridgeTransport? = when (mode) {
+        TorMode.OBFS4 -> com.mlmvpn.core.tunnel.bridge.BridgeTransport.OBFS4
+        TorMode.MEEK -> com.mlmvpn.core.tunnel.bridge.BridgeTransport.MEEK
+        TorMode.WEBTUNNEL -> com.mlmvpn.core.tunnel.bridge.BridgeTransport.WEBTUNNEL
+        TorMode.SNOWFLAKE -> com.mlmvpn.core.tunnel.bridge.BridgeTransport.SNOWFLAKE
+        TorMode.VANILLA -> com.mlmvpn.core.tunnel.bridge.BridgeTransport.VANILLA
+        else -> null
     }
+
+    /**
+     * The bridges for one attempt, from the bridge manager: the best tested ones, the user's own,
+     * or the built-in lists -- whichever the user chose on the Bridges page. See BridgeManager.
+     */
+    private fun bridgeLinesFor(context: Context, mode: TorMode): List<String> =
+        bridgeTransport(mode)?.let { com.mlmvpn.core.tunnel.bridge.BridgeManager.linesFor(context, it) } ?: emptyList()
 
     /**
      * Copy the GeoIP databases out of assets into real files Tor can open.
@@ -405,10 +427,11 @@ object TorManager {
     private fun writeTorrc(context: Context, dataDir: File, mode: TorMode): File {
         val torrc = File(dataDir, "torrc")
         val transport = transportFor(mode)
-        val bridges = bridgeLinesFor(mode)
+        val bridges = bridgeLinesFor(context, mode)
         // No transport means no PT process, which is the only case where the
-        // proxy belongs in the torrc — see the note above.
-        val proxyGoesInTorrc = transport == null && bridges.isEmpty()
+        // proxy belongs in the torrc — see the note above. Vanilla bridges have
+        // no PT either, so a chained vanilla rung dials them through the proxy.
+        val proxyGoesInTorrc = transport == null
 
         val text = buildString {
             appendLine("SocksPort 127.0.0.1:$TOR_SOCKS_PORT")
@@ -446,7 +469,7 @@ object TorManager {
             // Meek pays an HTTP round trip per cell, so the default 60s is not
             // enough for a three-hop handshake over it.
             appendLine(
-                "CircuitBuildTimeout " + if (mode == TorMode.MEEK || mode == TorMode.SNOWFLAKE) 120 else 60
+                "CircuitBuildTimeout " + if (mode == TorMode.MEEK || mode == TorMode.SNOWFLAKE || mode == TorMode.WEBTUNNEL) 120 else 60
             )
             // Short keepalive so an idle HTTP-based transport does not have its
             // bridge connection closed between Tor's own keepalive cells.
@@ -496,11 +519,13 @@ object TorManager {
                 }
             }
 
-            if (transport != null && bridges.isNotEmpty()) {
+            if (bridges.isNotEmpty()) {
                 appendLine("UseBridges 1")
-                val listener = ptMethods[transport]
-                if (listener != null) {
-                    appendLine("ClientTransportPlugin $transport socks5 $listener")
+                if (transport != null) {
+                    val listener = ptMethods[transport]
+                    if (listener != null) {
+                        appendLine("ClientTransportPlugin $transport socks5 $listener")
+                    }
                 }
                 bridges.forEach { appendLine("Bridge $it") }
             }
@@ -655,12 +680,18 @@ object TorManager {
     private fun attempt(context: Context, dataDir: File, mode: TorMode, timeoutSeconds: Long): Boolean {
         bootstrapPercent = 0
         lastLoggedPercent = -1
+        runCatching { com.mlmvpn.core.tunnel.bridge.BridgeManager.noteSessionStart(context, bridgeTransport(mode)) }
 
         // Clear the process lock, and on direct mode only, force a fresh guard
         // draw. Bridge rungs keep their guard entries: tor dials every
         // configured bridge anyway, so the entries cost nothing and the cached
         // bridge descriptor they point at saves a handshake.
         keepTorState(dataDir, mode)
+
+        if (bridgeTransport(mode) != null && bridgeLinesFor(context, mode).isEmpty()) {
+            ConnectionLog.record("$TAG ${mode.label}: no bridges to try (see Tor → Bridges)")
+            return false
+        }
 
         val transport = transportFor(mode)
         if (transport != null && !startPt(context, dataDir, transport)) {
@@ -726,6 +757,10 @@ object TorManager {
                         if (rawTail.size >= 24) rawTail.pollFirst()
                         rawTail.addLast(line)
                     }
+                    // A bridge whose descriptor arrived is a bridge that works from here.
+                    BRIDGE_DESCRIPTOR.find(line)?.let { m ->
+                        com.mlmvpn.core.tunnel.bridge.BridgeManager.noteTorUsed(m.groupValues[1])
+                    }
                     val match = Regex("Bootstrapped (\\d+)%").find(line)
                     if (match != null) {
                         val percent = match.groupValues[1].toIntOrNull() ?: 0
@@ -768,7 +803,7 @@ object TorManager {
         var stalled = false
         while (!bootstrapped.await(BOOTSTRAP_POLL_MS, TimeUnit.MILLISECONDS)) {
             if (stopping.get()) break
-            if (!process.isAlive) break
+            if (!process.alive()) break
             val now = System.currentTimeMillis()
             if (now - lastProgressMs.get() > STALL_TIMEOUT_S * 1_000) {
                 stalled = true
@@ -779,7 +814,7 @@ object TorManager {
 
         val reached = bootstrapPercent >= 100
 
-        if (!reached || !process.isAlive) {
+        if (!reached || !process.alive()) {
             // Give a dying process a moment to be reaped before classifying.
             //
             // The stdout thread counts the latch down in its `finally`, so a tor
@@ -788,11 +823,11 @@ object TorManager {
             // `else` branch and printed "hit the 300s ceiling at 0%" one second
             // after the rung started, in the field logs from two devices. The
             // ceiling was never reached; tor had already exited.
-            if (!process.isAlive || bootstrapPercent == 0) {
-                runCatching { process.waitFor(400, TimeUnit.MILLISECONDS) }
+            if (!process.alive() || bootstrapPercent == 0) {
+                runCatching { process.waitUpTo(400, TimeUnit.MILLISECONDS) }
             }
             val exitCode = try {
-                if (process.isAlive) null else process.exitValue()
+                if (process.alive()) null else process.exitValue()
             } catch (_: Exception) {
                 null
             }
@@ -890,6 +925,9 @@ object TorManager {
         "Tried for 120 seconds to get a connection to",
     )
 
+    /** `new bridge descriptor 'nick' (fresh): $FINGERPRINT~nick ...` (SafeLogging 0 keeps it). */
+    private val BRIDGE_DESCRIPTOR = Regex("new bridge descriptor '[^']*' \\((?:fresh|cached)\\): \\$([0-9A-Fa-f]{40})")
+
     private fun isRepetitiveNotice(text: String): Boolean =
         REPETITIVE_NOTICES.any { text.startsWith(it) }
 
@@ -902,7 +940,7 @@ object TorManager {
             try {
                 // Tor unwinds quickly on SIGTERM; this only bounds the wait so a
                 // restart cannot race a still-listening old process for the port.
-                process.waitFor(3, TimeUnit.SECONDS)
+                process.waitUpTo(3, TimeUnit.SECONDS)
             } catch (_: Exception) {
             }
         }
@@ -928,6 +966,7 @@ object TorManager {
     fun start(context: Context): Boolean {
         stopping.set(false)
         activeMode = null
+        runCatching { com.mlmvpn.core.tunnel.bridge.BridgeManager.refreshIfDue(context) }
 
         val dataDir = File(context.filesDir, "tor_data").apply { mkdirs() }
         val selected = selectedMode(context)
@@ -937,7 +976,16 @@ object TorManager {
         // does not raise an outer leg for a mode chainArmed() rejects.
         val rungs = if (chained) chainedLadder else ladder
 
-        val order: List<Rung> = if (selected != TorMode.AUTO) {
+        // A bridge picked by hand on the Bridges page: one attempt through it, in its own
+        // transport, whatever the mode says. Not inside the chain (only Direct/Meek fit there).
+        val pinnedMode = if (chained) null else com.mlmvpn.core.tunnel.bridge.BridgeManager.pinned(context)?.let { p ->
+            TorMode.entries.firstOrNull { bridgeTransport(it) == p.bridge.transport }
+        }
+
+        val order: List<Rung> = if (pinnedMode != null) {
+            ConnectionLog.record("$TAG using the bridge picked on the Bridges page (${pinnedMode.label})")
+            listOf(Rung(pinnedMode, BRIDGE_TIMEOUT_S))
+        } else if (selected != TorMode.AUTO) {
             // An explicit choice is exactly that: one attempt, no silent
             // fallback to a transport the user did not pick.
             listOf(Rung(selected, if (selected == TorMode.DIRECT) DIRECT_TIMEOUT_S else BRIDGE_TIMEOUT_S))

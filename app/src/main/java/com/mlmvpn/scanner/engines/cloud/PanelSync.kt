@@ -38,6 +38,8 @@ object PanelSync {
         runCatching { NetraPanel.sync(context, account) }.onFailure { Log.w(TAG, "NTR", it) }
         runCatching { GozargahPanel.sync(context, account) }.onFailure { Log.w(TAG, "GZG", it) }
         runCatching { NovaPanel.sync(context, account) }.onFailure { Log.w(TAG, "NVA", it) }
+        // The account's ONE central Worker (key GW): the other device's Worker and the panels it connected, taken in.
+        runCatching { com.mlmvpn.scanner.engines.gateway.EdgeGateway.syncBlocking(context, account) }.onFailure { Log.w(TAG, "GW", it) }
         var changed = false
         runCatching { changed = syncAccountFields(account) }.onFailure { Log.w(TAG, "fields", it) }
         if (changed) runCatching { CloudManager(context).saveAccounts() }

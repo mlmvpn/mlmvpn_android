@@ -1,5 +1,9 @@
 package com.mlmvpn.scanner.store
 
+import com.mlmvpn.scanner.utils.alive
+import com.mlmvpn.scanner.utils.killHard
+import com.mlmvpn.scanner.utils.waitUpTo
+
 import android.content.Context
 import android.os.Build
 import android.util.Log
@@ -139,6 +143,28 @@ object StoreEngines {
         return null
     }
 
+    /**
+     * Which of [needles] (ASCII) do not occur anywhere in [file]. Read in chunks that overlap by the
+     * longest needle, so a name split across two reads is still found and a 20 MB engine is never
+     * held in memory at once.
+     */
+    fun missingStrings(file: File, needles: List<String>): List<String> {
+        val left = needles.toMutableSet()
+        val overlap = (needles.maxOfOrNull { it.length } ?: 0).coerceAtLeast(1)
+        val buf = ByteArray(1 shl 20)
+        var carry = ""
+        file.inputStream().use { input ->
+            while (left.isNotEmpty()) {
+                val n = input.read(buf)
+                if (n < 0) break
+                val text = carry + String(buf, 0, n, Charsets.ISO_8859_1)
+                left.removeAll { text.contains(it) }
+                carry = text.takeLast(overlap)
+            }
+        }
+        return needles.filter { it in left }
+    }
+
     /** What running an engine once told us. */
     data class Probe(val version: String?, val output: String, val exitCode: Int?, val stillRunning: Boolean) {
         /**
@@ -161,7 +187,7 @@ object StoreEngines {
             val reader = Thread {
                 runCatching { p.inputStream.bufferedReader().forEachLine { if (out.length < 8000) out.append(it).append('\n') } }
             }.apply { isDaemon = true; start() }
-            val exited = p.waitFor(timeoutSec, TimeUnit.SECONDS)
+            val exited = p.waitUpTo(timeoutSec, TimeUnit.SECONDS)
             if (!exited) p.destroy()
             reader.join(1000)
             val text = out.toString()

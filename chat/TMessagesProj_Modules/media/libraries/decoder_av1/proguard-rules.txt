@@ -1,0 +1,18 @@
+# Proguard rules specific to the AV1 extension.
+
+# This prevents the names of native methods from being obfuscated.
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
+# Some members of this class are being accessed from native methods. Keep them unobfuscated.
+-keep class androidx.media3.decoder.VideoDecoderOutputBuffer {
+  *;
+}
+-keep class androidx.media3.decoder.DecoderInputBuffer {
+  *;
+}
+-keep class androidx.media3.decoder.av1.Dav1dDecoder {
+  *;
+}
+

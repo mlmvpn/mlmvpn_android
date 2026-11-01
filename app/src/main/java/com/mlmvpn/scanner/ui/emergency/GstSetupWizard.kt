@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mlmvpn.scanner.engines.gst.GstConfigManager
 import com.mlmvpn.scanner.engines.gst.GstDiagnostics
 import com.mlmvpn.scanner.engines.gst.GstRelay
 import com.mlmvpn.scanner.ui.home.frostedGlass
@@ -99,6 +100,7 @@ fun GstSetupWizard(
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val saveScope = rememberCoroutineScope()
 
     fun genKey() = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16)
 
@@ -138,8 +140,8 @@ fun GstSetupWizard(
         StepDots(current = step, total = 5)
 
         when (step) {
-            1 -> StepPassword(authKey, onChange = { authKey = it }, onGenerate = { authKey = genKey() })
-            2 -> StepConfirmPassword(authKey, onChange = { authKey = it }, onRegenerate = { authKey = genKey() })
+            1 -> StepPassword(authKey, onChange = { authKey = GstConfigManager.normalizeAuthKey(it) }, onGenerate = { authKey = genKey() })
+            2 -> StepConfirmPassword(authKey, onChange = { authKey = GstConfigManager.normalizeAuthKey(it) }, onRegenerate = { authKey = genKey() })
             3 -> StepScript(
                 scriptCode = scriptCode,
                 onCopyCode = {
@@ -147,12 +149,16 @@ fun GstSetupWizard(
                     shortToast(context, S(R.string.the_whole_code_was_copied_characters, faDigits(scriptCode.length.toString())))
                 },
                 onSaveFile = {
-                    val ok = saveScriptToDownloads(context, scriptCode)
-                    shortToast(
-                        context,
-                        if (ok) S(R.string.saved_to_your_downloads_folder_mlmvpn_relay)
-                        else S(R.string.could_not_save_the_file),
-                    )
+                    // Off the main thread: MediaStore is a provider in another process, and its
+                    // delete and insert held the screen for seconds (freeze report, 1.2.41).
+                    saveScope.launch {
+                        val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { saveScriptToDownloads(context, scriptCode) }
+                        shortToast(
+                            context,
+                            if (ok) S(R.string.saved_to_your_downloads_folder_mlmvpn_relay)
+                            else S(R.string.could_not_save_the_file),
+                        )
+                    }
                 },
                 onOpenScriptSite = {
                     openExternalUrl(context, "https://script.google.com/home/projects/create")
@@ -185,7 +191,7 @@ fun GstSetupWizard(
                     2 -> step = 3
                     3 -> step = 4
                     4 -> {
-                        if (deploymentId.isBlank()) {
+                        if (GstConfigManager.normalizeDeploymentId(deploymentId).isBlank()) {
                             shortToast(context, S(R.string.enter_the_deployment_id))
                         } else {
                             step = 5
@@ -193,8 +199,8 @@ fun GstSetupWizard(
                     }
                     5 -> onComplete(
                         (editRelay ?: GstRelay(deploymentId = "", authKey = "")).copy(
-                            deploymentId = deploymentId.trim(),
-                            authKey = authKey.trim(),
+                            deploymentId = GstConfigManager.normalizeDeploymentId(deploymentId),
+                            authKey = authKey,
                         )
                     )
                 }

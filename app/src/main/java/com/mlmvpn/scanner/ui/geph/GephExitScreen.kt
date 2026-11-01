@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LocationCity
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -60,7 +61,10 @@ fun GephExitScreen(onBack: () -> Unit, backLabel: String) {
     // The fastest-server run.
     var probing by remember { mutableStateOf(false) }
     var probingNow by remember { mutableStateOf<GephExitChoice?>(null) }
-    val probeResults = remember { mutableStateListOf<GephExits.Probe>() }
+    // The last run, read back: it stays on the screen after connecting and coming back.
+    val lastRun = remember { GephExits.lastRun(ctx) }
+    val probeResults = remember { mutableStateListOf<GephExits.Probe>().apply { lastRun?.second?.let { addAll(it) } } }
+    var lastRunAt by remember { mutableStateOf(lastRun?.first ?: 0L) }
     var cancel by remember { mutableStateOf(false) }
     var probeError by remember { mutableStateOf<String?>(null) }
 
@@ -98,7 +102,7 @@ fun GephExitScreen(onBack: () -> Unit, backLabel: String) {
                 label = if (probing) stringResource(
                     R.string.geph_fastest_running,
                     probingNow?.country?.let { CountryLabel.withFlag(it) } ?: "",
-                ) else stringResource(R.string.geph_fastest_run),
+                ) else stringResource(if (probeResults.isEmpty()) R.string.geph_fastest_run else R.string.geph_fastest_rerun),
                 icon = Icons.Default.Speed,
                 tint = Ios.Green,
                 busy = probing,
@@ -138,6 +142,7 @@ fun GephExitScreen(onBack: () -> Unit, backLabel: String) {
                             else ctx.getString(R.string.geph_error, it.message ?: "")
                         }
                         probing = false
+                        if (probeResults.isNotEmpty()) lastRunAt = System.currentTimeMillis()
                         probingNow = null
                     }
                 },
@@ -149,6 +154,15 @@ fun GephExitScreen(onBack: () -> Unit, backLabel: String) {
                     icon = Icons.Default.Lock,
                     tint = Ios.Red,
                     onClick = { cancel = true },
+                )
+            }
+            if (!probing && probeResults.isNotEmpty() && lastRunAt > 0) {
+                Separator()
+                SettingsRow(
+                    title = stringResource(R.string.geph_fastest_age, gephAgo(lastRunAt)),
+                    icon = Icons.Default.History,
+                    tint = Ios.Gray,
+                    showChevron = false,
                 )
             }
             probeResults.sortedWith(
@@ -163,7 +177,12 @@ fun GephExitScreen(onBack: () -> Unit, backLabel: String) {
                         faDigits(p.ttfbMs.toString()),
                         faDigits((p.connectMs / 1000.0).let { String.format(java.util.Locale.US, "%.1f", it) }),
                     ) + if (i == 0 && p.ok) " · " + stringResource(R.string.geph_fastest_badge) else ""
-                    else p.error,
+                    else when (p.error) {
+                        GephExits.NO_SESSION -> stringResource(R.string.geph_probe_no_session)
+                        GephExits.NO_DATA -> stringResource(R.string.geph_probe_no_data)
+                        GephExits.ENGINE_EXITED -> stringResource(R.string.geph_probe_engine_exited)
+                        else -> p.error
+                    },
                     showChevron = false,
                     onClick = if (p.ok) ({ choose(p.exit) }) else null,
                 )
@@ -213,5 +232,17 @@ fun GephExitScreen(onBack: () -> Unit, backLabel: String) {
         }
         if (exits.isNotEmpty()) SettingsFooter(stringResource(R.string.geph_exits_footer))
         Spacer(Modifier.height(28.dp))
+    }
+}
+
+/** "3 minutes ago", for the age of the last measurement. */
+@Composable
+private fun gephAgo(at: Long): String {
+    val min = ((System.currentTimeMillis() - at) / 60_000).coerceAtLeast(0)
+    return when {
+        min < 1 -> stringResource(R.string.geph_ago_now)
+        min < 60 -> stringResource(R.string.geph_ago_min, faDigits(min.toString()))
+        min < 48 * 60 -> stringResource(R.string.geph_ago_hour, faDigits((min / 60).toString()))
+        else -> stringResource(R.string.geph_ago_day, faDigits((min / 1440).toString()))
     }
 }

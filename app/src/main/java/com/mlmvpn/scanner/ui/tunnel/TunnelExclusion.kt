@@ -58,7 +58,7 @@ object TunnelExclusion {
         com.mlmvpn.scanner.openvpn.OpenVpnRuntime.release(context)
         if (!MyVpnService.isRunning) return
         val app = context.applicationContext
-        app.startService(Intent(app, MyVpnService::class.java).apply { action = "STOP" })
+        com.mlmvpn.scanner.utils.SafeStart.service(app, Intent(app, MyVpnService::class.java).apply { action = "STOP" })
         awaitStopped { !MyVpnService.isRunning }
     }
 
@@ -73,7 +73,7 @@ object TunnelExclusion {
         com.mlmvpn.scanner.openvpn.OpenVpnRuntime.release(context)
         if (!TunnelStatus.isActive()) return
         val app = context.applicationContext
-        app.startService(
+        com.mlmvpn.scanner.utils.SafeStart.service(app, 
             Intent(app, TunnelVpnService::class.java)
                 .apply { action = TunnelVpnService.ACTION_DISCONNECT }
         )
@@ -101,8 +101,8 @@ object TunnelExclusion {
     /** OpenVPN validates its profile and credentials before requesting this handoff. */
     suspend fun releaseForOpenVpn(context: Context) {
         val app = context.applicationContext
-        if (MyVpnService.isRunning) app.startService(Intent(app, MyVpnService::class.java).setAction("STOP"))
-        if (TunnelStatus.isActive()) app.startService(Intent(app, TunnelVpnService::class.java).setAction(TunnelVpnService.ACTION_DISCONNECT))
+        if (MyVpnService.isRunning) com.mlmvpn.scanner.utils.SafeStart.service(app, Intent(app, MyVpnService::class.java).setAction("STOP"))
+        if (TunnelStatus.isActive()) com.mlmvpn.scanner.utils.SafeStart.service(app, Intent(app, TunnelVpnService::class.java).setAction(TunnelVpnService.ACTION_DISCONNECT))
         kotlinx.coroutines.withTimeout(10_000) {
             while (MyVpnService.isRunning || TunnelStatus.isActive()) delay(100)
         }

@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.store.tr
 import com.mlmvpn.scanner.data.PanelBuild
 import com.mlmvpn.scanner.data.studio.StudioState
 import com.mlmvpn.scanner.data.studio.StudioStore
@@ -54,7 +55,11 @@ fun StudioSettingsScreen(
     val all = state.installations
     val stale = all.count { it.isStale(PanelBuild.MLM, PanelBuild.MLM_SCHEMA) }
     val unreachable = all.count { !it.reachable }
-    val enforcing = all.count { it.can("enforcement.strict") }
+    // A central Worker counts neither volume nor devices (and has no engine to update), so the
+    // caps below are about the engine accounts; the central ones get their own sentence.
+    val engines = all.filter { !it.isCentral }
+    val centrals = all.size - engines.size
+    val enforcing = engines.count { it.can("enforcement.strict") }
 
     IosScreen(
         title = S(R.string.studio_settings_title),
@@ -122,7 +127,16 @@ fun StudioSettingsScreen(
         SettingsGroup {
             SettingsRow(
                 title = S(R.string.studio_settings_quota_title),
-                subtitle = S(R.string.studio_settings_quota_sub),
+                subtitle = when {
+                    centrals == 0 -> S(R.string.studio_settings_quota_sub)
+                    engines.isEmpty() -> tr(
+                        "روی ورکر مرکزی فقط زمان اعمال می‌شود: این گوشی کاربرانی را که زمانشان تمام شده حدود هر نیم ساعت از ورکر برمی‌دارد. حجم شمرده نمی‌شود.",
+                        "On the central Worker only time is enforced: this phone takes people whose time is up off the Worker about every half hour. Volume is not counted.",
+                    )
+                    else -> S(R.string.studio_settings_quota_sub) + " " + tr(
+                        "روی ورکر مرکزی فقط زمان.", "On the central Worker, time only.",
+                    )
+                },
                 icon = StudioIcons.Volume,
                 tint = Ios.Green,
                 showChevron = false,
@@ -132,15 +146,20 @@ fun StudioSettingsScreen(
                 title = S(R.string.studio_settings_devices_title),
                 subtitle = when {
                     all.isEmpty() -> null
-                    enforcing == all.size -> S(R.string.studio_settings_devices_all)
+                    engines.isEmpty() -> tr("روی ورکر مرکزی شمرده نمی‌شود.", "Not counted on the central Worker.")
+                    enforcing == engines.size -> S(R.string.studio_settings_devices_all)
                     enforcing == 0 -> S(R.string.studio_settings_devices_none)
                     else -> S(R.string.studio_settings_devices_some)
-                        .replace("%1\$s", faNum(enforcing)).replace("%2\$s", faNum(all.size))
+                        .replace("%1\$s", faNum(enforcing)).replace("%2\$s", faNum(engines.size))
                 },
                 icon = StudioIcons.Devices,
-                tint = if (enforcing == all.size && all.isNotEmpty()) Ios.Green else Ios.Orange,
-                onClick = if (enforcing < all.size) onOpenAccounts else null,
-                showChevron = enforcing < all.size,
+                tint = when {
+                    engines.isEmpty() -> Ios.Gray
+                    enforcing == engines.size -> Ios.Green
+                    else -> Ios.Orange
+                },
+                onClick = if (enforcing < engines.size) onOpenAccounts else null,
+                showChevron = enforcing < engines.size,
             )
         }
 

@@ -6,7 +6,7 @@ import org.json.JSONObject
 object CfDoctorReport {
     private fun token(s: String) = s.take(64).replace(Regex("[^A-Za-z0-9_.:(),+/-]"), "_")
     fun render(plan: String, rows: List<Evidence>, flags: Set<String>, decisions: List<String>, complete: Boolean,
-               environment: Map<String,String> = emptyMap(), hasCredential: Boolean = rows.any { it.id == "ST1" }): String {
+               environment: Map<String,String> = emptyMap(), hasCredential: Boolean = rows.any { it.id == "ST1" }, deep: String = ""): String {
         val stages = listOf(StageVerdict.account(rows,hasCredential),StageVerdict.chain(rows,"ST2"),StageVerdict.chain(rows,"ST3"),StageVerdict.chain(rows,"ST4"))
         val winners=rows.filter { it.ok && (it.http in 200..299 || it.id=="ST3") }.map { "${it.id}:${it.route}" }.distinct()
         var raw = rows.take(900).joinToString("\n") { r -> buildString {
@@ -38,18 +38,20 @@ object CfDoctorReport {
             if(raw.toByteArray().size>125000) { raw=compact(false); dictionary+=" metrics_omitted=size_budget" }
         }
         return SecretRedactor.redact(buildString {
-            appendLine("HEADER MLMVPN DOCTOR v2 plan=${token(plan)} complete=$complete")
+            appendLine("HEADER MLMVPN DOCTOR v3 plan=${token(plan)} complete=$complete")
             stages.forEachIndexed { i,s -> appendLine("ST${i+1} ${s.verdict} ${token(s.layer)}") }
             appendLine("ENV")
-            environment.filterKeys { it in setOf("app","android","model","net","op","v6","vpn","validated","captive","private_dns","timezone","time","network_label") }
-                .forEach { (k,v) -> appendLine("$k=${if(k=="network_label") SecretRedactor.redact(v).take(48).replace(Regex("[^\\p{L}\\p{N} _-]"),"_") else token(v)}") }
+            environment.filterKeys { it in setOf("app","android","model","net","op","v6","vpn","validated","captive","private_dns","timezone","time","network_label",
+                    "v6route","complaint","isp","asn","region","city","country","netinfo_source") }
+                .forEach { (k,v) -> appendLine("$k=${if(k in setOf("network_label","isp","region","city")) SecretRedactor.redact(v).take(60).replace(Regex("[^\\p{L}\\p{N} _-]"),"_") else token(v)}") }
             appendLine("TRIAGE flags=${flags.sorted().joinToString(",") { token(it) }}")
             decisions.take(200).forEach { appendLine(token(it)) }
-            appendLine("SUMMARY DOCTOR v2 op=${token(environment["op"] ?: "unknown")} net=${token(environment["net"] ?: "unknown")} flags=${flags.sorted().joinToString(",") { token(it) }} " + stages.mapIndexed { i,s -> "st${i+1}=${s.verdict.name.lowercase()}:${token(s.layer)}" }.joinToString(" "))
+            appendLine("SUMMARY DOCTOR v3 op=${token(environment["op"] ?: "unknown")} net=${token(environment["net"] ?: "unknown")} flags=${flags.sorted().joinToString(",") { token(it) }} " + stages.mapIndexed { i,s -> "st${i+1}=${s.verdict.name.lowercase()}:${token(s.layer)}" }.joinToString(" "))
             appendLine("VERDICT ${if (complete) "finished" else "partial:interrupted_or_budget"}")
             appendLine("WINNERS ${winners.take(50).joinToString(",") { token(it) }}")
             appendLine("TABLES attempts=${rows.size} success=${rows.count { it.ok }} failed=${rows.count { !it.ok }}")
             if(dictionary.isNotEmpty()) appendLine(dictionary)
+            if(deep.isNotBlank()) { appendLine("DEEP"); appendLine(deep) }
             appendLine("RAW"); append(raw)
         })
     }

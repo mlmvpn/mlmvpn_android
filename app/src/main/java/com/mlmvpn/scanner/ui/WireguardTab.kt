@@ -55,7 +55,7 @@ object UaeTrialEngine {
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
 
-    private const val API_BASE = "http://194.50.233.133:3000"
+    private const val API_BASE = "http://203.0.113.20:3000"
 
     // AmneziaWG obfuscation params. The server sends its own values so the client always
     // matches the server interface (change awg0.conf and clients follow automatically).
@@ -865,7 +865,7 @@ private fun startGameVpn(context: Context, config: UaeTrialEngine.TrialConfig) {
         putExtra("NODE_URI", jsonConfig)
         putExtra("NODE_ID", "game_uae_trial") // Critical for tracking!
     }
-    context.startService(intent)
+    com.mlmvpn.scanner.utils.SafeStart.service(context, intent)
 }
 
 

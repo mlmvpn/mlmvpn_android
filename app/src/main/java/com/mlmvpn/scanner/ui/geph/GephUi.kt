@@ -69,7 +69,7 @@ internal fun gephRunning(): Boolean {
  */
 internal fun applyGephNow(ctx: Context) {
     if (!gephRunning()) return
-    ctx.startService(Intent(ctx, TunnelVpnService::class.java).setAction(TunnelVpnService.ACTION_GEPH_APPLY))
+    com.mlmvpn.scanner.utils.SafeStart.service(ctx, Intent(ctx, TunnelVpnService::class.java).setAction(TunnelVpnService.ACTION_GEPH_APPLY))
 }
 
 /**
@@ -79,7 +79,7 @@ internal fun applyGephNow(ctx: Context) {
  */
 internal fun reconnectGephNow(ctx: Context) {
     if (!gephRunning()) return
-    ctx.startService(Intent(ctx, TunnelVpnService::class.java).setAction(TunnelVpnService.ACTION_RECONNECT))
+    com.mlmvpn.scanner.utils.SafeStart.service(ctx, Intent(ctx, TunnelVpnService::class.java).setAction(TunnelVpnService.ACTION_RECONNECT))
 }
 
 internal fun copyToClipboard(ctx: Context, label: String, text: String) {
@@ -167,7 +167,7 @@ fun ColumnScope.GephPanel(onOpenPage: (String) -> Unit) {
             value = exitLabel(exit.value),
             onClick = { onOpenPage(GephPages.EXIT) },
         )
-        GephSettings.lastFastest(ctx)?.let { f ->
+        GephSettings.lastFastest(ctx)?.takeIf { it.has("country") }?.let { f ->
             Separator()
             SettingsRow(
                 title = stringResource(R.string.geph_last_fastest),

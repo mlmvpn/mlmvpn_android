@@ -209,6 +209,33 @@ object SocksFront {
      * into an unbounded thread count on a phone. 8 concurrent lookups is more
      * than a browser will usefully pipeline through a single Tor circuit.
      */
+    /**
+     * «کشور خروجی با پراکسی رایگان» (com.mlmvpn.core.warp.Ipv4Exits): a free proxy in the chosen
+     * country that every CONNECT leaves through, itself dialled THROUGH the upstream -- so the line
+     * sees only WARP, and the sites see the proxy's country. Null: CONNECTs go to the upstream as
+     * they always did. DNS never takes this hop: it resolves through the upstream itself.
+     *
+     * Settable while running: a proxy that stopped answering is swapped for the next of the pool
+     * without the tunnel going down; flows already open keep the hop they were made with.
+     */
+    data class ExitHop(val ip: String, val port: Int, val type: Int) {
+        override fun toString() = "${when (type) { HOP_SOCKS5 -> "socks5"; HOP_SOCKS4 -> "socks4"; else -> "http" }}://$ip:$port"
+    }
+
+    /** What the exit proxy speaks: HTTP CONNECT, SOCKS5, or SOCKS4/4a (no IPv6 targets). */
+    const val HOP_HTTP = 0
+    const val HOP_SOCKS5 = 1
+    const val HOP_SOCKS4 = 2
+
+    @Volatile
+    var exitHop: ExitHop? = null
+        private set
+
+    fun setExit(hop: ExitHop?) {
+        if (hop != exitHop) ConnectionLog.record("$TAG exit ${hop ?: "off"}")
+        exitHop = hop
+    }
+
     @Volatile
     private var dnsPool: ExecutorService? = null
 
@@ -241,14 +268,17 @@ object SocksFront {
         dnsPort: Int,
         bindAll: Boolean = false,
         dnsTcpResolver: String? = null,
+        exit: ExitHop? = null,
     ): Boolean {
         if (running.get()) {
             ConnectionLog.record("$TAG already running")
+            setExit(exit)
             return true
         }
         upstreamSocksPort = socksPort
         localDnsPort = dnsPort
         dnsOverTcp = dnsTcpResolver
+        setExit(exit)
 
         val bindHost = if (bindAll) "0.0.0.0" else "127.0.0.1"
         val server = try {
@@ -319,6 +349,7 @@ object SocksFront {
     @Synchronized
     fun stop() {
         if (!running.getAndSet(false)) return
+        exitHop = null
         closeQuietly(serverSocket)
         serverSocket = null
         dnsPool?.shutdownNow()
@@ -458,7 +489,11 @@ object SocksFront {
      * and has no names. That is not a DNS leak: the address it asks for came
      * out of a DNS answer that [serveUdpgw] already resolved *through* Tor.
      */
-    private fun relayThroughTor(client: Socket, host: String, port: Int, clientOut: OutputStream) {
+    private fun relayThroughTor(client: Socket, target: String, targetPort: Int, clientOut: OutputStream) {
+        // With an exit proxy the upstream is asked for the PROXY, and the proxy for the target.
+        val hop = exitHop
+        val host = hop?.ip ?: target
+        val port = hop?.port ?: targetPort
         val upstream = try {
             Socket().apply {
                 tcpNoDelay = true
@@ -552,6 +587,26 @@ object SocksFront {
                 return
             }
 
+            if (hop != null) {
+                // The stream now reaches the free proxy; it is asked for the real target. A proxy that
+                // refuses fails this one flow -- the watch in Ipv4Exits notices a dead one and swaps it.
+                upstream.soTimeout = EXIT_HANDSHAKE_TIMEOUT_MS
+                val opened = runCatching {
+                    when (hop.type) {
+                        HOP_SOCKS5 -> exitSocks5(upIn, upOut, target, targetPort)
+                        HOP_SOCKS4 -> exitSocks4(upIn, upOut, target, targetPort)
+                        else -> exitHttpConnect(upIn, upOut, target, targetPort)
+                    }
+                }.getOrDefault(false)
+                if (!opened) {
+                    replyFailure(clientOut, REP_GENERAL_FAILURE)
+                    closeQuietly(upstream)
+                    closeQuietly(client)
+                    return
+                }
+                upstream.soTimeout = 0
+            }
+
             replySuccess(clientOut)
 
             // Downstream on this thread, upstream on one more. Closing both
@@ -595,6 +650,74 @@ object SocksFront {
             closeQuietly(upstream)
             closeQuietly(client)
         }
+    }
+
+    /** How long a free proxy gets to answer its own handshake for one flow. */
+    private const val EXIT_HANDSHAKE_TIMEOUT_MS = 15_000
+
+    /** An HTTP proxy's CONNECT to the target: true once it answered 200 and the stream carries the target. */
+    private fun exitHttpConnect(upIn: DataInputStream, upOut: OutputStream, target: String, port: Int): Boolean {
+        val authority = (if (target.indexOf(':') >= 0) "[$target]" else target) + ":" + port
+        upOut.write("CONNECT $authority HTTP/1.1\r\nHost: $authority\r\nProxy-Connection: keep-alive\r\n\r\n".toByteArray(Charsets.US_ASCII))
+        upOut.flush()
+        // The head, byte by byte up to the blank line: anything after it already belongs to the target.
+        val head = StringBuilder()
+        while (head.length < 8192 && !head.endsWith("\r\n\r\n")) {
+            val b = upIn.read()
+            if (b < 0) return false
+            head.append(b.toChar())
+        }
+        return Regex("""^HTTP/1\.[01] 200""").containsMatchIn(head)
+    }
+
+    /** A SOCKS5 proxy's CONNECT to the target, without authentication: true on its success reply. */
+    private fun exitSocks5(upIn: DataInputStream, upOut: OutputStream, target: String, port: Int): Boolean {
+        upOut.write(byteArrayOf(SOCKS_VERSION.toByte(), 1, 0x00))
+        upOut.flush()
+        if (upIn.read() != SOCKS_VERSION || upIn.read() != 0x00) return false
+        val request: ByteArray = if (isIpLiteral(target)) {
+            val a = InetAddress.getByName(target).address
+            byteArrayOf(SOCKS_VERSION.toByte(), CMD_CONNECT.toByte(), 0, (if (a.size == 16) ATYP_IPV6 else ATYP_IPV4).toByte()) +
+                a + byteArrayOf(((port shr 8) and 0xFF).toByte(), (port and 0xFF).toByte())
+        } else {
+            val name = target.toByteArray(Charsets.US_ASCII)
+            if (name.size > 255) return false
+            byteArrayOf(SOCKS_VERSION.toByte(), CMD_CONNECT.toByte(), 0, ATYP_DOMAIN.toByte(), name.size.toByte()) +
+                name + byteArrayOf(((port shr 8) and 0xFF).toByte(), (port and 0xFF).toByte())
+        }
+        upOut.write(request)
+        upOut.flush()
+        if (upIn.read() != SOCKS_VERSION) return false
+        val reply = upIn.read()
+        upIn.read()
+        when (upIn.read()) {
+            ATYP_IPV4 -> upIn.readFully(ByteArray(4))
+            ATYP_IPV6 -> upIn.readFully(ByteArray(16))
+            ATYP_DOMAIN -> { val n = upIn.read(); if (n > 0) upIn.readFully(ByteArray(n)) }
+            else -> return false
+        }
+        upIn.readFully(ByteArray(2))
+        return reply == REP_SUCCESS
+    }
+
+    /**
+     * A SOCKS4 proxy's CONNECT: an IPv4 target as SOCKS4, a name as SOCKS4a (the proxy resolves it);
+     * an IPv6 target cannot be asked for at all -- that one flow fails, the rest go on.
+     */
+    private fun exitSocks4(upIn: DataInputStream, upOut: OutputStream, target: String, port: Int): Boolean {
+        val portBytes = byteArrayOf(((port shr 8) and 0xFF).toByte(), (port and 0xFF).toByte())
+        val request = if (isIpLiteral(target)) {
+            val a = InetAddress.getByName(target).address
+            if (a.size != 4) return false
+            byteArrayOf(4, 1) + portBytes + a + byteArrayOf(0)
+        } else {
+            byteArrayOf(4, 1) + portBytes + byteArrayOf(0, 0, 0, 1, 0) + target.toByteArray(Charsets.US_ASCII) + byteArrayOf(0)
+        }
+        upOut.write(request)
+        upOut.flush()
+        val reply = ByteArray(8)
+        upIn.readFully(reply)
+        return reply[1].toInt() and 0xFF == 0x5A
     }
 
     private fun pipe(

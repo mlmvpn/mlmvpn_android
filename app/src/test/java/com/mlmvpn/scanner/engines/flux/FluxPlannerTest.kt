@@ -77,20 +77,20 @@ class FluxPlannerTest {
         ))
         val cs = FluxPlanner.candidates(inp(nodes = listOf(rl), state = s, country = "US"))
         assertTrue(cs.isEmpty())
-        assertEquals(1, FluxPlanner.candidates(inp(nodes = listOf(rl), state = s, country = "DE")).size)
+        assertEquals(1, FluxPlanner.candidates(inp(nodes = listOf(rl), state = s, country = "DE")).count { it.fragment == com.mlmvpn.scanner.engines.flux.core.model.FragmentProfile.OFF })
     }
 
     @Test fun `circuit breaker keeps a failing route out`() {
-        val c = FluxPlanner.candidates(inp(nodes = listOf(rl))).single()
+        val c = FluxPlanner.candidates(inp(nodes = listOf(rl))).single { it.fragment == com.mlmvpn.scanner.engines.flux.core.model.FragmentProfile.OFF }
         var s = FluxState()
         repeat(3) { s = FluxMemory.recordFailure(s, "netA", c.id, now, FailReason.TCP_TIMEOUT) }
-        assertTrue(FluxPlanner.candidates(inp(nodes = listOf(rl), state = s)).isEmpty())
+        assertTrue(FluxPlanner.candidates(inp(nodes = listOf(rl), state = s)).none { it.id == c.id })
         // On another network the same route is untouched.
-        assertEquals(1, FluxPlanner.candidates(inp(nodes = listOf(rl), state = s).copy(net = "netB")).size)
+        assertTrue(FluxPlanner.candidates(inp(nodes = listOf(rl), state = s).copy(net = "netB")).any { it.id == c.id })
     }
 
     @Test fun `warm start returns the known route without racing, and skips a dead primary`() {
-        val all = FluxPlanner.candidates(inp(nodes = listOf(rl, node(reality(ip = "1.2.3.4")))))
+        val all = FluxPlanner.candidates(inp(nodes = listOf(rl, node(reality(ip = "1.2.3.4"))))).filter { it.fragment == com.mlmvpn.scanner.engines.flux.core.model.FragmentProfile.OFF }
         val (p, sb) = all
         var s = FluxState()
         s = FluxMemory.recordSuccess(s, "netA", p.id, now, 40)
@@ -103,6 +103,26 @@ class FluxPlannerTest {
         assertEquals(listOf(sb.id), FluxPlanner.warm(inp(nodes = nodes, state = s)).map { it.id })
         // Nothing known on a network never seen.
         assertTrue(FluxPlanner.warm(inp(nodes = nodes, state = s).copy(net = "netB")).isEmpty())
+    }
+
+    @Test fun `a cloudflare node is raced plain, with ECH and with PattNG's cut hello`() {
+        val cs = FluxPlanner.candidates(inp(nodes = listOf(cf)).copy(budget = 100))
+        val shapes = cs.map { it.fragment }.toSet()
+        assertTrue(com.mlmvpn.scanner.engines.flux.core.model.FragmentProfile.ECH in shapes)
+        assertTrue(com.mlmvpn.scanner.engines.flux.core.model.FragmentProfile.PATTNG in shapes)
+        assertTrue(com.mlmvpn.scanner.engines.flux.core.model.FragmentProfile.OFF in shapes)
+    }
+
+    @Test fun `a direct reality node is never given ECH`() {
+        val cs = FluxPlanner.candidates(inp(nodes = listOf(rl)))
+        assertTrue(cs.none { it.fragment == com.mlmvpn.scanner.engines.flux.core.model.FragmentProfile.ECH })
+    }
+
+    @Test fun `the first candidates of a race cover several methods, not only direct servers`() {
+        val many = (1..30).map { node(reality(ip = "5.6.7.$it")) } + cf
+        val first = FluxPlanner.candidates(inp(nodes = many).copy(budget = 8))
+        assertTrue(first.any { it.node.id == cf.id })
+        assertTrue(first.map { FluxPlanner.methodOf(it) }.toSet().size >= 3)
     }
 
     @Test fun `sni resets make the planner try a fragmented twin`() {

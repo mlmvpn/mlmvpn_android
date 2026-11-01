@@ -831,7 +831,7 @@ class GameBoosterManager(private val context: Context) {
                         putExtra("GAME_PACKAGE", gamePackage)
                         attachDedicatedDnsExtras(this)
                     }
-                    context.startService(intent)
+                    com.mlmvpn.scanner.utils.SafeStart.service(context, intent)
                 } else {
                     Log.d("GameBoosterManager", "Direct mode: connection already clean, no VPN needed.")
                 }
@@ -852,7 +852,7 @@ class GameBoosterManager(private val context: Context) {
                     putExtra("GAME_PACKAGE", gamePackage)
                     attachDedicatedDnsExtras(this)
                 }
-                context.startService(intent)
+                com.mlmvpn.scanner.utils.SafeStart.service(context, intent)
 
                 boosterState.value = BoosterState.BOOSTED
                 // WARP now self-manages its transport via the multi-engine selector, so the old
@@ -886,7 +886,7 @@ class GameBoosterManager(private val context: Context) {
                     putExtra("GAME_MODE", true)
                     putExtra("GAME_PACKAGE", gamePackage)
                 }
-                context.startService(intent)
+                com.mlmvpn.scanner.utils.SafeStart.service(context, intent)
 
                 // CONNECTING, not BOOSTED.
                 //

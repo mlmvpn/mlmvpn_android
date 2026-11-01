@@ -205,8 +205,11 @@ fun FreeConfigWizard(
                     // Compare against what the user already has saved (by real server identity,
                     // not our randomized "mlmvpnNNNN" name) so a re-fetch of an already-owned
                     // server doesn't get imported as a duplicate.
-                    val existingUris = com.mlmvpn.scanner.data.NodeManager(context).nodes.map { it.uri }
-                    val (fresh, owned) = FreeConfigEngine.splitAlreadyOwned(working, existingUris)
+                    // Off the main thread: a read of every saved node and a parse of each of them.
+                    val (fresh, owned) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        val existingUris = com.mlmvpn.scanner.data.NodeManager(context).nodes.map { it.uri }
+                        FreeConfigEngine.splitAlreadyOwned(working, existingUris)
+                    }
                     newResults = fresh
                     alreadyOwnedCount = owned.size
 

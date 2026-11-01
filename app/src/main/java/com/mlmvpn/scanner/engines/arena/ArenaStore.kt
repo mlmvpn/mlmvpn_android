@@ -67,9 +67,7 @@ object ArenaStore {
             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
             else -> "Other"
         }
-        val op = if (kind == "Mobile") runCatching {
-            (context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager).networkOperatorName.orEmpty()
-        }.getOrDefault("") else ""
+        val op = if (kind == "Mobile") com.mlmvpn.scanner.data.Carrier.name(context) else ""
         return ArenaNetwork(kind, op)
     }
 }

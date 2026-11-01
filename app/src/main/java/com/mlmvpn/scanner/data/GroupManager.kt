@@ -76,6 +76,14 @@ class GroupManager private constructor(context: Context) {
 
     private val prefs = context.getSharedPreferences("group_manager_prefs", Context.MODE_PRIVATE)
 
+    /**
+     * The scanner groups, streamed to a file of their own. They used to be one JSON string in
+     * these preferences: tens of thousands of configs made a single 46 MB string at every save,
+     * and the app ran out of memory (crashes #509-#741, 1.2.40). Read and written a node at a time.
+     */
+    private val scannerFile = java.io.File(context.filesDir, "scanner_groups.json")
+    private val scannerWriter = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "scanner-groups-writer").apply { isDaemon = true } }
+
     val cloudGroups = mutableListOf<CloudGroup>()
     val scannerGroups = mutableListOf<ScannerGroup>()
     val ipArchives = mutableListOf<IpArchive>()
@@ -99,6 +107,9 @@ class GroupManager private constructor(context: Context) {
             _ipArchivesFlow.value = ipArchives.toList()
         }
     }
+
+    /** The cloud groups as they are now, copied under the lock: safe to walk from any thread. */
+    fun cloudGroupsSnapshot(): List<CloudGroup> = synchronized(lock) { cloudGroups.toList() }
 
     fun loadCloudGroups() = synchronized(lock) {
         val jsonStr = prefs.getString("cloud_groups", "[]") ?: "[]"
@@ -176,6 +187,13 @@ class GroupManager private constructor(context: Context) {
     fun loadScannerGroupsPublic() = loadScannerGroups()
 
     private fun loadScannerGroups() = synchronized(lock) {
+        if (scannerFile.exists()) {
+            runCatching { readScannerFile() }
+                .onSuccess { scannerGroups.clear(); scannerGroups.addAll(it) }
+                .onFailure { android.util.Log.w("GroupManager", "scanner groups: ${it.javaClass.simpleName}") }
+            return@synchronized
+        }
+        // Once: the old copy in the preferences moves to the file.
         val jsonStr = prefs.getString("scanner_groups", "[]") ?: "[]"
         try {
             val arr = JSONArray(jsonStr)
@@ -218,44 +236,117 @@ class GroupManager private constructor(context: Context) {
             }
             scannerGroups.clear()
             scannerGroups.addAll(list)
+            if (prefs.contains("scanner_groups") && runCatching { writeScannerFile(list) }.isSuccess) {
+                prefs.edit().remove("scanner_groups").apply()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
     fun saveScannerGroups() = synchronized(lock) {
-        val arr = JSONArray()
-        for (g in scannerGroups) {
-            val obj = JSONObject()
-            obj.put("id", g.id)
-            obj.put("date", g.date)
-            obj.put("title", g.title)
-            obj.put("sourceGroupCount", g.sourceGroupCount)
-            obj.put("ipCount", g.ipCount)
-            g.sourceGroupId?.let { obj.put("sourceGroupId", it) }
-            g.studioInstallationId?.let { obj.put("studioInstallationId", it) }
-            g.studioUserId?.let { obj.put("studioUserId", it) }
-            g.studioUsername?.let { obj.put("studioUsername", it) }
-            if (g.studioConfigIds.isNotEmpty()) {
-                obj.put("studioConfigIds", JSONArray().also { a -> g.studioConfigIds.forEach(a::put) })
-            }
-            val nodesArr = JSONArray()
-            for (n in g.nodes) {
-                val nObj = JSONObject()
-                nObj.put("id", n.id)
-                nObj.put("name", n.name)
-                nObj.put("uri", n.uri)
-                nObj.put("type", n.type)
-                nObj.put("ping", n.ping)
-                nObj.put("addedAt", n.addedAt)
-                nObj.put("engineType", n.engineType)
-                nodesArr.put(nObj)
-            }
-            obj.put("nodes", nodesArr)
-            arr.put(obj)
+        val snapshot = scannerGroups.toList()
+        // Off the caller's thread (often the screen's), in order: tens of MB must not stall a tap.
+        scannerWriter.execute {
+            runCatching { synchronized(scannerFile) { writeScannerFile(snapshot) } }
+                .onFailure { android.util.Log.w("GroupManager", "saving scanner groups: ${it.javaClass.simpleName}") }
+            if (prefs.contains("scanner_groups")) prefs.edit().remove("scanner_groups").apply()
         }
-        prefs.edit().putString("scanner_groups", arr.toString()).apply()
-        _scannerGroupsFlow.value = scannerGroups.toList()
+        _scannerGroupsFlow.value = snapshot
+    }
+
+    /** Streams [groups] to [scannerFile]: replaced whole or not at all. */
+    private fun writeScannerFile(groups: List<ScannerGroup>) {
+        val af = android.util.AtomicFile(scannerFile)
+        val out = af.startWrite()
+        try {
+            val w = android.util.JsonWriter(java.io.BufferedWriter(java.io.OutputStreamWriter(out, Charsets.UTF_8), 64 * 1024))
+            w.beginArray()
+            for (g in groups) {
+                w.beginObject()
+                w.name("id").value(g.id); w.name("date").value(g.date); w.name("title").value(g.title)
+                w.name("sourceGroupCount").value(g.sourceGroupCount.toLong()); w.name("ipCount").value(g.ipCount.toLong())
+                g.sourceGroupId?.let { w.name("sourceGroupId").value(it) }
+                g.studioInstallationId?.let { w.name("studioInstallationId").value(it) }
+                g.studioUserId?.let { w.name("studioUserId").value(it) }
+                g.studioUsername?.let { w.name("studioUsername").value(it) }
+                if (g.studioConfigIds.isNotEmpty()) { w.name("studioConfigIds").beginArray(); g.studioConfigIds.forEach { w.value(it) }; w.endArray() }
+                w.name("nodes").beginArray()
+                for (n in g.nodes) {
+                    w.beginObject()
+                    w.name("id").value(n.id); w.name("name").value(n.name); w.name("uri").value(n.uri)
+                    w.name("type").value(n.type); w.name("ping").value(n.ping); w.name("addedAt").value(n.addedAt)
+                    w.name("engineType").value(n.engineType)
+                    w.endObject()
+                }
+                w.endArray()
+                w.endObject()
+            }
+            w.endArray()
+            w.flush()
+            af.finishWrite(out)
+        } catch (e: Exception) {
+            af.failWrite(out)
+            throw e
+        }
+    }
+
+    private fun readScannerFile(): List<ScannerGroup> {
+        val list = mutableListOf<ScannerGroup>()
+        android.util.AtomicFile(scannerFile).openRead().use { input ->
+            val r = android.util.JsonReader(java.io.BufferedReader(java.io.InputStreamReader(input, Charsets.UTF_8), 64 * 1024))
+            r.beginArray()
+            while (r.hasNext()) {
+                var id = ""; var date = ""; var title = "Scanner Group"; var sgc = 0; var ipc = 0
+                var sgid: String? = null; var sid: String? = null; var suid: String? = null; var suname: String? = null
+                val cfgIds = mutableListOf<String>(); val nodes = mutableListOf<VpnNode>()
+                r.beginObject()
+                while (r.hasNext()) {
+                    when (r.nextName()) {
+                        "id" -> id = r.nextString()
+                        "date" -> date = r.nextString()
+                        "title" -> title = r.nextString()
+                        "sourceGroupCount" -> sgc = r.nextInt()
+                        "ipCount" -> ipc = r.nextInt()
+                        "sourceGroupId" -> sgid = r.nextString().takeIf { it != "null" }
+                        "studioInstallationId" -> sid = r.nextString().ifBlank { null }
+                        "studioUserId" -> suid = r.nextString().ifBlank { null }
+                        "studioUsername" -> suname = r.nextString().ifBlank { null }
+                        "studioConfigIds" -> { r.beginArray(); while (r.hasNext()) cfgIds += r.nextString(); r.endArray() }
+                        "nodes" -> {
+                            r.beginArray()
+                            while (r.hasNext()) {
+                                var nid = ""; var name = ""; var uri = ""; var type = ""; var ping = "Test"
+                                var added = System.currentTimeMillis(); var engine = "BPB"
+                                r.beginObject()
+                                while (r.hasNext()) {
+                                    when (r.nextName()) {
+                                        "id" -> nid = r.nextString()
+                                        "name" -> name = r.nextString()
+                                        "uri" -> uri = r.nextString()
+                                        "type" -> type = r.nextString()
+                                        "ping" -> ping = r.nextString()
+                                        "addedAt" -> added = r.nextLong()
+                                        "engineType" -> engine = r.nextString()
+                                        else -> r.skipValue()
+                                    }
+                                }
+                                r.endObject()
+                                nodes += VpnNode(id = nid, name = name, uri = uri, type = type, ping = ping, addedAt = added, engineType = engine)
+                            }
+                            r.endArray()
+                        }
+                        else -> r.skipValue()
+                    }
+                }
+                r.endObject()
+                list += ScannerGroup(id = id, date = date, title = title, sourceGroupCount = sgc, ipCount = ipc,
+                    sourceGroupId = sgid, nodes = nodes, studioInstallationId = sid, studioUserId = suid,
+                    studioUsername = suname, studioConfigIds = cfgIds)
+            }
+            r.endArray()
+        }
+        return list
     }
 
     /**

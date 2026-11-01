@@ -489,7 +489,7 @@ private fun Result(
     // The win cue and the podium's rise already played on the race's own podium scene.
 
     fun startVpn(id: String, uri: String) {
-        context.startService(Intent(context, MyVpnService::class.java).apply {
+        com.mlmvpn.scanner.utils.SafeStart.service(context, Intent(context, MyVpnService::class.java).apply {
             putExtra("NODE_URI", uri); putExtra("NODE_ID", id)
             putExtra("PROXY_MODE", com.mlmvpn.scanner.utils.NetworkSettings.proxyMode(context))
             putExtra("LOCAL_PORT", com.mlmvpn.scanner.utils.LocalPort.getString(context))

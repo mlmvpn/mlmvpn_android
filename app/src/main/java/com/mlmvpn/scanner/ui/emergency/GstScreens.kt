@@ -99,7 +99,9 @@ internal val GST_BACK: String get() = S(R.string.back_r2)
 internal fun relayTone(report: GstDiagnostics.Report?): Color = when (report?.result) {
     null -> Ios.Gray
     GstDiagnostics.Result.OK -> Ios.Green
-    GstDiagnostics.Result.REDIRECT_BLOCKED -> Ios.Orange
+    GstDiagnostics.Result.REDIRECT_BLOCKED,
+    GstDiagnostics.Result.FRONT_BLOCKED,
+    GstDiagnostics.Result.KEY_NOT_USED -> Ios.Orange
     else -> Ios.Red
 }
 
@@ -109,6 +111,9 @@ internal fun relayVerdict(report: GstDiagnostics.Report?): String = when (report
     GstDiagnostics.Result.REDIRECT_BLOCKED -> S(R.string.not_verified)
     GstDiagnostics.Result.AUTH_MISMATCH -> S(R.string.wrong_password)
     GstDiagnostics.Result.UNREACHABLE -> S(R.string.unreachable)
+    GstDiagnostics.Result.NOT_FOUND -> S(R.string.gst_verdict_not_found)
+    GstDiagnostics.Result.FRONT_BLOCKED -> S(R.string.gst_verdict_front_blocked)
+    GstDiagnostics.Result.KEY_NOT_USED -> S(R.string.gst_verdict_key_not_used)
     else -> S(R.string.invalid_response)
 }
 

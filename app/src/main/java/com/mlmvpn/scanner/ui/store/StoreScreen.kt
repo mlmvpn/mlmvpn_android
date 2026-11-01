@@ -440,6 +440,10 @@ private fun ProductPage(row: StoreRow, job: StoreJob?, onBack: () -> Unit) {
                 Separator()
                 InfoRow(tr("نسخهٔ همراه برنامه", "Shipped version"), it)
             }
+            row.upstream?.let {
+                Separator()
+                InfoRow(tr("آخرین نسخهٔ سازنده (گیت‌هاب)", "Developer's newest (GitHub)"), it)
+            }
             Separator()
             InfoRow(tr("منبع", "Source"), sourceLabel(item, row))
             if (row.checkedAt > 0) {
@@ -549,10 +553,15 @@ private fun AppRow(row: StoreRow, job: StoreJob?, onOpen: () -> Unit, showNotes:
 private fun ActionButton(row: StoreRow, job: StoreJob?, big: Boolean = false) {
     val context = LocalContext.current
     if (job?.running == true) {
-        ProgressRing(job.progress, size = if (big) 34.dp else 30.dp, onStop = { StoreManager.cancel(row.item.id) })
+        // Tapping the ring pauses: what arrived is kept, and «ادامه» continues from there.
+        ProgressRing(job.progress, size = if (big) 34.dp else 30.dp, onStop = { StoreManager.pause(row.item.id) })
         return
     }
     when {
+        job?.paused == true -> Pill(
+            tr("ادامه", "Resume"), prominent = true, big = big,
+            onClick = { StoreManager.resume(context, row.item.id) },
+        )
         row.hasUpdate -> Pill(
             tr("بروزرسانی", "Update"), prominent = true, big = big,
             onClick = { StoreManager.install(context, row.item.id) },
@@ -611,7 +620,10 @@ private fun ProgressRing(progress: Float?, size: Dp, onStop: () -> Unit) {
                     style = Stroke(stroke, cap = StrokeCap.Round))
             }
         }
-        Box(Modifier.size(size * 0.28f).clip(RoundedCornerShape(2.dp)).background(blue))
+        Row(horizontalArrangement = Arrangement.spacedBy(size * 0.08f)) {
+            Box(Modifier.size(width = size * 0.09f, height = size * 0.3f).clip(RoundedCornerShape(1.dp)).background(blue))
+            Box(Modifier.size(width = size * 0.09f, height = size * 0.3f).clip(RoundedCornerShape(1.dp)).background(blue))
+        }
     }
 }
 
@@ -619,7 +631,9 @@ private fun ProgressRing(progress: Float?, size: Dp, onStop: () -> Unit) {
 private fun JobLine(job: StoreJob?) {
     job ?: return
     val text = when {
-        job.running -> job.phase + (job.progress?.let { "  ${(it * 100).toInt()}٪" } ?: "")
+        job.running && job.bytes > 0 -> job.phase + "  " + transferText(job)
+        job.running -> job.phase + (job.progress?.let { "  ${faNum((it * 100).toInt().toString())}٪" } ?: "")
+        job.paused -> tr("متوقف شد", "Paused") + (if (job.bytes > 0) " · " + sizeText(job.bytes, job.total) else "")
         job.error != null -> job.error
         else -> job.done ?: ""
     }
@@ -628,13 +642,43 @@ private fun JobLine(job: StoreJob?) {
         text,
         color = when {
             job.error != null -> Ios.Destructive
-            job.running -> Ios.SecondaryLabel
+            job.running || job.paused -> Ios.SecondaryLabel
             else -> Ios.Green
         },
         fontSize = 13.sp, lineHeight = 19.sp,
-        modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp),
+        modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 4.dp),
     )
+    // Pausing keeps the part on disk; this is the way to drop it.
+    if (job.paused || job.running) {
+        Text(
+            tr("لغو دانلود", "Cancel download"),
+            color = Ios.Destructive, fontSize = 13.sp,
+            modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp)
+                .clickable { StoreManager.cancel(job.id) },
+        )
+    }
 }
+
+/** "12.3 of 45.0 MB · 1.2 MB/s · 20 s left". */
+private fun transferText(job: StoreJob): String {
+    val parts = mutableListOf(sizeText(job.bytes, job.total))
+    if (job.speedBps > 0) {
+        parts += mb(job.speedBps) + tr(" مگ/ث", " MB/s")
+        if (job.total > job.bytes) {
+            val left = (job.total - job.bytes) / job.speedBps
+            parts += if (left < 60) tr("${faNum(left.toString())} ثانیه مانده", "${left}s left")
+            else tr("${faNum((left / 60).toString())} دقیقه مانده", "${left / 60} min left")
+        }
+    }
+    return parts.joinToString(" · ")
+}
+
+private fun sizeText(bytes: Long, total: Long): String =
+    if (total > 0) tr("${mb(bytes)} از ${mb(total)} مگ", "${mb(bytes)} of ${mb(total)} MB") else tr("${mb(bytes)} مگ", "${mb(bytes)} MB")
+
+private fun mb(bytes: Long): String = faNum(String.format(java.util.Locale.US, "%.1f", bytes / 1_048_576.0))
+
+private fun faNum(s: String): String = tr(com.mlmvpn.scanner.ui.emergency.faDigits(s), s)
 
 @Composable
 private fun FeatureCard(row: StoreRow, job: StoreJob?, onOpen: () -> Unit) {
@@ -898,7 +942,10 @@ private fun versionLine(row: StoreRow): String {
     val next = row.candidate?.version
     val behind = row.deployments.count { it.behind }
     return when {
-        row.state == StoreRow.State.WITH_APP -> tr("با بروزرسانی برنامه", "Updates with the app")
+        row.state == StoreRow.State.WITH_APP -> listOfNotNull(
+            row.version,
+            row.upstream?.takeIf { it != row.version }?.let { tr("سازنده: $it", "developer: $it") },
+        ).joinToString(" · ").ifBlank { tr("با بروزرسانی برنامه", "Updates with the app") }
         // The arrow follows the reading direction: new version last, whichever way that is.
         row.state == StoreRow.State.UPDATE && next != null -> tr("$now  ←  $next", "$now  →  $next")
         behind > 0 -> tr("$behind ورکر روی حساب‌ها قدیمی است", "$behind deployed worker(s) behind")
@@ -911,6 +958,7 @@ private fun versionLine(row: StoreRow): String {
 private fun sourceLabel(item: StoreItem, row: StoreRow): String = when (val s = item.source) {
     is StoreSource.GithubRelease -> tr("انتشارهای ${s.repo}", "${s.repo} releases")
     is StoreSource.GithubFile -> "${s.repo} · ${s.path}"
+    is StoreSource.GithubFiles -> "${s.repo} · " + s.paths.joinToString(" + ")
     is StoreSource.SignedManifest -> tr("فهرست نسخه‌های امضاشدهٔ سازنده", "The developer's signed release list")
     is StoreSource.Channel -> tr("کانال امضاشدهٔ MLM VPN", "MLM VPN signed channel")
     is StoreSource.WithApp -> tr("همراه برنامه", "With the app")

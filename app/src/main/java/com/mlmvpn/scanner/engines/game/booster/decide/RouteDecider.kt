@@ -13,6 +13,8 @@ enum class ProbeMethod {
     ECHO,
     /** TCP handshakes to region anchors -- used where UDP does not get through. */
     TCP,
+    /** Full authenticated TLS setup through a tunnel; never compared with echo or SYN timing. */
+    TLS_HANDSHAKE,
 }
 
 /** One route, measured. [sliceP50] holds the p50 of each interleaved slice, null if it got nothing. */

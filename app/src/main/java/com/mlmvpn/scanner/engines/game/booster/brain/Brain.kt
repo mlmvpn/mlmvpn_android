@@ -107,6 +107,8 @@ class Brain(private val now: () -> Long = System::currentTimeMillis) {
             RouteKind.WARP_MASQUE_H2 -> "W2"
             RouteKind.WARP_WG -> "WG"
             RouteKind.ACCESS_HELPER -> "D"
+            RouteKind.AMNEZIA -> "AZ"
+            RouteKind.FENIX -> "FX"
         }
     }
 }

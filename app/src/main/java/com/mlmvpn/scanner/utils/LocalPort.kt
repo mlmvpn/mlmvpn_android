@@ -42,6 +42,14 @@ object LocalPort {
     private const val AETHER_PORT = 20810
 
     /**
+     * Fixed ports other engines bind while they run, independent of this value. A user port whose
+     * derived band (or probe) lands on one of these would fight that engine for the port, and the
+     * symptom (an engine that binds and then behaves as if dead) is a long way from "the port you
+     * typed". Tor's front/daemon/DNS, Geph's SOCKS/HTTP, «وارپ», and udpgw.
+     */
+    private val RESERVED = setOf(1821, 1822, 1823, 20850, 20851, 20870, 7300)
+
+    /**
      * How far above `port` the app's derived listeners reach.
      *
      * `+1` the Psiphon-over-WARP chain, `+2` Psiphon's HTTP proxy, `+3`
@@ -58,6 +66,10 @@ object LocalPort {
         if (port > MAX) return S(R.string.the_port_must_be_max_or_lower, MAX, PROBE_OFFSET)
         if (port == AETHER_PORT) return S(R.string.this_port_is_reserved_for_the_aether)
         val probe = port + PROBE_OFFSET
+        // The whole derived band and the probe, against the other engines' fixed ports.
+        if (((port..port + LAN_BAND) + probe).any { it in RESERVED }) {
+            return S(R.string.this_port_conflicts_with_an_engine)
+        }
         val testRange = XrayJsonGenerator.TEST_PORT_MIN..XrayJsonGenerator.TEST_PORT_MAX
         // The whole band, not just `port`. Local Network sharing derives two more listeners from
         // this value -- `port + 3` for the setup page and `port + 4` for the relay that fronts

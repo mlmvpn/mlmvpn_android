@@ -47,7 +47,8 @@ import kotlin.coroutines.resumeWithException
  */
 object DoctorEngine {
 
-    enum class Step { IDLE, TRIAGE, ACCOUNT, PANEL, CONFIG, SCANNER, METHODS, VARIANTS, DONE }
+    // In run order: the scan comes before connecting, which uses the addresses it found.
+    enum class Step { IDLE, TRIAGE, ACCOUNT, PANEL, SCANNER, CONFIG, METHODS, VARIANTS, DONE }
 
     data class State(
         val running: Boolean = false,
@@ -84,7 +85,7 @@ object DoctorEngine {
     fun fileName(context: Context): String =
         "mlmvpn-doctor-${reportTag.ifEmpty { java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + "-" + AndroidNetEnv.operator(context) }}.txt"
 
-    fun start(context: Context, full: Boolean, label: String, credential: Pair<String, String>?, account: CloudAccount? = null) {
+    fun start(context: Context, full: Boolean, label: String, credential: Pair<String, String>?, account: CloudAccount? = null, complaint: Set<String> = emptySet()) {
         init(context)
         if (job?.isActive == true) return
         // The previous report goes now. Sharing after a new run must never send the old one --
@@ -98,14 +99,14 @@ object DoctorEngine {
         _state.value = State(running = true, step = Step.TRIAGE, fraction = 0.02f, hasCredential = false)
         job = scope.launch {
             try {
-                run(context.applicationContext, full, label, credential, account)
+                run(context.applicationContext, full, label, credential, account, complaint)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _state.value = _state.value.copy(failed = true)
                 // Even a run that broke leaves a report saying where, so the next file is not empty.
                 val line = "VERDICT internal_error:${e.javaClass.simpleName}@${_state.value.step}\n"
-                report = if (report.isBlank()) "HEADER MLMVPN DOCTOR v2 complete=false\n$line" else "$report\n$line"
+                report = if (report.isBlank()) "HEADER MLMVPN DOCTOR v3 complete=false\n$line" else "$report\n$line"
             } finally {
                 val p = _state.value.progress
                 _state.value = _state.value.copy(
@@ -122,7 +123,7 @@ object DoctorEngine {
         _state.value = _state.value.copy(step = s, fraction = maxOf(_state.value.fraction, fraction))
     }
 
-    private suspend fun run(app: Context, full: Boolean, label: String, credential: Pair<String, String>?, selected: CloudAccount?) {
+    private suspend fun run(app: Context, full: Boolean, label: String, credential: Pair<String, String>?, selected: CloudAccount?, complaint: Set<String>) {
         val env = AndroidNetEnv(app)
         val plan = runCatching { StoreFiles.open(app, "cf_doctor_plan.json").bufferedReader().use { DoctorPlan.parse(it.readText()) } }
             .getOrElse { app.assets.open("cf_doctor_plan.json").bufferedReader().use { DoctorPlan.parse(it.readText()) } }
@@ -134,72 +135,98 @@ object DoctorEngine {
         _state.value = _state.value.copy(hasCredential = hasCredential)
         val environment = env.environment(app).toMutableMap()
         if (label.isNotBlank()) environment["network_label"] = safeLabel(label)
+        environment["complaint"] = complaint.sorted().joinToString(",").ifEmpty { "none" }
+        val v6 = runCatching { com.mlmvpn.scanner.data.CfFamily.hasIpv6Route() }.getOrDefault(false)
+        environment["v6route"] = if (v6) "y" else "n"
+        // Provider and region (never the address): the regional differences need them.
+        environment.putAll(kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { NetInfo.lookup(env) }.getOrDefault(emptyMap()) })
+        val deep = DeepReport()
 
         val probes = object : NetworkDoctorProbe(net) {
             override suspend fun probe(spec: ProbeSpec, timeout: Int): Evidence =
                 if (spec.kind == "h2") AndroidHttpProbe.h2(spec, env, budget, timeout) else super.probe(spec, timeout)
         }
-        val configProbes = ConfigProbes(app, env, budget)
         var configs = emptyList<VpnConfig>()
 
         val runner = DoctorRunner(plan, probes, budget,
             stages = { r ->
-                // ---- ST1: the account, through the app's own check.
-                step(Step.ACCOUNT, 0.18f)
-                val st1 = St1RealPath(cloud, env, budget)
-                val anchor = r.state.value.rows.firstOrNull { it.id == "T1" && it.ok }?.route
-                withTimeoutOrNull(40_000) {
-                    val targets: List<CloudAccount?> = accounts + if (!credential?.first.isNullOrBlank()) listOf(null) else emptyList()
-                    targets.forEachIndexed { i, a ->
-                        val tag = "acc${i + 1}"
-                        st1.run(a, credential, "real.$tag", null, r::record)
-                        if (anchor != null) st1.run(a, credential, "fixed.$tag", anchor, r::record)
-                        net.dnsAnswers["D2"]?.firstOrNull { CfBogon.isCloudflare(it) }?.let { ip -> st1.run(a, credential, "doh.$tag", ip, r::record) }
+                // Doctor v3: every stage with the user's real account, panels and configs, each over
+                // every way, so the report says which ways work for THIS user and why the others do not.
+                val book = EdgeBook(env)
+                val ways = WayClient(env, book)
+                val matrix = WayMatrix(ways, v6)
+                // Each stage on its own: a time limit or an error in one is written down and the
+                // next one runs anyway. And none depends on the one before having worked -- each has
+                // its own fallback (see below), so a user whose account fails still gets the deploy
+                // path, the panels' way, the scan and the connection measured.
+                suspend fun guard(stage: String, ms: Long, block: suspend () -> Unit) {
+                    try {
+                        withTimeoutOrNull(ms) { block() } ?: deep.verdict(stage, "stage", "stage_time_limit")
+                    } catch (e: CancellationException) {
+                        if (job?.isCancelled == true) throw e
+                        deep.verdict(stage, "stage", "stage_cancelled_inside")
+                    } catch (e: Exception) {
+                        deep.verdict(stage, "stage", "doctor_error:${e.javaClass.simpleName}")
                     }
-                } ?: r.decision("skip:ST1:stage_budget")
-                if (!hasCredential) r.decision("skip:ST1:no_credential")
-
-                // ---- ST2: the panels and their configs.
-                step(Step.PANEL, 0.28f)
-                val fromPanels = mutableListOf<VpnConfig>()
-                withTimeoutOrNull(40_000) { accounts.forEach { panel(app, it, cloud, env, net, budget, r, fromPanels) } } ?: run {
-                    r.decision("skip:ST2:stage_budget")
-                    r.record(Evidence("ST2", "stage", "unfinished", numbers = mapOf("terminal" to 1L)))
                 }
-                if (accounts.isEmpty()) r.decision("skip:ST2:no_account")
+                try {
+                    // ---- ST1: the account, and the deploy path (measured even when the account fails).
+                    step(Step.ACCOUNT, 0.12f)
+                    guard("ACCOUNT", 210_000) { AccountStage(app, cloud, env, ways, matrix, deep, r::record).run(accounts, credential) }
+                    if (!hasCredential) r.decision("skip:ST1:no_credential")
 
-                // ---- ST3: the configs connect?
-                step(Step.CONFIG, 0.38f)
-                val saved = runCatching { NodeManager(app).nodesFlow.value.mapNotNull { VpnConfig.parseUri(it.uri) } }.getOrDefault(emptyList())
-                val scannerConfig = runCatching { VpnConfig.parseUri(ScannerManager.globalBaseConfig.value) }.getOrNull()
-                configs = ConfigProbes.pick(fromPanels + saved + listOfNotNull(scannerConfig))
-                withTimeoutOrNull(90_000) { configProbes.baseline(configs, r) } ?: run {
-                    r.decision("skip:ST3:stage_budget")
-                    r.record(Evidence("ST3", "stage", "unfinished", numbers = mapOf("terminal" to 1L)))
+                    // ---- ST2: every panel (their addresses are stored on the phone, not asked of the
+                    // account API); with none, a reference Worker name over every way.
+                    step(Step.PANEL, 0.3f)
+                    val fromPanels = mutableListOf<VpnConfig>()
+                    guard("PANEL", 240_000) { PanelStage(app, ways, matrix, deep, r::record).run(accounts, fromPanels) }
+
+                    // ---- which configs the scan and the connection use: the user's own first; with no
+                    // Cloudflare config of their own, public ones (marked so), so both stages still measure.
+                    val saved = runCatching { NodeManager(app).nodesFlow.value.mapNotNull { VpnConfig.parseUri(it.uri) } }.getOrDefault(emptyList())
+                    val scannerConfig = runCatching { VpnConfig.parseUri(ScannerManager.globalBaseConfig.value) }.getOrNull()
+                    val own = ConfigProbes.pick(fromPanels + saved + listOfNotNull(scannerConfig))
+                    val publicCfgs = if (own.none { ConfigProbes.isCloudflare(it) && ConfigProbes.rawConfig(it) != null })
+                        runCatching { kotlinx.coroutines.withContext(Dispatchers.IO) { PublicConfigs.fetch(env, deep) } }.getOrDefault(emptyList()) else emptyList()
+                    configs = own + publicCfgs
+                    val sources = own.map { "own" } + publicCfgs.map { "public" }
+                    deep.line("CONFIGS", "ALL", "picked", "own" to own.size, "own_cloudflare" to own.count { ConfigProbes.isCloudflare(it) },
+                        "from_panels" to fromPanels.size, "saved" to saved.size, "scanner_base" to (scannerConfig != null), "public" to publicCfgs.size)
+
+                    // ---- ST4: the scanner, across every range.
+                    step(Step.SCANNER, 0.48f)
+                    val scanBase = scannerConfig ?: configs.firstOrNull { ConfigProbes.isCloudflare(it) && ConfigProbes.rawConfig(it) != null }
+                        ?: configs.firstOrNull { ConfigProbes.isCloudflare(it) }
+                    val baseWhy = when {
+                        scannerConfig != null -> "scanner_base_config"
+                        scanBase == null -> "none"
+                        publicCfgs.any { it === scanBase } -> "public_config"
+                        else -> "first_cloudflare_config"
+                    }
+                    val scan = ScanStage(app, env, deep, r::record)
+                    guard("SCAN", 480_000) { scan.run(scanBase, baseWhy, v6) }
+
+                    // ---- ST3: connecting, and data both ways.
+                    step(Step.CONFIG, 0.66f)
+                    guard("CONNECT", 540_000) { ConnectStage(app, env, deep, r::record).run(configs, scan.best.map { it.ip }, v6, sources) }
+
+                    // ---- what the edge groups and the app's edge picker found on this line.
+                    runCatching {
+                        deep.line("EDGES", "NET", "groups",
+                            "alive" to book.knownEdges().entries.joinToString(",") { "${it.key}=${it.value}" }.ifEmpty { "-" },
+                            "dead" to book.deadGroups().sorted().joinToString(",").ifEmpty { "-" },
+                            "cfedge" to com.mlmvpn.scanner.data.CfEdge.good(app, 4).joinToString(",").ifEmpty { "-" })
+                    }
+                    runCatching { tunnelCheck(app, r, budget) }
+                } finally {
+                    ways.shutdown()
                 }
-
-                // ---- ST4: why a scan finds nothing.
-                step(Step.SCANNER, 0.55f)
-                val scanBase = scannerConfig ?: configs.firstOrNull { ConfigProbes.isCloudflare(it) }
-                if (scannerConfig == null && scanBase != null) r.decision("ST4:scanner_has_no_config:using_first_cf_config")
-                // Addresses this run already reached first: a scan sample of addresses the line
-                // cannot reach at all would only measure the line, not the scanner.
-                val reached = r.state.value.rows.filter { it.id == "T1" && it.ok }.map { it.route }.distinct()
-                withTimeoutOrNull(70_000) { ScannerStage(app, env, budget).run(scanBase, (reached.shuffled() + plan.ips.shuffled()).distinct(), r) } ?: run {
-                    r.decision("skip:ST4:stage_budget")
-                    r.record(Evidence("ST4", "stage", "unfinished", numbers = mapOf("terminal" to 1L)))
-                }
-
-                // ---- R1: does the running tunnel reach Cloudflare where the line does not?
-                tunnelCheck(app, r, budget)
-                step(Step.METHODS, 0.65f)
+                step(Step.METHODS, 0.9f)
             },
-            adaptiveStages = { r, requestedFull ->
-                step(Step.VARIANTS, 0.85f)
-                configProbes.variations(configs, r, requestedFull)
-            },
+            // The old per-config variations are part of ST3 now (ConnectStage).
+            adaptiveStages = { _, _ -> },
             persist = { p ->
-                val text = CfDoctorReport.render(plan.version, p.rows, p.flags, p.decisions, p.complete, environment, hasCredential)
+                val text = CfDoctorReport.render(plan.version, p.rows, p.flags, p.decisions, p.complete, environment, hasCredential, deep.text())
                 report = text
                 runCatching {
                     val f = latest(app)

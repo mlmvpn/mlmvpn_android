@@ -56,6 +56,9 @@ import com.mlmvpn.scanner.data.NodeManager
 import com.mlmvpn.scanner.models.VpnNode
 import com.mlmvpn.scanner.utils.S
 
+/** At most this many characters go to the clipboard in one copy (it rides one binder call). */
+private const val MAX_CLIP_CHARS = 200_000
+
 @androidx.compose.foundation.ExperimentalFoundationApi
 @Composable
 fun NodesTab(onBack: () -> Unit) {
@@ -129,7 +132,7 @@ fun NodesTab(onBack: () -> Unit) {
                             putExtra("PROXY_MODE", com.mlmvpn.scanner.utils.NetworkSettings.proxyMode(context))
                             putExtra("LOCAL_PORT", com.mlmvpn.scanner.utils.LocalPort.getString(context))
                         }
-                        context.startService(startIntent)
+                        com.mlmvpn.scanner.utils.SafeStart.service(context, startIntent)
                     }
                 }
             }
@@ -188,9 +191,9 @@ fun NodesTab(onBack: () -> Unit) {
      *
      * The list itself is written once, when the run finishes. See [flushLive].
      */
-    val livePing = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
-    val liveDelay = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
-    val liveSpeed = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
+    val livePing = remember { LiveMarks() }
+    val liveDelay = remember { LiveMarks() }
+    val liveSpeed = remember { LiveMarks() }
     var topNodeHighlightedId by remember { mutableStateOf<String?>(null) }
     var isPlatformTesting by remember { mutableStateOf(false) }
 
@@ -312,9 +315,13 @@ fun NodesTab(onBack: () -> Unit) {
     // Auto-rename SNI configs
     LaunchedEffect(nodesFlowState) {
         if (nodesFlowState.isNotEmpty()) {
-            var changed = false
-            val newNodes = nodesFlowState.map { node ->
+            val source = nodesFlowState
+            // Off the main thread, and only links that can point at loopback get parsed: this
+            // ran a full parse of every config on the main thread each time the list changed --
+            // seconds on a long list (freeze reports, 1.2.41).
+            val newNodes = withContext(kotlinx.coroutines.Dispatchers.Default) { source.map { node ->
                 if (node.engineType == "NHN") return@map node
+                if (!node.uri.startsWith("vmess://") && !node.uri.contains("127.0.0.1")) return@map node
                 
                 var newUri = node.uri
                 var currentName = ""
@@ -357,19 +364,15 @@ fun NodesTab(onBack: () -> Unit) {
                     }
                 }
 
-                if (changedLocal) {
-                    changed = true
-                    node.copy(name = currentName, uri = newUri)
-                } else {
-                    node
-                }
-            }
+                if (changedLocal) node.copy(name = currentName, uri = newUri) else node
+            } }
+            val changed = newNodes.indices.any { newNodes[it] !== source[it] }
             if (changed) {
                 // Only the ones it renamed. This used to replace the entire stored list with a
                 // snapshot taken when the effect started, so anything added since -- by the SNI
                 // screen, the scanner, a subscription refresh -- was deleted by a rename it had
                 // nothing to do with.
-                val renamed = newNodes.filterIndexed { i, n -> n !== nodesFlowState[i] }
+                val renamed = newNodes.filterIndexed { i, n -> n !== source[i] }
                 withContext(kotlinx.coroutines.Dispatchers.IO) {
                     nodeManager.mergeById(renamed)
                 }
@@ -438,20 +441,22 @@ fun NodesTab(onBack: () -> Unit) {
         } else if (sortState == 0) {
             visibleNodes
         } else {
+            // Each node's numbers are read once, here, not inside the comparator: there they were
+            // read again for every comparison, and toDoubleOrNull runs a regex each time -- a sort
+            // of a few thousand configs was hundreds of thousands of regex matches on the main
+            // thread (the node list's freezes and ANRs, 1.2.41).
+            val keys = HashMap<String, NodeSortKey>(visibleNodes.size * 2)
+            visibleNodes.forEach { keys[it.id] = NodeSortKey.of(it) }
             val comparator = Comparator<VpnNode> { a, b ->
-                val getSpeed = { node: VpnNode ->
-                    if (node.speed.contains("MB/s")) node.speed.replace(" MB/s", "").toDoubleOrNull() ?: -1.0 else -1.0
-                }
-                
-                val delayA = if (a.delay.contains("ms")) a.delay.replace("ms", "").toDoubleOrNull() else null
-                val delayB = if (b.delay.contains("ms")) b.delay.replace("ms", "").toDoubleOrNull() else null
-                
-                val speedA = getSpeed(a)
-                val speedB = getSpeed(b)
-                
-                val pingA = if (a.ping.contains("ms")) a.ping.replace("ms", "").toDoubleOrNull() else null
-                val pingB = if (b.ping.contains("ms")) b.ping.replace("ms", "").toDoubleOrNull() else null
-                
+                val ka = keys[a.id] ?: NodeSortKey.of(a)
+                val kb = keys[b.id] ?: NodeSortKey.of(b)
+                val delayA = ka.delay
+                val delayB = kb.delay
+                val speedA = ka.speed
+                val speedB = kb.speed
+                val pingA = ka.ping
+                val pingB = kb.ping
+
                 val comparison = if (delayA != null && delayB != null && delayA != delayB) {
                     delayA.compareTo(delayB)
                 } else if (delayA != null && delayB == null) {
@@ -533,7 +538,7 @@ fun NodesTab(onBack: () -> Unit) {
                     putExtra("PROXY_MODE", isProxyMode)
                     putExtra("LOCAL_PORT", localPort)
                 }
-                context.startService(intent)
+                com.mlmvpn.scanner.utils.SafeStart.service(context, intent)
             } else {
                 isConnecting = false
             }
@@ -697,13 +702,7 @@ fun NodesTab(onBack: () -> Unit) {
                         }
                     } catch (e: Exception) {}
 
-                    try { 
-                        val keyBytes = ByteArray(32)
-                        java.security.SecureRandom().nextBytes(keyBytes)
-                        val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-                        val xudpBaseKey = android.util.Base64.encodeToString(keyBytes, flags)
-                        libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey) 
-                    } catch (e: Exception) {}
+                    com.mlmvpn.scanner.data.CombineEngine.ensureCoreEnv(context)
 
                     // Measured the way the connect will run it (CfEdgeHeal: IPv6 twin when Cloudflare
                     // IPv4 is measured dead here).
@@ -863,15 +862,17 @@ fun NodesTab(onBack: () -> Unit) {
                 onCopyHealthy = {
                     val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                         as android.content.ClipboardManager
-                    cm.setPrimaryClip(
-                        android.content.ClipData.newPlainText(
-                            "configs",
-                            healthyUris.joinToString("\n"),
-                        )
-                    )
+                    // The clipboard travels through one binder call (~1 MB, and text is two bytes
+                    // a character): thousands of configs crashed the app (crash #677). As many
+                    // whole lines as fit, and the toast says how many that was.
+                    var size = 0
+                    val fit = healthyUris.takeWhile { size += it.length + 1; size <= MAX_CLIP_CHARS }
+                    runCatching {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("configs", fit.joinToString("\n")))
+                    }
                     android.widget.Toast.makeText(
                         context,
-                        S(R.string.nodes_copied_healthy, faCount(healthyUris.size)),
+                        S(R.string.nodes_copied_healthy, faCount(fit.size)),
                         android.widget.Toast.LENGTH_SHORT,
                     ).show()
                 },
@@ -993,13 +994,7 @@ fun NodesTab(onBack: () -> Unit) {
                     }
                 }
 
-                try {
-                    val keyBytes = ByteArray(32)
-                    java.security.SecureRandom().nextBytes(keyBytes)
-                    val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-                    val xudpBaseKey = android.util.Base64.encodeToString(keyBytes, flags)
-                    libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey)
-                } catch (e: Exception) {}
+                com.mlmvpn.scanner.data.CombineEngine.ensureCoreEnv(context)
 
                 // Real delay/speed tests are actual Xray-proxied connections, not raw pings --
                 // running too many at once against the same server(s) reads as suspicious
@@ -1026,8 +1021,7 @@ fun NodesTab(onBack: () -> Unit) {
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
                     val marks = if (indicatorProp == "ping") livePing
                     else if (indicatorProp == "delay") liveDelay else liveSpeed
-                    marks.clear()
-                    for (node in targetNodes) marks[node.id] = "..."
+                    marks.reset(targetNodes.map { it.id }, "...")
                 }
 
                 val deferreds = targetNodes.map { node ->
@@ -1096,7 +1090,7 @@ fun NodesTab(onBack: () -> Unit) {
                         withContext(kotlinx.coroutines.Dispatchers.Main) {
                             val marks = if (indicatorProp == "ping") livePing
                             else if (indicatorProp == "delay") liveDelay else liveSpeed
-                            for ((id, value) in marks.toList()) if (value == "...") marks[id] = "Cancelled"
+                            marks.replaceValue("...", "Cancelled")
                             android.widget.Toast.makeText(context, S(R.string.test_cancelled), android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -1164,8 +1158,7 @@ fun NodesTab(onBack: () -> Unit) {
                     delayTotal = activeNodes.size
                     delayProgress = 0
                     isDelayTesting = true
-                    liveDelay.clear()
-                    for (node in activeNodes) liveDelay[node.id] = "..."
+                    liveDelay.reset(activeNodes.map { it.id }, "...")
                 }
 
                 // Ids, not positions. `validIndices` held offsets into a snapshot of `nodes`
@@ -1229,13 +1222,7 @@ fun NodesTab(onBack: () -> Unit) {
                             }
                         } catch (e: Exception) {}
 
-                        try { 
-                            val keyBytes = ByteArray(32)
-                            java.security.SecureRandom().nextBytes(keyBytes)
-                            val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-                            val xudpBaseKey = android.util.Base64.encodeToString(keyBytes, flags)
-                            libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey) 
-                        } catch (e: Exception) {}
+                        com.mlmvpn.scanner.data.CombineEngine.ensureCoreEnv(context)
 
                         val measureSemaphore = kotlinx.coroutines.sync.Semaphore(3) // Cloudflare/DPI might block if >3 concurrent handshakes -- was set to 8 here, directly contradicting this comment
                         // Country lookup is much heavier (spins up its own CoreController + SOCKS
@@ -1332,7 +1319,7 @@ fun NodesTab(onBack: () -> Unit) {
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             withContext(kotlinx.coroutines.NonCancellable) {
                                 withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                    for ((id, value) in liveDelay.toList()) if (value == "...") liveDelay[id] = "Cancelled"
+                                    liveDelay.replaceValue("...", "Cancelled")
                                     android.widget.Toast.makeText(context, S(R.string.test_cancelled), android.widget.Toast.LENGTH_SHORT).show()
                                 }
                             }
@@ -1340,7 +1327,7 @@ fun NodesTab(onBack: () -> Unit) {
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         withContext(kotlinx.coroutines.NonCancellable) {
                             withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                for ((id, value) in liveDelay.toList()) if (value == "...") liveDelay[id] = "Cancelled"
+                                liveDelay.replaceValue("...", "Cancelled")
                             }
                         }
                         throw e
@@ -1599,7 +1586,7 @@ fun NodesTab(onBack: () -> Unit) {
                                     putExtra("PROXY_MODE", com.mlmvpn.scanner.utils.NetworkSettings.proxyMode(context))
                                     putExtra("LOCAL_PORT", com.mlmvpn.scanner.utils.LocalPort.getString(context))
                                 }
-                                context.startService(startIntent)
+                                com.mlmvpn.scanner.utils.SafeStart.service(context, startIntent)
                             }
                         },
                         onOpenDetail = { page = NodesPage.Detail(node.id) },
@@ -1620,6 +1607,7 @@ fun NodesTab(onBack: () -> Unit) {
         // A bar, not a floating disc. The FAB sat in the bottom corner over the list, which put
         // the one control the screen exists for on top of the content it acts on -- and it hid
         // whichever config happened to be under it. This says which server it will use.
+        com.mlmvpn.scanner.ui.RouteChips()
         NodeConnectBar(
             node = nodes.find { it.id == activeNodeId },
             isRunning = tunnelUp,
@@ -1699,7 +1687,7 @@ fun NodesTab(onBack: () -> Unit) {
                                     putExtra("PROXY_MODE", com.mlmvpn.scanner.utils.NetworkSettings.proxyMode(context))
                                     putExtra("LOCAL_PORT", com.mlmvpn.scanner.utils.LocalPort.getString(context))
                                 }
-                                context.startService(startIntent)
+                                com.mlmvpn.scanner.utils.SafeStart.service(context, startIntent)
                             } else {
                                 isConnecting = false
                             }
@@ -1969,17 +1957,13 @@ suspend fun realSpeedTest(config: com.mlmvpn.scanner.utils.VpnConfig, context: a
         val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(config, localPort, includeTun = false)
         
         var speedStr = "Timeout"
-        var coreController: libv2ray.CoreController? = null
+        // A test core, in the test host process (XrayHosts): a node that panics Xray ends that
+        // process, not the app.
+        var core: com.mlmvpn.core.warp.VlessXrayInjector? = null
         try {
-            coreController = libv2ray.Libv2ray.newCoreController(object : libv2ray.CoreCallbackHandler {
-                override fun onEmitStatus(status: Long, message: String): Long = 0
-                override fun shutdown(): Long = 0
-                override fun startup(): Long = 0
-            })
-
-            // Log the JSON config for debugging
-            android.util.Log.d("XraySpeedTest", "Speed Test JSON Config:\n$jsonConfig")
-            coreController.startLoop(jsonConfig, 0)
+            val c = com.mlmvpn.core.warp.VlessXrayInjector(0, quiet = true)
+            if (!c.start(context, jsonConfig, localPort)) return@withContext "Error"
+            core = c
             
             // Give Xray time to start listening on localPort
             kotlinx.coroutines.delay(500)
@@ -2012,10 +1996,63 @@ suspend fun realSpeedTest(config: com.mlmvpn.scanner.utils.VpnConfig, context: a
         } catch (e: Exception) {
             speedStr = "Timeout"
         } finally {
-            try { coreController?.stopLoop() } catch (e: Exception) {}
+            try { core?.stop() } catch (e: Exception) {}
         }
         speedStr
     } catch (e: Exception) {
         "Error"
+    }
+}
+
+/**
+ * Test results as they arrive, by node id, for the rows to read.
+ *
+ * Was a SnapshotStateMap, whose every write compares the old map with the new one entry by entry:
+ * one result cost a pass over every marked node, so "delay all" over a few thousand configs was
+ * millions of lookups on the main thread, which froze the list (freeze and ANR reports, 1.2.41).
+ * Here a write is one copy of a plain map, and marking or cancelling a whole run is one write.
+ */
+class LiveMarks {
+    private var marks by mutableStateOf<Map<String, String>>(emptyMap(), referentialEqualityPolicy())
+
+    operator fun get(id: String): String? = marks[id]
+    operator fun set(id: String, value: String) { marks = HashMap(marks).apply { put(id, value) } }
+    fun isEmpty(): Boolean = marks.isEmpty()
+    fun clear() { if (marks.isNotEmpty()) marks = emptyMap() }
+
+    /** Every id in [ids] set to [value], everything else dropped: one write. */
+    fun reset(ids: Collection<String>, value: String) { marks = ids.associateWithTo(HashMap(ids.size * 2)) { value } }
+
+    /** Every entry holding [from] set to [to]: one write. */
+    fun replaceValue(from: String, to: String) {
+        if (marks.values.none { it == from }) return
+        marks = marks.mapValuesTo(HashMap(marks.size * 2)) { (_, v) -> if (v == from) to else v }
+    }
+}
+
+/** A node's measurements as numbers, for sorting: delay and ping in ms (null: none), speed in MB/s (-1: none). */
+class NodeSortKey(val delay: Double?, val speed: Double, val ping: Double?) {
+    companion object {
+        fun of(node: VpnNode) = NodeSortKey(
+            delay = if (node.delay.contains("ms")) number(node.delay.replace("ms", "")) else null,
+            speed = if (node.speed.contains("MB/s")) number(node.speed.replace(" MB/s", "")) ?: -1.0 else -1.0,
+            ping = if (node.ping.contains("ms")) number(node.ping.replace("ms", "")) else null,
+        )
+
+        /** A plain decimal ("123", "1.5") without toDoubleOrNull's regex; anything else is null. */
+        private fun number(raw: String): Double? {
+            val t = raw.trim()
+            if (t.isEmpty() || t.length > 24) return null
+            var dot = false
+            for ((i, c) in t.withIndex()) {
+                when {
+                    c in '0'..'9' -> {}
+                    c == '.' && !dot -> dot = true
+                    c == '-' && i == 0 && t.length > 1 -> {}
+                    else -> return null
+                }
+            }
+            return try { t.toDouble() } catch (_: NumberFormatException) { null }
+        }
     }
 }

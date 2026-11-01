@@ -16,6 +16,8 @@
  *                                by `artScale` when the desktop scales it
  *                         white  the white tile (#FFFFFF -> #ECECF0) with the art at 52% or, `big`,
  *                                82% -- `.mv-ic.is-art` / `.is-big` in public/ui/components.css
+ *                         image  artwork that carries its own ground (the desktop's `image: true`,
+ *                                `.mv-ic.is-image`): drawn as is, its viewBox mapped onto the 1024 box
  *   ic_glyph_<name>.xml a white 24dp glyph, drawn by AppIcon on the tinted gradient tile -- the same
  *                       recipe the desktop's glyph tiles use.
  *
@@ -46,6 +48,7 @@ const ART = {
   ic_app_cloudflare: { id: 'g-cloudflare-art', kind: 'cover', bg: '#FFFFFF', app: 'cloud' },
   ic_app_tor:        { id: 'g-tor-art',        kind: 'white', scale: 0.82, app: 'tor' },
   ic_app_openvpn:    { id: 'g-openvpn-art',    kind: 'white', scale: 0.52, app: 'openvpn' },
+  ic_app_lantern:    { id: 'g-lantern-art',    kind: 'image', app: 'lantern' },
 };
 
 /** Desktop glyph -> Android drawable. Tints stay in HomeDestinations (the desktop's tint tokens). */
@@ -300,6 +303,24 @@ function artDrawable(name, spec, sprite) {
 
   const body = [];
   convert(parseXml(art.body), {}, body, 3, false);
+
+  if (spec.kind === 'image') {
+    // Its own ground, its own squircle: no tile behind it and no clip, only the viewBox fitted to
+    // the 1024 box the other tiles use (centred by its larger side, as SVG does).
+    const s = 1024 / Math.max(vb.w, vb.h);
+    const ix = (1024 - vb.w * s) / 2 - vb.x * s;
+    const iy = (1024 - vb.h * s) / 2 - vb.y * s;
+    return header(`Home tile «${spec.app}» — desktop artwork ${spec.id}, drawn as is (it carries its own ground).`) +
+      '<vector xmlns:android="http://schemas.android.com/apk/res/android"\n' +
+      '    android:width="108dp"\n    android:height="108dp"\n' +
+      '    android:viewportWidth="1024"\n    android:viewportHeight="1024">\n' +
+      '    <group>\n' +
+      `        <group android:translateX="${fmt(ix)}" android:translateY="${fmt(iy)}" android:scaleX="${fmt(s)}" android:scaleY="${fmt(s)}">\n` +
+      body.join('\n') + '\n' +
+      '        </group>\n' +
+      '    </group>\n' +
+      '</vector>\n';
+  }
 
   const ground = spec.kind === 'white'
     ? [

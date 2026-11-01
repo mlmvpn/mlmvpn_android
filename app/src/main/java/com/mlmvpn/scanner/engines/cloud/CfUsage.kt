@@ -50,7 +50,9 @@ object CfUsage {
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading
 
-    private val http = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+    // Same Cloudflare route as the deployers: a proven edge, ClientHello split past the name filter.
+    private val http = OkHttpClient.Builder().dns(WorkerRoute.dns()).socketFactory(WorkerRoute.cfSocketFactory()).proxySelector(com.mlmvpn.scanner.engines.cloud.CfTunnel.selector())
+        .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
     private val JSON = "application/json".toMediaType()
 
     /**

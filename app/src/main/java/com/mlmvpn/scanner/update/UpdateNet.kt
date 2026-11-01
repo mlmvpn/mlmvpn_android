@@ -142,9 +142,10 @@ object UpdateNet {
      * Same question [com.mlmvpn.scanner.lan.LanShare] answers for sharing, asked here for the same
      * reason: it is the only door into the tunnel from inside this process.
      */
-    private fun tunnelProxy(context: Context): Proxy? {
+    fun tunnelProxy(context: Context): Proxy? {
         val port = when {
-            MyVpnService.isRunning -> LocalPort.get(context)
+            MyVpnService.isRunning -> MyVpnService.runtimeControlSocksPort.takeIf { it > 0 }
+                ?: MyVpnService.runtimeSocksPort.takeIf { it > 0 } ?: LocalPort.get(context)
             else -> TunnelStatus.activeSocksPort
         }
         if (port <= 0) return null
@@ -162,14 +163,35 @@ object UpdateNet {
         context: Context,
         connectSeconds: Long,
         readSeconds: Long,
+        /**
+         * A panel's Worker (deploy, configs) goes DIRECT and falls back to the tunnel only when it cannot
+         * connect (engines/cloud/CfTunnel.kt) — instead of through the tunnel whenever one is on, which is
+         * right for GitHub and the update download and wrong for Cloudflare, where direct works for most.
+         */
+        directFirst: Boolean = false,
+        /**
+         * Bound the whole call (below). False for a file download: there the ceiling cut every file
+         * that took longer than connect + read + 20 s -- 95 s for the app's own update, so its APK
+         * needed 6 Mbit/s and more to finish -- which is what users reported as "it reaches the end
+         * (or the middle), drops, and starts again from zero". A download keeps the read timeout,
+         * which still catches a connection that stopped sending.
+         */
+        wholeCallTimeout: Boolean = true,
     ): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(connectSeconds, TimeUnit.SECONDS)
         .readTimeout(readSeconds, TimeUnit.SECONDS)
         .writeTimeout(readSeconds, TimeUnit.SECONDS)
+        // An overall ceiling on the whole call, so a half-open SOCKS proxy or a stalled read cannot
+        // hang a registration or an update check indefinitely (the per-step timeouts alone did not
+        // bound the total). Comfortably above connect + read so a legitimately slow tunnel still works.
+        .apply { if (wholeCallTimeout) callTimeout(connectSeconds + readSeconds + 20, TimeUnit.SECONDS) }
         // Worker names get the checked, healthy-first answer (com.mlmvpn.scanner.engines.cloud.WorkerRoute); everything else as before.
         .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns(doh))
-        .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
-        .apply { tunnelProxy(context)?.let { proxy(it) } }
+        .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory())
+        .apply {
+            if (directFirst) proxySelector(com.mlmvpn.scanner.engines.cloud.CfTunnel.selector())
+            else tunnelProxy(context)?.let { proxy(it) }
+        }
         .build()
 
     /** Drops resolved addresses, for a retry after the network changed. */

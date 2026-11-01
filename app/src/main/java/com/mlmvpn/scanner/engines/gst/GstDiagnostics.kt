@@ -39,7 +39,7 @@ object GstDiagnostics {
         .followSslRedirects(true)
         .build()
 
-    enum class Result { OK, AUTH_MISMATCH, REDIRECT_BLOCKED, UNREACHABLE, BAD_RESPONSE }
+    enum class Result { OK, AUTH_MISMATCH, REDIRECT_BLOCKED, UNREACHABLE, BAD_RESPONSE, NOT_FOUND, FRONT_BLOCKED, KEY_NOT_USED }
 
     data class Report(
         val result: Result,
@@ -51,7 +51,30 @@ object GstDiagnostics {
 
     /** Build the /exec URL for a raw Apps Script deployment id. */
     fun execUrl(deploymentId: String): String =
-        "https://script.google.com/macros/s/${deploymentId.trim()}/exec"
+        "https://script.google.com/macros/s/${GstConfigManager.normalizeDeploymentId(deploymentId)}/exec"
+
+    /**
+     * The panel's full verdict for one saved relay: the relay itself, then the two things the
+     * tunnel adds on top of it. A healthy relay whose password is not the tunnel's is never
+     * used, and a healthy relay behind a closed Google front moves nothing; both used to show
+     * as "healthy" and leave the user with a tunnel that connects and carries no data.
+     */
+    suspend fun testForTunnel(context: android.content.Context, relay: GstRelay): Report {
+        val report = testDeployment(execUrl(relay.deploymentId), relay.authKey)
+        if (report.result != Result.OK) return report
+        val tunnelKey = GstConfigManager.tunnelAuthKey(GstConfigManager.getRelays(context))
+        if (tunnelKey != null && tunnelKey != relay.authKey) {
+            GstLog.w(TAG, "Relay healthy but its password is not the tunnel's - it is left out")
+            return report.copy(result = Result.KEY_NOT_USED, message = S(R.string.gst_relay_key_not_used))
+        }
+        val front = GstFront.pick(context)
+        if (front == null) {
+            GstLog.e(TAG, "Relay healthy but no Google front answers on this network")
+            return report.copy(result = Result.FRONT_BLOCKED, message = S(R.string.gst_front_blocked))
+        }
+        GstLog.i(TAG, "Tunnel front OK: ${front.ip} / ${front.sni} (${front.ms} ms)")
+        return report
+    }
 
     /**
      * Relay one probe request through the given endpoint.
@@ -110,6 +133,14 @@ object GstDiagnostics {
                                         code, preview
                                     )
                                 }
+                                json.optString("e").contains("too many times", true) -> {
+                                    GstLog.e(TAG, "Apps Script daily quota used up: ${json.optString("e")}")
+                                    return@withContext Report(
+                                        Result.BAD_RESPONSE,
+                                        S(R.string.gst_relay_quota_used_up),
+                                        code, preview
+                                    )
+                                }
                                 else -> {
                                     val e = json.optString("e", "unknown")
                                     GstLog.e(TAG, "Relay returned error envelope: $e")
@@ -163,6 +194,18 @@ object GstDiagnostics {
                             Result.REDIRECT_BLOCKED,
                             S(R.string.the_script_redirected_to_google_s_sign) +
                                 S(R.string.who_has_access_anyone_and_execute_as),
+                            code, preview
+                        )
+                    }
+
+                    // 3c. Google has no web app under this id: a Script ID or a test (/dev)
+                    //     id pasted instead of the Deployment ID, or a deployment that was
+                    //     archived/deleted.
+                    if (code == 404) {
+                        GstLog.e(TAG, "404 - no web app under this deployment id")
+                        return@withContext Report(
+                            Result.NOT_FOUND,
+                            S(R.string.gst_relay_not_found),
                             code, preview
                         )
                     }

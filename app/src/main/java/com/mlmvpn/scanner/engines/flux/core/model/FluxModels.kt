@@ -51,11 +51,15 @@ enum class Transport(val code: String) {
 enum class Security { NONE, TLS, REALITY }
 
 /**
- * A fragment profile for the TLS ClientHello. Never a user setting: FLUX learns, per network,
- * whether any of them beats [OFF], and prefers [OFF] whenever it works.
+ * How the TLS ClientHello is shaped. Never a user setting: FLUX learns, per network, whether any
+ * of them beats [OFF], and prefers [OFF] whenever it works.
+ *
+ * [ECH] and [PATTNG] are the two handshakes the Cloudflare Doctor proves on Iranian lines
+ * ([com.mlmvpn.scanner.engines.cfnet.CfShape]): the real name encrypted under cloudflare-ech.com,
+ * and PattNG's Go-TLS hello cut into pieces. ECH only means anything on a Cloudflare dial.
  */
 enum class FragmentProfile(val code: String) {
-    OFF("0"), CONSERVATIVE("c"), BALANCED("b"), AGGRESSIVE("a");
+    OFF("0"), CONSERVATIVE("c"), BALANCED("b"), AGGRESSIVE("a"), ECH("e"), PATTNG("p");
 
     companion object {
         fun of(code: String?): FragmentProfile = values().firstOrNull { it.code == code } ?: OFF
@@ -102,6 +106,12 @@ class FluxNode(
      * only after every verified candidate has failed.
      */
     val insecure: Boolean = false,
+    /**
+     * The SHA-256 of the server's own certificate (64 hex digits), from the link's `pinSHA256` or
+     * measured on first contact (Hysteria2 with a self-signed certificate). Given to the core as
+     * `pinnedPeerCertSha256`: exactly that certificate is accepted, nothing else.
+     */
+    val certPin: String = "",
 ) {
     /**
      * A node a CDN edge can carry: an HTTP-shaped transport whose origin is named by Host/SNI, so

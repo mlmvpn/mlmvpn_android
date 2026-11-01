@@ -514,13 +514,34 @@ data class StudioInstallation(
     val users: Int = -1,
     /** True when this installation answered its last health check. */
     val reachable: Boolean = true,
+    /**
+     * An account's central Worker ([isCentral]): how many Studio people it can carry at once beside
+     * its own id and the connected panels -- an exact number, not [ShardCapacity]'s estimate. -1 on
+     * an engine.
+     */
+    val centralRoom: Int = -1,
+    /** An account's central Worker: how many of its people may pass right now (each takes a place). */
+    val centralLive: Int = 0,
 ) {
     fun can(capability: String): Boolean = capabilities.contains(capability)
     val isHealthy: Boolean get() = reachable && d1Ok && migrationError == null && syncError == null
 
+    /**
+     * People on this account ride its central Worker, answered from this phone: no engine, no
+     * database, no counter -- so no volume, devices or traffic, and nothing to update.
+     */
+    val isCentral: Boolean get() = can("central.v1")
+
     /** Null until the shard has reported a user count, so a meter is never drawn from nothing. */
-    val loadFraction: Float? get() = if (users < 0) null else ShardCapacity.fractionOf(users)
-    val isCrowded: Boolean get() = users >= 0 && ShardCapacity.isCrowded(users)
+    val loadFraction: Float? get() = when {
+        isCentral -> if (centralRoom > 0) (centralLive.toFloat() / centralRoom).coerceIn(0f, 1f) else null
+        users < 0 -> null
+        else -> ShardCapacity.fractionOf(users)
+    }
+    val isCrowded: Boolean get() = when {
+        isCentral -> centralRoom >= 0 && centralRoom - centralLive <= maxOf(2, centralRoom / 10)
+        else -> users >= 0 && ShardCapacity.isCrowded(users)
+    }
 
     /** Whether this installation carries an engine new enough for the app's current screens. */
     fun isStale(appBuild: Int, appSchema: Int): Boolean =

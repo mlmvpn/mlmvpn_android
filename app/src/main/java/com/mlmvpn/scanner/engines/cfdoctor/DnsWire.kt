@@ -5,7 +5,11 @@ import java.io.DataOutputStream
 import java.net.InetAddress
 
 object DnsWire {
-    data class Answer(val addresses: List<String>, val rcode: Int, val ech: Boolean)
+    /** [echConfig]: the first HTTPS record's ECH config list (SvcParam 5), the bytes a TLS client takes. */
+    data class Answer(val addresses: List<String>, val rcode: Int, val ech: Boolean, val echConfig: ByteArray? = null)
+
+    /** [parse]'s ECH config list, or null when [b] is not an answer with one. */
+    fun echConfig(b: ByteArray, id: Int): ByteArray? = runCatching { parse(b, id).echConfig }.getOrNull()
     fun query(host: String, type: Int = 1, id: Int = java.security.SecureRandom().nextInt(65536)): ByteArray {
         require(host.length in 1..253 && type in setOf(1,28,65))
         val b = ByteArrayOutputStream(); val d = DataOutputStream(b)
@@ -29,16 +33,20 @@ object DnsWire {
         var p=12
         require(u16(4)<=8 && u16(6)<=256)
         repeat(u16(4)) { p=skipName(p); require(p+4<=b.size); p+=4 }
-        val ips=mutableListOf<String>(); var ech=false
+        val ips=mutableListOf<String>(); var ech=false; var echConfig: ByteArray?=null
         repeat(u16(6)) {
             p=skipName(p); val type=u16(p); val clazz=u16(p+2); val n=u16(p+8); p+=10; require(p+n<=b.size)
             if (clazz==1 && ((type==1 && n==4) || (type==28 && n==16))) ips+=InetAddress.getByAddress(b.copyOfRange(p,p+n)).hostAddress!!
             if (type==65 && n>=3) {
                 var q=skipName(p+2)
-                while(q+4<=p+n) { val key=u16(q); val len=u16(q+2); q+=4; require(q+len<=p+n); if(key==5 && len>0) ech=true; q+=len }
+                while(q+4<=p+n) {
+                    val key=u16(q); val len=u16(q+2); q+=4; require(q+len<=p+n)
+                    if(key==5 && len>0) { ech=true; if (echConfig==null) echConfig=b.copyOfRange(q,q+len) }
+                    q+=len
+                }
             }
             p+=n
         }
-        return Answer(ips.distinct(), u16(2) and 15, ech)
+        return Answer(ips.distinct(), u16(2) and 15, ech, echConfig)
     }
 }

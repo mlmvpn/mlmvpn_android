@@ -59,7 +59,7 @@ object ArenaStudio {
 
     /** A base64 (or plain) link list, without the 127.0.0.1 information entries. */
     fun fetchList(context: Context, url: String): List<String> {
-        com.mlmvpn.scanner.update.UpdateNet.client(context, 15, 30).newCall(Request.Builder().url(url).get().build()).execute().use { r ->
+        com.mlmvpn.scanner.update.UpdateNet.client(context, 15, 30, directFirst = true).newCall(Request.Builder().url(url).get().build()).execute().use { r ->
             if (!r.isSuccessful) error("HTTP ${r.code}")
             val body = r.body?.string().orEmpty().trim()
             val text = if (body.contains("://")) body else runCatching { String(android.util.Base64.decode(body, android.util.Base64.DEFAULT)) }.getOrDefault(body)

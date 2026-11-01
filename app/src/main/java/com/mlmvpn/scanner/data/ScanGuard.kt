@@ -51,8 +51,15 @@ object ScanGuard {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    /** True while a scan holds the network. */
-    fun isScanBusy(): Boolean = ScannerManager.isScanning.value
+    /**
+     * True while a scan holds the network: the IP scan, or an MLM Scout run -- which is measuring the
+     * user's own line, so a tunnel brought up under it would turn every number into one about the
+     * tunnel.
+     */
+    fun isScanBusy(): Boolean = ScannerManager.isScanning.value || isScoutBusy()
+
+    /** The one holding the network is MLM Scout (the dialog says so in its own words). */
+    fun isScoutBusy(): Boolean = com.mlmvpn.scanner.engines.scout.ScoutEngine.isRunning()
 
     /**
      * Do [action] now, or hold it and raise the question.
@@ -86,10 +93,22 @@ object ScanGuard {
     fun stopScanAndProceed() {
         val request = _pending.value ?: return
         _pending.value = null
-        ScannerManager.stopScan()
+        val scout = isScoutBusy()
+        if (ScannerManager.isScanning.value) ScannerManager.stopScan()
+        // Scout keeps what it measured so far; its test cores are stopped on the way out.
+        if (scout) com.mlmvpn.scanner.engines.scout.ScoutEngine.stop(com.mlmvpn.scanner.engines.scout.EndReason.STOPPED)
         scope.launch {
-            delay(250)
-            request.proceed()
+            // Cancellation begins cleanup; it does not mean the shared core is free yet.
+            if (scout) com.mlmvpn.scanner.engines.scout.ScoutEngine.stopAndWait()
+            else delay(250)
+            // The wait above can outlast the screen that asked (Scout can take seconds to stop):
+            // its VPN-permission launcher is unregistered by then, and launching it threw
+            // IllegalStateException and closed the app (1.2.41). The user has left; nothing to do.
+            try {
+                request.proceed()
+            } catch (e: IllegalStateException) {
+                android.util.Log.w("ScanGuard", "the screen that asked is gone: ${e.message}")
+            }
         }
     }
 }

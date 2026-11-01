@@ -151,17 +151,14 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
     val brokerOk = st.broker.deployed && st.broker.version >= st.brokerRequired
     val ex = st.exit
 
-    // Setup is three steps, in this order, one at a time: Cloudflare (connect an account if the
-    // Cloud tab has none, then install the relay Worker on it), GitHub, then connect. The Worker
-    // comes first because nothing GitHub builds can be reached without it, and a user who signed
-    // in to GitHub first was then sent to the bottom of the page for the part that mattered.
+    // Setup is two steps: GitHub, then connect. The runner brings its own ways in -- free public
+    // relays it dials out to (runner/relays.mjs) -- so a GitHub account alone is enough, also for a
+    // user without Cloudflare or on a line where Cloudflare is filtered. The relay Worker on the
+    // user's own Cloudflare account is an optional extra way in, further down the page.
     var pickedCf by remember { mutableStateOf<String?>(null) }
     val cf = cloudAccounts.firstOrNull { it.id == (pickedCf ?: st.broker.cloudAccountId) } ?: cloudAccounts.firstOrNull()
-    val setupStep = when { !brokerOk -> 1; !hasAccounts -> 2; else -> 3 }
-    val setupDone = setupStep == 3
-    val stepOneAction: () -> Unit = {
-        if (cf == null) onOpenCloud() else if (!st.brokerBusy) GtEngine.deployBroker(cf)
-    }
+    val setupStep = if (!hasAccounts) 1 else 2
+    val setupDone = setupStep == 2
 
     // Pages of this screen, not modals: «country» (the exit), and a rule's editor with its own two
     // pickers — «rule» › «rule_country» / «rule_apps». The draft lives here, so it survives the
@@ -245,22 +242,8 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
             line = stringResource(R.string.gt_line_linking)
             dialAction = { GtEngine.disconnect() }
         }
-        !brokerOk -> {
-            headline = tr("قدم ۱ از ۳: کلادفلر", "Step 1 of 3: Cloudflare")
-            line = when {
-                st.brokerBusy -> tr("در حال نصب ورکر روی حساب کلادفلر شما…", "Installing the Worker on your Cloudflare account…")
-                cf == null -> tr(
-                    "اول حساب کلادفلر خودتان را وصل کنید. یک ورکر کوچک روی همین حساب، تونل را از ایران به سرور ابری می‌رساند.",
-                    "First connect your own Cloudflare account. A small Worker on it carries the tunnel from Iran to the cloud server.")
-                st.broker.deployed -> tr("ورکر نسخهٔ تازه‌تری لازم دارد. دکمه آن را به‌روز می‌کند.", "The Worker needs a newer version. The button updates it.")
-                else -> tr(
-                    "حساب کلادفلر وصل است. دکمه، ورکر تونل را روی همین حساب نصب می‌کند.",
-                    "Your Cloudflare account is connected. The button installs the tunnel Worker on it.")
-            }
-            dialAction = if (st.brokerBusy) null else stepOneAction
-        }
         !hasAccounts -> {
-            headline = tr("قدم ۲ از ۳: گیت‌هاب", "Step 2 of 3: GitHub")
+            headline = tr("قدم ۱ از ۲: گیت‌هاب", "Step 1 of 2: GitHub")
             line = stringResource(R.string.gt_line_no_account)
             dialAction = { GtEngine.signIn(adding = false) }
         }
@@ -284,15 +267,12 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
         ) {
             Dial(
                 on = connected,
-                working = building || linking || (!brokerOk && st.brokerBusy),
+                working = building || linking,
                 failed = !connected && (st.link.phase == "failed" || st.run?.step == "FAILED"),
                 enabled = dialAction != null,
                 label = when {
                     connected -> stringResource(R.string.disconnect)
                     building || linking -> stringResource(R.string.gt_dial_working)
-                    !brokerOk && st.brokerBusy -> stringResource(R.string.gt_dial_working)
-                    !brokerOk && cf == null -> tr("کلادفلر", "Cloudflare")
-                    !brokerOk -> tr("نصب ورکر", "Install")
                     !hasAccounts -> stringResource(R.string.gt_dial_signin)
                     live -> stringResource(R.string.connect)
                     else -> stringResource(R.string.gt_dial_start)
@@ -306,6 +286,7 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
             Text(line, color = Ios.SecondaryLabel, fontSize = 13.sp, lineHeight = 20.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 28.dp))
         }
+        com.mlmvpn.scanner.ui.RouteChips()
 
         // A failure, as one sentence and (when there is one) the one thing that fixes it.
         val failure = when {
@@ -336,28 +317,14 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
             SettingsGroup {
                 SetupStep(
                     number = 1, current = setupStep,
-                    title = if (cf == null && !brokerOk) tr("وصل کردن کلادفلر", "Connect Cloudflare") else tr("نصب ورکر روی کلادفلر", "Install the Worker on Cloudflare"),
-                    value = when {
-                        brokerOk -> cf?.let { it.name.ifBlank { it.email } } ?: stringResource(R.string.gt_ready)
-                        st.brokerBusy -> stringResource(R.string.gt_working)
-                        cf == null -> tr("بخش ابری", "Cloud tab")
-                        st.broker.deployed -> stringResource(R.string.gt_needs_update)
-                        else -> tr("نصب", "Install")
-                    },
-                    busy = st.brokerBusy,
-                    onClick = if (setupStep == 1) stepOneAction else null,
+                    title = tr("وصل کردن گیت‌هاب", "Connect GitHub"),
+                    value = if (hasAccounts) "@" + st.accounts.first().login else stringResource(R.string.gt_step_do_signin),
+                    busy = st.signIn?.waiting == true,
+                    onClick = if (setupStep == 1) ({ GtEngine.signIn(adding = false) }) else null,
                 )
                 Separator()
                 SetupStep(
                     number = 2, current = setupStep,
-                    title = tr("وصل کردن گیت‌هاب", "Connect GitHub"),
-                    value = if (hasAccounts) "@" + st.accounts.first().login else stringResource(R.string.gt_step_do_signin),
-                    busy = st.signIn?.waiting == true,
-                    onClick = if (setupStep == 2) ({ GtEngine.signIn(adding = false) }) else null,
-                )
-                Separator()
-                SetupStep(
-                    number = 3, current = setupStep,
                     title = tr("اتصال", "Connect"),
                     value = when {
                         live -> stringResource(R.string.gt_ready)
@@ -369,22 +336,9 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
                     onClick = if (setupDone && !building) ({ withVpnConsent { if (live) GtEngine.connect() else GtEngine.createSession(connectAfter = true) } }) else null,
                 )
             }
-            // Step one, when there is more than one Cloudflare account: which one gets the Worker.
-            if (setupStep == 1 && cloudAccounts.size > 1) {
-                SettingsGroup(modifier = Modifier.padding(top = 12.dp)) {
-                    SettingsRow(
-                        title = stringResource(R.string.gt_broker_account),
-                        icon = Icons.Default.Cloud, tint = Ios.CloudflareOrange,
-                        value = cf?.let { it.name.ifBlank { it.email } } ?: "—",
-                        onClick = {
-                            val i = cloudAccounts.indexOfFirst { it.id == cf?.id }
-                            pickedCf = cloudAccounts[(i + 1) % cloudAccounts.size].id
-                        },
-                    )
-                }
-            }
-            if (setupStep == 1 && st.brokerError.isNotBlank()) Notice(st.brokerError, Ios.Red)
-            SettingsFooter(stringResource(R.string.gt_setup_footer))
+            SettingsFooter(tr(
+                "فقط یک حساب گیت‌هاب لازم است: سرور ابری خودش از راه رله‌های رایگان (بدون کلادفلر) در دسترس می‌شود. ورکر کلادفلر پایین صفحه اختیاری است و راه ورود دیگری اضافه می‌کند.",
+                "A GitHub account is all it takes: the cloud server is reached through free relays (no Cloudflare). The Cloudflare Worker further down is optional and adds another way in."))
         }
 
         // ── the session being built ─────────────────────────────────────────────────────
@@ -604,9 +558,10 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
         }
 
         // ── the relay Worker ────────────────────────────────────────────────────────────
-        // Installed in setup step one; here afterwards for its address, updates and a custom domain.
-        if (st.broker.deployed) {
-        SettingsSectionHeader(stringResource(R.string.gt_sec_broker))
+        // Optional: one more way in, over Cloudflare. Without it the runner's free relays carry the
+        // session; with it, both are measured and whichever answers is used.
+        run {
+        SettingsSectionHeader(tr("ورکر کلادفلر (اختیاری)", "Cloudflare Worker (optional)"))
         SettingsGroup {
             if (cloudAccounts.isEmpty()) {
                 SettingsActionRow(stringResource(R.string.gt_broker_need_cf), Icons.Default.Cloud, Ios.CloudflareOrange, onClick = onOpenCloud)
@@ -639,7 +594,7 @@ fun GithubTunnelScreen(onBack: () -> Unit, onOpenScanner: () -> Unit, onOpenClou
                 )
             }
         }
-        if (setupStep != 1 && st.brokerError.isNotBlank()) Notice(st.brokerError, Ios.Red)
+        if (st.brokerError.isNotBlank()) Notice(st.brokerError, Ios.Red)
         SettingsFooter(stringResource(R.string.gt_broker_footer))
         }
 

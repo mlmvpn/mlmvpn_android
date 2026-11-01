@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AltRoute
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Info
@@ -49,6 +51,7 @@ import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.ViewQuilt
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
@@ -97,6 +100,7 @@ private const val P_DNS = "dns"
 private const val P_PORT = "port"
 private const val P_PROXY_MODE = "proxy_mode_page"
 private const val P_ALLOW_LAN = "allow_lan_page"
+private const val P_SMART_IRAN = "smart_iran_page"
 private const val P_UPDATE = "software_update"
 private const val P_UPDATE_CHECK = "software_update_check"
 private const val P_DISPLAY = "display"
@@ -160,6 +164,24 @@ const val ROUTE_UPDATE_DOWNLOAD = P_UPDATE_CHECK
 private const val P_CF_LIST_PREFIX = "cf_list:"
 
 /**
+ * The pages the home screen's search opens Settings on, as [SettingsScreen]'s `openRoute`. Every
+ * searchable row is listed in SettingsIndex with the page it is on.
+ */
+internal object SettingsRoutes {
+    /** The list itself, with nothing pushed over it. */
+    const val ROOT = "settings_root"
+    const val DISPLAY = P_DISPLAY
+    const val WALLPAPER = P_WALLPAPER
+    const val SMART_IRAN = P_SMART_IRAN
+    const val PROXY_MODE = P_PROXY_MODE
+    const val ALLOW_LAN = P_ALLOW_LAN
+    const val UPDATE = P_UPDATE
+    const val VPN = P_VPN_ADVANCED
+    const val ABOUT = P_ABOUT
+    const val BACKUP = com.mlmvpn.scanner.ui.backup.ROUTE_BACKUP
+}
+
+/**
  * Settings, laid out the way iOS lays out Settings: inset grouped cards of rows, each row led by
  * a tinted glyph, and every choice on a page of its own.
  *
@@ -204,7 +226,9 @@ fun SettingsScreen(
         // A page that lives under another arrives with its parent beneath it, so back walks the
         // hierarchy the user would have walked by hand instead of dropping them at the root.
         val path = when (target) {
+            SettingsRoutes.ROOT -> emptyList()
             P_UPDATE_CHECK -> listOf(P_UPDATE, P_UPDATE_CHECK)
+            P_WALLPAPER -> listOf(P_DISPLAY, P_WALLPAPER)
             else -> listOf(target)
         }
         if (stack.toList() != path) {
@@ -228,6 +252,7 @@ fun SettingsScreen(
     var allowLan by remember { mutableStateOf(NetworkSettings.allowLan(context)) }
     var tlsUnfilter by remember { mutableStateOf(NetworkSettings.tlsUnfilter(context)) }
     var googleFix by remember { mutableStateOf(NetworkSettings.googleFix(context)) }
+    var smartIran by remember { mutableStateOf(com.mlmvpn.core.tunnel.SmartIranRoute.enabled(context)) }
     var showRealtimeTraffic by remember { mutableStateOf(defaultPrefs.getBoolean("show_realtime_traffic", true)) }
     var enableUsageTracking by remember { mutableStateOf(defaultPrefs.getBoolean("enable_usage_tracking", true)) }
     var screenOffTimeout by remember { mutableStateOf(defaultPrefs.getString("screen_off_timeout", "0") ?: "0") }
@@ -237,6 +262,8 @@ fun SettingsScreen(
         IosOption("auto", stringResource(R.string.settings_lang_auto)),
         IosOption("fa", stringResource(R.string.settings_lang_fa)),
         IosOption("en", stringResource(R.string.settings_lang_en)),
+        IosOption("ru", stringResource(R.string.settings_lang_ru)),
+        IosOption("zh", stringResource(R.string.settings_lang_zh)),
     )
     val themeOptions = listOf(
         IosOption(Appearance.THEME_AUTO, stringResource(R.string.settings_theme_auto)),
@@ -300,6 +327,8 @@ fun SettingsScreen(
     // with `null` for the list and once with the selected route for the detail, so the two panes
     // cannot drift apart the way a second hand-written list of rows would.
     val pane: @Composable (String?) -> Unit = { routeKey ->
+    // Which page each row is on, for the row the home screen's search opened Settings for.
+    androidx.compose.runtime.CompositionLocalProvider(LocalSettingsRoute provides (routeKey ?: SettingsRoutes.ROOT)) {
     when (routeKey) {
         P_LANGUAGE -> IosPickerScreen(
             title = stringResource(R.string.settings_language),
@@ -324,6 +353,8 @@ fun SettingsScreen(
         P_VPN_ADVANCED -> VpnSettingsScreen(onDismiss = { pop() })
 
         P_USAGE -> UsageScreen(onDismiss = { pop() })
+
+        SettingsRoutes.BACKUP -> com.mlmvpn.scanner.ui.backup.BackupScreen(onBack = { pop() })
 
         P_ABOUT -> com.mlmvpn.scanner.ui.AboutScreen(
             onBack = { pop() },
@@ -387,6 +418,12 @@ fun SettingsScreen(
         P_UPDATE_CHECK -> UpdateCheckScreen(
             onBack = { pop() },
             backLabel = stringResource(R.string.settings_software_update),
+        )
+
+        P_SMART_IRAN -> SmartIranPage(
+            backLabel = settingsTitle,
+            onBack = { pop() },
+            onChanged = { smartIran = it },
         )
 
         P_ALLOW_LAN -> AllowLanPage(
@@ -565,6 +602,17 @@ fun SettingsScreen(
                     GeminiExitRow()
                 }
                 Separator()
+                // «مسیریابی هوشمند ایران»: a row, not a switch -- it changes what bypasses the VPN
+                // on every engine, and its page lists the apps it leaves outside.
+                SettingsRow(
+                    title = com.mlmvpn.scanner.store.tr("مسیریابی هوشمند ایران", "Smart Iran Routing"),
+                    subtitle = com.mlmvpn.scanner.store.tr("سایت‌ها و برنامه‌های ایرانی مستقیم، بدون VPN", "Iranian sites and apps direct, without the VPN"),
+                    icon = Icons.Default.AltRoute,
+                    tint = Ios.Green,
+                    value = stringResource(if (smartIran) R.string.on_2 else R.string.off_2),
+                    onClick = { push(P_SMART_IRAN) },
+                )
+                Separator()
                 WarpIdRelayRow()
                 Separator()
                 SettingsRow(
@@ -656,6 +704,14 @@ fun SettingsScreen(
                 )
                 Separator()
                 SettingsRow(
+                    title = com.mlmvpn.scanner.store.tr("پشتیبان‌گیری و بازگردانی", "Backup & restore"),
+                    subtitle = com.mlmvpn.scanner.ui.backup.backupRowSubtitle(),
+                    icon = com.mlmvpn.scanner.ui.backup.backupRowIcon,
+                    tint = Ios.Blue,
+                    onClick = { push(SettingsRoutes.BACKUP) },
+                )
+                Separator()
+                SettingsRow(
                     title = stringResource(R.string.settings_reset_home),
                     icon = Icons.Default.Apps,
                     tint = Ios.Red,
@@ -670,6 +726,27 @@ fun SettingsScreen(
                         ).show()
                     },
                 )
+                // Gereh taken out from its tile's menu (q3): the one way back
+                var gerehRemoved by remember { mutableStateOf(com.mlmvpn.scanner.chat.MlmChat.removed(context)) }
+                if (gerehRemoved) {
+                    Separator()
+                    SettingsRow(
+                        title = stringResource(R.string.gereh_restore),
+                        subtitle = stringResource(R.string.gereh_restore_info),
+                        icon = Icons.Default.Forum,
+                        tint = Ios.Blue,
+                        showChevron = false,
+                        onClick = {
+                            com.mlmvpn.scanner.chat.MlmChat.restore(context)
+                            gerehRemoved = false
+                            android.widget.Toast.makeText(
+                                context,
+                                context.getString(R.string.gereh_restored),
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                    )
+                }
             }
 
             SettingsSectionHeader(stringResource(R.string.settings_group_about))
@@ -754,6 +831,7 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(28.dp))
         }
+    }
     }
     }
 
@@ -864,6 +942,20 @@ private fun DisplayPage(
                 tint = Ios.Indigo,
                 value = themeLabel,
                 onClick = onOpenTheme,
+            )
+        }
+
+        // The connection widget at the top of the home board (HomeConnectionWidget). Its «−» while
+        // rearranging turns it off; this is where it comes back -- and Widget Studio has the same switch.
+        SettingsSectionHeader(com.mlmvpn.scanner.store.tr("ویجت", "Widget"))
+        SettingsGroup {
+            SettingsToggle(
+                title = com.mlmvpn.scanner.store.tr("ویجت اتصال در صفحهٔ اصلی", "Connection widget on the home screen"),
+                subtitle = com.mlmvpn.scanner.store.tr("روش متصل، کشور خروج، نمودار زنده، مصرف و دکمهٔ قطع", "The method on, its exit country, a live chart, usage and a disconnect button"),
+                checked = Appearance.homeWidget,
+                onCheckedChange = { Appearance.setHomeWidget(context, it) },
+                icon = Icons.Default.ViewQuilt,
+                tint = Ios.Blue,
             )
         }
 

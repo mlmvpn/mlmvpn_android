@@ -1,5 +1,9 @@
 package com.mlmvpn.core.warp
 
+import com.mlmvpn.scanner.utils.alive
+import com.mlmvpn.scanner.utils.killHard
+import com.mlmvpn.scanner.utils.waitUpTo
+
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
@@ -65,6 +69,7 @@ object CfWarpEngine {
     val live: StateFlow<Live> = _live.asStateFlow()
 
     private val ring = ArrayDeque<String>()
+    private val logRedactor = com.mlmvpn.scanner.utils.SecretRedactor.Stream()
     fun logs(): List<String> = synchronized(ring) { ring.toList() }
 
     @Volatile private var process: Process? = null
@@ -75,7 +80,7 @@ object CfWarpEngine {
     private fun identityFile(ctx: Context) = File(dataDir(ctx), "aether.toml")
 
     fun available(ctx: Context): Boolean = StoreEngines.available(ctx, "aether", "libaether.so")
-    val isAlive: Boolean get() = process?.isAlive == true
+    val isAlive: Boolean get() = process?.alive() == true
 
     // ── settings: every one of them reaches the engine ─────────────────────────────────────────
 
@@ -99,7 +104,7 @@ object CfWarpEngine {
 
     // ── identity ────────────────────────────────────────────────────────────────────────────────
 
-    fun hasIdentity(ctx: Context): Boolean = identityFile(ctx).let { it.exists() && it.length() > 0 }
+    fun hasIdentity(ctx: Context): Boolean = com.mlmvpn.scanner.data.CfIdentityFiles.exists(identityFile(ctx))
 
     data class IdentityInfo(val via: String?, val at: Long, val deviceId: String?)
 
@@ -110,25 +115,36 @@ object CfWarpEngine {
     )
 
     /** Registers «وارپ»'s own identity when it has none. Throws with a readable reason. */
-    fun ensureIdentity(ctx: Context) {
+    private val identityDeadline = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { task ->
+        Thread(task, "warp-identity-deadline").apply { isDaemon = true }
+    }
+    fun ensureIdentity(ctx: Context, cancelled: () -> Boolean = { false }) {
         if (hasIdentity(ctx)) return
+        if (cancelled()) throw java.io.InterruptedIOException("identity_cancelled")
+        val owner = Thread.currentThread()
+        val expired = System.nanoTime() + 90_000_000_000L
+        val interrupted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val timer = identityDeadline.scheduleAtFixedRate({
+            if (cancelled() || System.nanoTime() >= expired) { interrupted.set(true); owner.interrupt() }
+        }, 100, 100, TimeUnit.MILLISECONDS)
+        try {
         log("Identity: registering a WARP identity of its own…")
         val s = WarpIdRelay.registerStandalone(ctx)
+        if (cancelled() || owner.isInterrupted) throw java.io.InterruptedIOException("identity_cancelled")
         val f = identityFile(ctx)
-        val tmp = File(f.parentFile, ".aether.toml.tmp")
-        tmp.writeText(s.toml)
-        if (!tmp.renameTo(f)) { tmp.copyTo(f, overwrite = true); tmp.delete() }
+        com.mlmvpn.scanner.data.CfIdentityFiles.save(ctx, f, s.toml)
         p(ctx).edit()
             .putString("id_via", s.via)
             .putLong("id_at", System.currentTimeMillis())
             .putString("id_device", s.deviceId)
             .apply()
         log("Identity: made (${s.via}), WARP enabled")
+        } finally { timer.cancel(false); if (interrupted.get()) Thread.interrupted() }
     }
 
     /** A fresh identity next time: the account, and every endpoint the engine remembered for it. */
     fun resetIdentity(ctx: Context) {
-        dataDir(ctx).listFiles()?.forEach { if (it.name.endsWith(".toml")) it.delete() }
+        dataDir(ctx).listFiles()?.forEach { if (it.name.endsWith(".toml") || it.name.endsWith(".toml.sealed")) it.delete() }
         p(ctx).edit().remove("id_via").remove("id_at").remove("id_device").apply()
     }
 
@@ -143,18 +159,33 @@ object CfWarpEngine {
 
     // ── the process ─────────────────────────────────────────────────────────────────────────────
 
-    fun start(ctx: Context, shareLan: Boolean) {
+    /**
+     * The NAT64 endpoint this run is pinned to, or null when it scans (the direct behaviour).
+     * Set by [start]; read back to report how the gateway did (see [Nat64Exits.reportOutcome]).
+     */
+    @Volatile var currentPeer: String? = null
+        private set
+
+    /**
+     * @param peer a pinned endpoint -- a NAT64 gateway of the chosen exit country -- or null to scan.
+     *   Defaults to the best gateway for the current selection, which is null for the direct one.
+     */
+    fun start(ctx: Context, shareLan: Boolean, peer: String? = Nat64Exits.pick(ctx, Nat64Exits.Proto.WG)) {
         stop()
         stopping = false
         val app = ctx.applicationContext
         val dir = dataDir(app)
+        currentPeer = peer
         val opts = AetherOptions(
             protocol = AetherProtocol.WG,
             scan = scan(app),
             ipFamily = ip(app),
             noize = noize(app),
             keepalive = keepalive(app),
-            quickReconnect = true,
+            // A pinned gateway is the whole point of the run; a remembered endpoint from a direct
+            // session must not be "quick-reconnected" to instead.
+            quickReconnect = peer == null,
+            wgPeer = peer,
         )
         val env = opts.toEnv(System.getenv(), dir.absolutePath, SOCKS_PORT).toMutableMap()
         if (shareLan) env["AETHER_SOCKS"] = "0.0.0.0:$SOCKS_PORT"
@@ -163,9 +194,14 @@ object CfWarpEngine {
             .redirectErrorStream(true)
         pb.environment().clear()
         pb.environment().putAll(env)
-        log("════════ وارپ · scan ${opts.scan.env} · ip ${opts.ipFamily.env} · noize ${opts.noize.ifBlank { "default" }} ════════")
-        val proc = pb.start()
-        process = proc
+        log("════════ وارپ · scan ${opts.scan.env} · ip ${opts.ipFamily.env} · noize ${opts.noize.ifBlank { "default" }}${peer?.let { " · NAT64 $it" } ?: ""} ════════")
+        val proc = com.mlmvpn.scanner.data.CfIdentityFiles.guarded {
+            try {
+                com.mlmvpn.scanner.data.CfIdentityFiles.restoreDirectory(app, dir)
+                pb.start().also { process = it }
+            }
+            catch (e: Exception) { com.mlmvpn.scanner.data.CfIdentityFiles.sealDirectory(app, dir); throw e }
+        }
         _live.value = Live(running = true, stage = AetherStage.STARTING, stageText = AetherStage.STARTING.fa)
         Thread({
             try {
@@ -178,11 +214,16 @@ object CfWarpEngine {
             } catch (_: Exception) {
             }
             val code = runCatching { proc.waitFor() }.getOrDefault(-1)
-            if (process === proc) process = null
-            if (!stopping) {
-                log("The WARP engine exited on its own (code $code)")
-                _live.value = _live.value.copy(running = false, stage = AetherStage.CRASHED, stageText = AetherStage.CRASHED.fa)
-                onUnexpectedExit?.invoke(code)
+            runCatching { com.mlmvpn.scanner.data.CfIdentityFiles.sealDirectory(app, dir, maySeal = { process == null || process === proc }) }
+            com.mlmvpn.scanner.data.CfIdentityFiles.guarded {
+                if (process === proc) {
+                    process = null
+                    if (!stopping) {
+                        log("The WARP engine exited on its own (code $code)")
+                        _live.value = _live.value.copy(running = false, stage = AetherStage.CRASHED, stageText = AetherStage.CRASHED.fa)
+                        onUnexpectedExit?.invoke(code)
+                    }
+                }
             }
         }, "cfwarp-engine").apply { isDaemon = true }.start()
     }
@@ -193,7 +234,7 @@ object CfWarpEngine {
         process = null
         proc.destroy()
         // Its port has to be free before a restart binds it again.
-        if (!runCatching { proc.waitFor(3, TimeUnit.SECONDS) }.getOrDefault(false)) proc.destroyForcibly()
+        if (!runCatching { proc.waitUpTo(3, TimeUnit.SECONDS) }.getOrDefault(false)) proc.killHard()
         _live.value = Live()
     }
 
@@ -270,6 +311,7 @@ object CfWarpEngine {
     }
 
     fun log(line: String) {
+        val line = logRedactor.redact(line)
         synchronized(ring) {
             ring.addLast(line)
             while (ring.size > 400) ring.removeFirst()

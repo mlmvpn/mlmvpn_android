@@ -22,7 +22,9 @@ object CountryLookup {
     private const val GEOIP_URL = "https://api.ip.sb/geoip"
 
     suspend fun resolveCountry(context: Context, nodeUri: String, localPort: Int): String? = withContext(Dispatchers.IO) {
-        var coreController: libv2ray.CoreController? = null
+        // A test core, in the test host process (XrayHosts): a node that panics Xray ends that
+        // process, not the app.
+        var core: com.mlmvpn.core.warp.VlessXrayInjector? = null
         try {
             val config = VpnConfig.parseUri(nodeUri) ?: return@withContext null
             val jsonConfig = XrayJsonGenerator.generateConfig(
@@ -33,19 +35,9 @@ object CountryLookup {
                 includeTun = false,
             )
 
-            val keyBytes = ByteArray(32)
-            java.security.SecureRandom().nextBytes(keyBytes)
-            val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-            val xudpBaseKey = android.util.Base64.encodeToString(keyBytes, flags)
-            libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey)
-
-            val handler = object : libv2ray.CoreCallbackHandler {
-                override fun onEmitStatus(status: Long, msg: String): Long = 0
-                override fun shutdown(): Long = 0
-                override fun startup(): Long = 0
-            }
-            coreController = libv2ray.Libv2ray.newCoreController(handler)
-            coreController?.startLoop(jsonConfig, 0)
+            val c = com.mlmvpn.core.warp.VlessXrayInjector(0, quiet = true)
+            if (!c.start(context, jsonConfig, localPort)) return@withContext null
+            core = c
 
             kotlinx.coroutines.delay(1200)
 
@@ -78,7 +70,7 @@ object CountryLookup {
             Log.d(TAG, "country lookup failed: ${e.message}")
             null
         } finally {
-            try { coreController?.stopLoop() } catch (e: Exception) {}
+            try { core?.stop() } catch (e: Exception) {}
         }
     }
 }

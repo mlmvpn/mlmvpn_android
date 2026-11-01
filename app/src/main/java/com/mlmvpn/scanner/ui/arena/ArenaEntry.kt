@@ -22,7 +22,7 @@ import com.mlmvpn.scanner.ui.settings.SettingsRow
 @Composable
 fun ArenaEntryCard(onOpen: () -> Unit, modifier: Modifier = Modifier.padding(vertical = 8.dp)) {
     val context = LocalContext.current
-    LaunchedEffect(Unit) { ArenaStore.load(context) }
+    LaunchedEffect(Unit) { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ArenaStore.load(context) } }
     val history by ArenaStore.history.collectAsState()
     val live by ArenaEngine.state.collectAsState()
     val winner = history.firstOrNull()?.board?.winner

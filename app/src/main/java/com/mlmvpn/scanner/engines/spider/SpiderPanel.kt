@@ -54,7 +54,7 @@ object SpiderPanel {
     /** The three values the panel writes into the file, as `const NAME = <JSON string>;`. */
     val INJECTED = listOf("PANEL_TOKEN", "PANEL_DOMAIN", "WORKER_DOMAIN")
 
-    private val http = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).connectTimeout(15, TimeUnit.SECONDS).readTimeout(40, TimeUnit.SECONDS).build()
+    private val http = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory()).proxySelector(com.mlmvpn.scanner.engines.cloud.CfTunnel.selector()).connectTimeout(15, TimeUnit.SECONDS).readTimeout(40, TimeUnit.SECONDS).build()
 
     // ── what is stored per Cloudflare account ──────────────────────────────────────────────────
 
@@ -292,7 +292,7 @@ object SpiderPanel {
             "DELETE" -> b.delete()
             else -> b.method(method, (body ?: JSONObject()).toString().toRequestBody("application/json".toMediaType()))
         }
-        com.mlmvpn.scanner.update.UpdateNet.client(context, 15, 30).newCall(b.build()).execute().use { r ->
+        com.mlmvpn.scanner.update.UpdateNet.client(context, 15, 30, directFirst = true).newCall(b.build()).execute().use { r ->
             val text = r.body?.string().orEmpty()
             val o = runCatching { JSONObject(text) }.getOrNull()
             if (!r.isSuccessful) error(o?.optString("error")?.ifBlank { null } ?: "HTTP ${r.code}")

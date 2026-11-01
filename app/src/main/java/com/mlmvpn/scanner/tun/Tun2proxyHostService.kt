@@ -108,7 +108,13 @@ class Tun2proxyHostService : Service() {
         }
         tunPfd = pfd
         // The fd NUMBER is process-local, so it is filled in here rather than by the caller.
-        val cliArgs = "$baseArgs --tun-fd ${pfd.fd}"
+        // No logging: tun2proxy 0.7.21's log callback panics on a line holding a NUL byte, which
+        // a malformed DNS name in an app's query puts there ("Malformed label: VHo\0w0-dnsotls-ds",
+        // mlmvpn/crashes #1120: every one of its 57 reports of 1.2.43 and 1.2.44). Put in place
+        // of the caller's own --verbosity, since tun2proxy refuses the option twice.
+        val verbosity = Regex("--verbosity\\s+\\S+")
+        val quiet = if (verbosity.containsMatchIn(baseArgs)) baseArgs.replace(verbosity, "--verbosity off") else "$baseArgs --verbosity off"
+        val cliArgs = "$quiet --tun-fd ${pfd.fd}"
         Log.i(TAG, "starting tun2proxy in :tun process (fd=${pfd.fd}, mtu=$mtu)")
 
         running = true
@@ -152,7 +158,15 @@ class Tun2proxyHostService : Service() {
         }
 
         try { w.join(4_000) } catch (_: InterruptedException) {}
-        if (w.isAlive) Log.w(TAG, "tun2proxy thread still alive after join -- proceeding")
+        if (w.isAlive) {
+            // Closing the TUN under a tun2proxy that is still reading it ended in fdsan's
+            // close (mlmvpn/crashes #150, #28: 61 reports of 1.2.43 and 1.2.44), and a next
+            // start here would be ignored while it runs. This process exists only for it: end
+            // it, which lets go of the TUN without a close; the VPN side expects this (exit(255)).
+            Log.w(TAG, "tun2proxy thread still alive after join -- ending the :tun process")
+            android.os.Process.killProcess(android.os.Process.myPid())
+            return
+        }
 
         // Our duplicate of the TUN descriptor. The VPN process still holds its own.
         try { tunPfd?.close() } catch (t: Throwable) { Log.w(TAG, "closing tun pfd: ${t.message}") }

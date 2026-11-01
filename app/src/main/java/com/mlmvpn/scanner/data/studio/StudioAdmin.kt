@@ -30,7 +30,7 @@ class StudioAdmin(private val context: Context) {
 
     private val client = OkHttpClient.Builder()
         .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns())
-        .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
+        .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory()).proxySelector(com.mlmvpn.scanner.engines.cloud.CfTunnel.selector())
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .build()

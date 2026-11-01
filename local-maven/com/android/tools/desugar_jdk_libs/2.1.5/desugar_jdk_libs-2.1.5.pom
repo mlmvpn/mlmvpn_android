@@ -1,0 +1,38 @@
+
+<project
+    xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.android.tools</groupId>
+  <artifactId>desugar_jdk_libs</artifactId>
+  <version>2.1.5</version>
+  <name>Small subset of OpenJDK libraries</name>
+  <description>
+    This project contains a small subset of OpenJDK libraries simplified for use on older runtimes.
+
+    This is not an official Google product.
+  </description>
+  <url>https://github.com/google/desugar_jdk_libs</url>
+  <inceptionYear>2018</inceptionYear>
+  <licenses>
+    <license>
+      <name>GNU General Public License, version 2, with the Classpath Exception</name>
+      <url>https://github.com/google/desugar_jdk_libs/blob/master/LICENSE</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <dependencies>
+    <dependency>
+      <groupId>com.android.tools</groupId>
+      <artifactId>desugar_jdk_libs_configuration</artifactId>
+      <version>2.1.5</version>
+    </dependency>
+  </dependencies>
+  <scm>
+    <url>
+      https://github.com/google/desugar_jdk_libs
+    </url>
+  </scm>
+</project>
+    

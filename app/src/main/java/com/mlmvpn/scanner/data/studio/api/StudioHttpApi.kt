@@ -93,7 +93,7 @@ class StudioHttpApi(
             CLIENT ?: synchronized(this) {
                 CLIENT ?: OkHttpClient.Builder()
                     .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns())
-                    .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
+                    .protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory()).proxySelector(com.mlmvpn.scanner.engines.cloud.CfTunnel.selector())
                     .connectTimeout(15, TimeUnit.SECONDS)
                     // 40 s, not 20: making a location config now tests that country's servers on
                     // the engine before answering (build 18), and a slow batch of public servers

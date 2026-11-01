@@ -56,10 +56,25 @@ data class LearnedServer(
 )
 
 /** The routes the booster can put a game on. Stored by name, so never rename one. */
-enum class RouteKind { DIRECT, DIRECT_DNS, WARP_MASQUE_H3, WARP_MASQUE_H2, WARP_WG, ACCESS_HELPER }
+enum class RouteKind {
+    DIRECT, DIRECT_DNS, WARP_MASQUE_H3, WARP_MASQUE_H2, WARP_WG, ACCESS_HELPER,
+    /** A free AmneziaWG / WireGuard server abroad, from the Amnezia section (its own engine). */
+    AMNEZIA,
+    /** Firefox's VPN on the user's own Firefox account (FENIX). */
+    FENIX,
+}
 
 /** What the user chose for this game in the advanced screen. AUTO everywhere by default. */
-enum class RouteChoice { AUTO, DIRECT, WARP }
+enum class RouteChoice {
+    AUTO, DIRECT, WARP,
+    /** Pinned to WARP over WireGuard (with the exit country chosen on the WireGuard screen). */
+    WIREGUARD,
+    AMNEZIA,
+    FENIX;
+
+    /** The routes that leave through a tunnel of the app's own rather than the line itself. */
+    val isTunnelPin: Boolean get() = this == WIREGUARD || this == AMNEZIA || this == FENIX
+}
 
 enum class ProbeDepth { QUICK, THOROUGH }
 
@@ -74,6 +89,12 @@ data class RoutePrefs(
      * anti-sanction DNS it has proven on this line? Never the match itself. On by default.
      */
     val sanctionDns: Boolean = true,
+    /**
+     * The player says this game is filtered or sanctioned, or does not load at all, here. The
+     * direct line is then never chosen for it, however it measures: the fastest tunnel that
+     * reaches the game's own region -- Amnezia, WireGuard, WARP or FENIX -- is.
+     */
+    val blocked: Boolean = false,
 )
 
 /**
@@ -258,7 +279,7 @@ object GameProfileCodec {
 
     fun prefsToJson(p: RoutePrefs): JSONObject = JSONObject()
         .put("route", p.route.name).put("dns", p.dnsSteering).put("focus", p.focus)
-        .put("overlay", p.overlay).put("depth", p.depth.name).put("sdns", p.sanctionDns)
+        .put("overlay", p.overlay).put("depth", p.depth.name).put("sdns", p.sanctionDns).put("blocked", p.blocked)
 
     fun prefsFromJson(o: JSONObject?): RoutePrefs {
         if (o == null) return RoutePrefs()
@@ -269,6 +290,7 @@ object GameProfileCodec {
             overlay = o.optBoolean("overlay", false),
             depth = enumOr(o.optString("depth"), ProbeDepth.QUICK),
             sanctionDns = o.optBoolean("sdns", true),
+            blocked = o.optBoolean("blocked", false),
         )
     }
 

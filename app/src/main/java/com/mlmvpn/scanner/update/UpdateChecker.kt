@@ -25,6 +25,8 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
 import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.store.StoreArtifact
+import com.mlmvpn.scanner.store.StoreNet
 import com.mlmvpn.scanner.utils.S
 
 /**
@@ -56,6 +58,8 @@ object UpdateChecker {
     private const val PREFS = "app_settings"
     private const val KEY_AUTO_WIFI = "update_auto_download_wifi"
     private const val KEY_LAST_CHECK = "update_last_check_at"
+    /** The newest public release a check has seen, for Gereh's «old version» tag in `:chat` (T75). */
+    private const val LATEST_FILE = "latest_release"
 
     /** Auto-download over Wi-Fi is on out of the box, like the platform updaters users know. */
     const val DEFAULT_AUTO_WIFI = true
@@ -64,7 +68,9 @@ object UpdateChecker {
         val versionName: String,
         val apkUrl: String,
         val apkSizeBytes: Long,
-        val changelog: List<String>
+        val changelog: List<String>,
+        /** GitHub's SHA-256 of the asset (every asset uploaded since mid-2025 has one), or null. */
+        val sha256: String? = null,
     )
 
     /**
@@ -106,16 +112,6 @@ object UpdateChecker {
      */
     private fun client(context: Context) = UpdateNet.client(context, 8, 10)
 
-    /**
-     * For the APK download, which is ~66 MB.
-     *
-     * The check's 10-second read timeout applies to each individual read, and on the kind of
-     * throttled line this app exists to work around, a single read stalling past ten seconds is
-     * ordinary rather than exceptional -- the download would abort mid-file and report a timeout.
-     * Sixty seconds still catches a genuinely dead connection.
-     */
-    private fun downloadClient(context: Context) = UpdateNet.client(context, 15, 60)
-
     /** The latest public release's title and its full notes, as the developer wrote them. */
     data class ReleaseNotes(val tag: String, val title: String, val body: String, val publishedAt: String)
 
@@ -148,6 +144,10 @@ object UpdateChecker {
 
     /** When the last check actually completed, or 0. Persisted, so the page can say it. */
     fun lastCheckedAt(context: Context): Long = prefs(context).getLong(KEY_LAST_CHECK, 0L)
+
+    /** The newest public release a check has seen ("1.2.46"), from any process; null before the first (T75). */
+    fun latestKnown(context: Context): String? =
+        runCatching { File(context.filesDir, LATEST_FILE).readText().trim().takeIf { it.isNotEmpty() } }.getOrNull()
 
     fun autoDownloadOnWifi(context: Context): Boolean =
         prefs(context).getBoolean(KEY_AUTO_WIFI, DEFAULT_AUTO_WIFI)
@@ -194,6 +194,8 @@ object UpdateChecker {
                     }
 
                     prefs(context).edit().putLong(KEY_LAST_CHECK, now).apply()
+                    // a file, not a preference: Gereh reads it from its own process (T75)
+                    runCatching { File(context.filesDir, LATEST_FILE).writeText(tag) }
 
                     if (!isNewer(tag, current)) {
                         updateAvailableFlow.value = null
@@ -211,17 +213,20 @@ object UpdateChecker {
                     }
 
                     val notesBody = json.optString("body", "")
+                    // The notes are Markdown and the page shows plain lines: headings lose their «#»
+                    // and bold its «**», which the page used to show as written (seen 2026-10-20).
                     val changelog = notesBody.lines()
-                        .map { it.trim().removePrefix("-").removePrefix("*").trim() }
+                        .map { it.trim().trimStart('#').trim().removePrefix("-").removePrefix("*").trim().replace("**", "") }
                         .filter { it.isNotBlank() }
 
                     val info = UpdateInfo(
                         versionName = tag,
-                        apkUrl = chosen.first,
-                        apkSizeBytes = chosen.second,
+                        apkUrl = chosen.url,
+                        apkSizeBytes = chosen.size,
                         changelog = changelog.ifEmpty {
                             listOf(notesBody.trim()).filter { it.isNotBlank() }
-                        }
+                        },
+                        sha256 = chosen.sha256,
                     )
                     updateAvailableFlow.value = info
                     _state.value = State.Available(info, now)
@@ -256,7 +261,7 @@ object UpdateChecker {
         autoJob = scope.launch {
             _autoDownloading.value = true
             try {
-                fetchApk(app, info) { /* no progress UI for a silent download */ }
+                fetchApk(app, info, visible = false)
                 Log.i(TAG, "auto-downloaded ${info.versionName} over an unmetered link")
             } catch (e: Exception) {
                 Log.d(TAG, "auto-download skipped: ${e.message}")
@@ -314,9 +319,9 @@ object UpdateChecker {
      *   2. the universal build, which contains every ABI.
      *   3. any `.apk` at all -- the single-asset releases that are already out there.
      *
-     * @return the download URL and its size, or null if the release carries no APK.
+     * @return the download URL, its size and GitHub's digest, or null if the release carries no APK.
      */
-    private fun pickApkForThisDevice(assets: JSONArray): Pair<String, Long>? {
+    private fun pickApkForThisDevice(assets: JSONArray): Asset? {
         val apks = ArrayList<Pair<String, JSONObject>>()
         for (i in 0 until assets.length()) {
             val asset = assets.getJSONObject(i)
@@ -339,8 +344,13 @@ object UpdateChecker {
         val url = chosen.second.optString("browser_download_url", "")
         if (url.isBlank()) return null
         Log.i(TAG, "update asset: ${chosen.first} for abis ${Build.SUPPORTED_ABIS.joinToString()}")
-        return url to chosen.second.optLong("size", 0L)
+        return Asset(
+            url, chosen.second.optLong("size", 0L),
+            chosen.second.optString("digest").takeIf { it.startsWith("sha256:") }?.removePrefix("sha256:")?.lowercase(),
+        )
     }
+
+    private data class Asset(val url: String, val size: Long, val sha256: String?)
 
     /** Where a downloaded APK lives. Named per version, so two versions cannot be confused. */
     private fun apkFileFor(context: Context, info: UpdateInfo): File {
@@ -366,6 +376,15 @@ object UpdateChecker {
     /** True when the APK is already on disk and installing is instant. */
     fun isDownloaded(context: Context, info: UpdateInfo): Boolean = cachedApk(context, info) != null
 
+    /**
+     * The button's download, run in this object's scope rather than the screen's: leaving the page
+     * used to cancel the coroutine, so a file that finished in the background never opened the installer.
+     */
+    fun startDownload(context: Context, info: UpdateInfo, onError: (String) -> Unit) {
+        val app = context.applicationContext
+        scope.launch { downloadAndInstall(app, info, onError) }
+    }
+
     /** Downloads the APK with progress reporting, then launches the system installer. */
     suspend fun downloadAndInstall(
         context: Context,
@@ -385,69 +404,63 @@ object UpdateChecker {
                 }
 
                 downloadProgressFlow.value = 0
-                val apkFile = fetchApk(context, info) { pct -> downloadProgressFlow.value = pct }
+                val apkFile = fetchApk(context, info, visible = true)
                 downloadProgressFlow.value = 100
                 withContext(Dispatchers.Main) { installApk(context, apkFile) }
             } catch (e: Exception) {
                 Log.e(TAG, "download/install failed", e)
                 downloadProgressFlow.value = null
-                withContext(Dispatchers.Main) { onError(e.message ?: S(R.string.download_error)) }
+                // The retries are spent but nothing is lost: the part stays, and the next press goes on from it.
+                val why = if (e is java.io.IOException) com.mlmvpn.scanner.store.tr(
+                    "اینترنت وسط دانلود چند بار قطع شد. دوباره بزنید؛ دانلود از همان‌جا که مانده ادامه پیدا می‌کند.",
+                    "The connection kept dropping during the download. Press again: it continues from where it stopped.",
+                ) else e.message ?: S(R.string.download_error)
+                withContext(Dispatchers.Main) { onError(why) }
             }
         }
     }
 
+    /** One download at a time: the background fill and the button share the same part file. */
+    private val fetchLock = Any()
+
+    /** Someone is watching the page: a background fill already under way reports its progress too. */
+    @Volatile private var watched = false
+
     /**
      * Download to the cache and return the file. Throws on anything that would leave a bad APK.
      *
-     * The size check at the end is the important part: an HTTP 200 whose body stops early is not
-     * an error at the socket level, so without it a truncated APK reaches the installer looking
-     * exactly like a complete one.
+     * Through the store's downloader ([StoreNet.download]): what arrived is kept in a `.part` and the
+     * next connection asks only for the rest (HTTP Range), a dropped connection is retried by itself,
+     * and the file takes its real name only once its size -- and GitHub's SHA-256 of the asset, when
+     * the release has one -- match, so a truncated APK never reaches the installer. Before, the APK
+     * was one request under a 95 s ceiling on the whole call (see UpdateNet.client), with no retry and
+     * its part deleted at the next try: on most lines it could not finish, and every press began
+     * again from zero -- the users' report, 2026-10-20.
      */
-    private fun fetchApk(context: Context, info: UpdateInfo, onProgress: (Int) -> Unit): File {
-        val apkFile = apkFileFor(context, info)
-        val partFile = File(apkFile.path + ".part")
-
-        val req = Request.Builder().url(info.apkUrl).get().build()
-        downloadClient(context).newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
-            val respBody = resp.body ?: throw Exception("empty response")
-            if (partFile.exists()) partFile.delete()
-            val total = respBody.contentLength().takeIf { it > 0 } ?: info.apkSizeBytes
-            var downloaded = 0L
-            respBody.byteStream().use { input ->
-                partFile.outputStream().use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    var lastReported = -1
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-                        output.write(buffer, 0, read)
-                        downloaded += read
-                        if (total > 0) {
-                            val pct = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
-                            if (pct != lastReported) {
-                                onProgress(pct)
-                                lastReported = pct
-                            }
-                        }
+    private fun fetchApk(context: Context, info: UpdateInfo, visible: Boolean): File {
+        if (visible) watched = true
+        try {
+            synchronized(fetchLock) {
+                // The background fill may have finished it while this one waited.
+                cachedApk(context, info)?.let { return it }
+                val apkFile = apkFileFor(context, info)
+                val artifact = StoreArtifact(
+                    name = apkFile.name, urls = listOf(info.apkUrl),
+                    sha256 = info.sha256, size = info.apkSizeBytes, format = "raw",
+                )
+                var lastPct = -1
+                val done = StoreNet.download(context, artifact, apkFile, { got, total ->
+                    if (total > 0 && watched) {
+                        val pct = ((got * 100) / total).toInt().coerceIn(0, 100)
+                        if (pct != lastPct) { lastPct = pct; downloadProgressFlow.value = pct }
                     }
-                }
+                })
+                pruneOldApks(context, done)
+                return done
             }
-            if (total > 0 && downloaded != total) {
-                partFile.delete()
-                throw Exception(S(R.string.update_incomplete_download))
-            }
+        } finally {
+            if (visible) watched = false
         }
-
-        // Only now does it become the real file. A ".part" that never finished can never be picked
-        // up by cachedApk and handed to the installer.
-        if (apkFile.exists()) apkFile.delete()
-        if (!partFile.renameTo(apkFile)) {
-            partFile.delete()
-            throw Exception(S(R.string.download_error))
-        }
-        pruneOldApks(context, apkFile)
-        return apkFile
     }
 
     /** One APK in the cache at a time; the others are versions nobody will install now. */

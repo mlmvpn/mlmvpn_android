@@ -1,5 +1,9 @@
 package com.mlmvpn.core.aether
 
+import com.mlmvpn.scanner.utils.alive
+import com.mlmvpn.scanner.utils.killHard
+import com.mlmvpn.scanner.utils.waitUpTo
+
 import android.content.Context
 import android.os.Build
 import android.util.Log
@@ -79,6 +83,16 @@ class AetherEngine private constructor(
     /** Whether every engine line is copied to logcat. Follows AetherOptions.verbose. */
     @Volatile private var mirrorToLogcat: Boolean = false
 
+    /** The port of this session's [AetherXrayExit], 0 without one. */
+    @Volatile private var exitPort = 0
+
+    /** Ends this session's Xray exit, on a thread of its own: a blocking IPC, and a stop may come from the main thread. */
+    private fun stopExit() {
+        val port = exitPort.takeIf { it != 0 } ?: return
+        exitPort = 0
+        Thread({ AetherXrayExit.SESSION.stop(context, port) }, "aether-exit-stop").apply { isDaemon = true }.start()
+    }
+
     /** Currently running process, or null when stopped. Exposed so [stop] can verify it
      * actually got killed without leaving a zombie holding the SOCKS port. */
     val process: Process? get() = processRef.get()
@@ -124,6 +138,30 @@ class AetherEngine private constructor(
      *                updates are not delivered through this; they're emitted on [state].
      */
     fun start(options: AetherOptions, onError: (String) -> Unit = {}): Boolean {
+        return synchronized(lifecycleLock) {
+            startLocked(options, onError).also { if (it) processOwner = null }
+        }
+    }
+
+    private val lifecycleLock = Any()
+    private var processOwner: Any? = null
+
+    /** A measurement may only stop the process it started. Normal tunnel adoption clears this. */
+    fun startOwned(options: AetherOptions, owner: Any, onError: (String) -> Unit = {}): Boolean =
+        synchronized(lifecycleLock) {
+            startLocked(options, onError).also { if (it) processOwner = owner }
+        }
+
+    fun adopt(expected: Process?): Boolean = synchronized(lifecycleLock) {
+        if (expected == null || processRef.get() !== expected) false
+        else { processOwner = null; true }
+    }
+
+    fun stopOwned(owner: Any) = synchronized(lifecycleLock) {
+        if (processOwner === owner) stopLocked()
+    }
+
+    private fun startLocked(options: AetherOptions, onError: (String) -> Unit): Boolean {
         // CRITICAL: every early-exit path MUST publish the FAILED state. Without it the
         // StateFlow stays at IDLE and the UI / notification show "خاموش" forever — users
         // see nothing happening after pressing connect. The onError callback fires for
@@ -154,7 +192,19 @@ class AetherEngine private constructor(
 
         val socksPort = AETHER_SOCKS_PORT
         val dataDir = File(context.filesDir, "aether/data").apply { mkdirs() }
-        val env = options.toEnv(System.getenv(), dataDir.absolutePath, socksPort)
+        val env = options.toEnv(System.getenv(), dataDir.absolutePath, socksPort).toMutableMap()
+        // PattNG's exit-node: Aether dials out through a local Xray that cuts its ClientHello into
+        // TLS records (only the carrier ladder asks for it, off the main thread: a blocking IPC).
+        if (options.tlsHelloExit) {
+            val port = AetherXrayExit.SESSION.start(context)
+            if (port == null) {
+                onError("مسیر tlshello (Xray) بالا نیامد")
+                _state.value = AetherState.failed("مسیر tlshello ساخته نشد", "XRAY_EXIT")
+                return false
+            }
+            exitPort = port
+            env["AETHER_UPSTREAM"] = AetherXrayExit.upstream(port)
+        }
         val pb = ProcessBuilder(
             com.mlmvpn.scanner.store.StoreEngines.command(context, "aether", AetherBinaryLocator.LIB_NAME)
         ).apply {
@@ -166,21 +216,29 @@ class AetherEngine private constructor(
 
         val proc: Process
         try {
-            proc = pb.start()
+            check(com.mlmvpn.scanner.data.SecureStore.available) { "secure_identity_unavailable" }
+            proc = com.mlmvpn.scanner.data.CfIdentityFiles.guarded {
+                try {
+                    com.mlmvpn.scanner.data.CfIdentityFiles.restoreDirectory(context, dataDir)
+                    pb.start().also { processRef.set(it) }
+                }
+                catch (e: Exception) { com.mlmvpn.scanner.data.CfIdentityFiles.sealDirectory(context, dataDir); throw e }
+            }
         } catch (e: Exception) {
+            stopExit()
             onError("اجرای فایل aether با خطا مواجه شد: ${e.message}")
             _state.value = AetherState.failed("اجرا ناموفق", e.message ?: "")
             return false
         }
-        processRef.set(proc)
         runningOptions = options
         mirrorToLogcat = options.verbose
         _state.value = AetherState.starting(options, socksPort)
 
         log("[AETHER] راه‌اندازی موتور")
         log("[AETHER] پروتکل: ${options.protocol.displayFa}")
-        if (options.protocol == AetherProtocol.MASQUE) {
-            log("[AETHER] ترنسپورت: ${if (options.transport == "h2") "HTTP/2 (TCP)" else "HTTP/3 (QUIC)"}")
+        if (AetherCarrier.applies(options.protocol)) {
+            log("[AETHER] ترنسپورت: ${if (options.transport == "h2") "HTTP/2 (TCP)" else "HTTP/3 (QUIC)"}${if (options.fragment) " + fragment" else ""}" +
+                "${if (options.tls != AetherTls.CHROME) " + ${options.tls.label}" else ""}${if (options.tlsHelloExit) " + tlshello (Xray)" else ""}")
             if (options.ech.isNotBlank()) log("[AETHER] ECH: ${options.ech}")
         }
         log("[AETHER] SOCKS محلی: 127.0.0.1:$socksPort")
@@ -261,7 +319,12 @@ class AetherEngine private constructor(
         scope.launch {
             try {
                 val rc = proc.waitFor()
-                onExit(rc, options)
+                runCatching { com.mlmvpn.scanner.data.CfIdentityFiles.sealDirectory(context, dataDir, maySeal = { processRef.get() == null || processRef.get() === proc }) }
+                synchronized(lifecycleLock) {
+                    com.mlmvpn.scanner.data.CfIdentityFiles.guarded {
+                        if (processRef.get() === proc) onExit(rc, options)
+                    }
+                }
             } catch (e: Exception) {
                 Log.w(tag, "waitFor interrupted: ${e.message}")
             }
@@ -298,7 +361,7 @@ class AetherEngine private constructor(
     private val probeFailures = HashMap<String, Int>()
 
     private fun handleLine(line: String, isErr: Boolean, noise: () -> Unit) {
-        val text = line.trim()
+        val text = logRedactor.redact(line.trim())
         if (text.isEmpty()) return
         // Two signals worth keeping out of the per-probe noise, because each one has a known
         // and different remedy: an access-denied means the identity needs re-enrolling, an
@@ -334,9 +397,14 @@ class AetherEngine private constructor(
                 crashLogFile.appendText("[${System.currentTimeMillis()}] $text\n")
             } catch (_: Exception) {}
         }
-        val detail = AetherStageParser.extractDetail(text)
+        val parsed = AetherStageParser.extractDetail(text)
+        // Since Aether 2.4.0 gool's first start registers its WireGuard key through a SOCKS
+        // listener of its own on a random loopback port, which logs "socks5 server listening" as
+        // well, before the tunnel is up. Only our port means connected.
+        val foreignSocks = parsed.socks?.endsWith(":$AETHER_SOCKS_PORT") == false
+        val detail = if (foreignSocks) parsed.copy(socks = null) else parsed
         // Stage transitions drive the main state.
-        val rule = AetherStageParser.classify(text)
+        val rule = if (foreignSocks) null else AetherStageParser.classify(text)
         if (rule != null) {
             // Always mirrored, regardless of the debug switch: a few dozen lines per session
             // at most, and they are the ones that answer "where did the connect get stuck".
@@ -386,6 +454,7 @@ class AetherEngine private constructor(
 
     private fun onExit(code: Int, options: AetherOptions) {
         processRef.set(null)
+        stopExit()
         runningOptions = null
         if (stopping.get()) {
             _state.value = _state.value.copy(
@@ -440,23 +509,30 @@ class AetherEngine private constructor(
      * see stopping == false mid-teardown and treat the exit as an unexpected crash.
      */
     fun stop() {
+        synchronized(lifecycleLock) { stopLocked() }
+    }
+
+    private fun stopLocked() {
+        processOwner = null
         val claimed = stopping.compareAndSet(false, true)
         telemetryJob?.cancel()
         telemetryJob = null
         lastLoggedStage = null
         val proc = processRef.getAndSet(null)
         runningOptions = null
+        stopExit()
         if (proc != null) {
             try { proc.destroy() } catch (_: Exception) {}
-            try { proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
-            if (proc.isAlive) {
-                try { proc.destroyForcibly() } catch (_: Exception) {}
+            try { proc.waitUpTo(2, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+            if (proc.alive()) {
+                try { proc.killHard() } catch (_: Exception) {}
             }
         }
         _state.value = _state.value.copy(
             running = false, connected = false,
             stage = AetherStage.STOPPED, stageFa = "متوقف شد",
         )
+        runCatching { com.mlmvpn.scanner.data.CfIdentityFiles.sealDirectory(context, File(context.filesDir, "aether/data"), maySeal = { processRef.get() == null }) }
         // Only the caller that set the flag may clear it.
         if (claimed) stopping.set(false)
     }
@@ -506,7 +582,7 @@ class AetherEngine private constructor(
             val dir = File(context.filesDir, "aether/data")
             if (dir.exists()) {
                 dir.listFiles()?.forEach { f ->
-                    if (f.name.endsWith(".toml") && f.delete()) {
+                    if ((f.name.endsWith(".toml") || f.name.endsWith(".toml.sealed")) && f.delete()) {
                         if (f.name.contains("lastconn")) caches++ else identities++
                     }
                 }
@@ -525,7 +601,9 @@ class AetherEngine private constructor(
      */
     fun logSnapshot(): List<String> = synchronized(logBuffer) { logBuffer.toList() }
 
-    private fun log(text: String) {
+    private val logRedactor = com.mlmvpn.scanner.utils.SecretRedactor.Stream()
+    internal fun log(text: String) {
+        val text = logRedactor.redact(text)
         synchronized(logBuffer) {
             logBuffer.addLast(text)
             if (logBuffer.size > MAX_LOG_BUFFER) logBuffer.removeFirst()

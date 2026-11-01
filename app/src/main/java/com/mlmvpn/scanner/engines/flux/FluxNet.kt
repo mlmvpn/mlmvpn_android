@@ -125,4 +125,20 @@ object FluxNet {
         }
         (System.nanoTime() - start) / 1_000_000
     }.getOrNull()
+
+    @Volatile private var ech: Triple<String, Long, String>? = null
+
+    /**
+     * Cloudflare's current ECH key (base64) for ECH candidates, asked on the real line: plain DNS
+     * first, then the same query over HTTPS (where UDP is dropped, which the user's Wi-Fi does) --
+     * the app's one fetch, [com.mlmvpn.scanner.engines.cfnet.CfEchKey]. Kept an hour per network.
+     * Null when nothing answered: the core then asks for it itself.
+     */
+    fun echKey(network: Network?, netKey: String): String? {
+        ech?.let { (k, at, v) -> if (k == netKey && System.currentTimeMillis() - at < 3600_000L) return v }
+        val got = com.mlmvpn.scanner.engines.cfnet.CfEchKey.fetchOn(network)
+        FluxLog.i("ech: key ${if (got != null) "fetched (${got.length} chars)" else "not available; the core will ask for it"}")
+        if (got != null) ech = Triple(netKey, System.currentTimeMillis(), got)
+        return got
+    }
 }

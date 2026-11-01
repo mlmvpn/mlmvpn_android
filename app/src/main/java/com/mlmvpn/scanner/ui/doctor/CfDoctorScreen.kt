@@ -109,6 +109,12 @@ import java.util.Locale
 
 private enum class Page { MAIN, ACCOUNT, REPORT }
 
+/** The choices for «چه چیزی کار نمی‌کند؟», as written into the report. */
+private val COMPLAINTS = listOf(
+    "account" to R.string.doc_c_account, "deploy" to R.string.doc_c_deploy, "panel" to R.string.doc_c_panel,
+    "scan" to R.string.doc_c_scan, "connect" to R.string.doc_c_connect, "speed" to R.string.doc_c_speed,
+)
+
 /**
  * Cloudflare Doctor, laid out like the app's other iOS-style sections: one glass card with the
  * big action and the live state, the four results as rows, then what was found, what works, and
@@ -135,9 +141,9 @@ fun CfDoctorScreen(onBack: () -> Unit, credential: Pair<String, String>? = null,
             hasTypedCredential = token.isNotBlank(),
             onAccount = { page = Page.ACCOUNT },
             onReport = { page = Page.REPORT },
-            onStart = { full, label ->
+            onStart = { full, label, complaint ->
                 val c = token.trim().takeIf { it.isNotBlank() }?.let { it to email.trim() }
-                DoctorEngine.start(context, full, label, c, account)
+                DoctorEngine.start(context, full, label, c, account, complaint)
                 token = ""; email = ""
             },
         )
@@ -147,13 +153,16 @@ fun CfDoctorScreen(onBack: () -> Unit, credential: Pair<String, String>? = null,
 @Composable
 private fun DoctorMain(
     onBack: () -> Unit, account: CloudAccount?, hasTypedCredential: Boolean,
-    onAccount: () -> Unit, onReport: () -> Unit, onStart: (Boolean, String) -> Unit,
+    onAccount: () -> Unit, onReport: () -> Unit, onStart: (Boolean, String, Set<String>) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by DoctorEngine.state.collectAsState()
     var label by rememberSaveable { mutableStateOf(AndroidNetEnv.operator(context).let { if (it in setOf("OTHER", "UNKNOWN")) "" else it }) }
-    var full by rememberSaveable { mutableStateOf(false) }
+    // Always the full check: a short one left out exactly what the next report needed (no switch any more).
+    val full = true
+    // What does not work for this user: written into the report, so it is read against their complaint.
+    var complaint by rememberSaveable { mutableStateOf(listOf<String>()) }
     val savedAccounts = remember { runCatching { CloudManager(context).accountsFlow.value.size }.getOrDefault(0) }
     val report = DoctorEngine.report
 
@@ -169,7 +178,11 @@ private fun DoctorMain(
     }
 
     IosScreen(onBack = onBack, backLabel = stringResource(R.string.home), largeTitle = stringResource(R.string.cf_doctor_title)) {
-        Hero(state, onStart = { onStart(full, label) }, onStop = { DoctorEngine.stop() })
+        Hero(state, onStart = { onStart(full, label, complaint.toSet()) }, onStop = { DoctorEngine.stop() },
+            onShare = if (report.isNotBlank()) ({
+                if (!DoctorShare.share(context, DoctorEngine.fileName(context), report))
+                    Toast.makeText(context, S(R.string.doc_share_failed), Toast.LENGTH_SHORT).show()
+            }) else null)
 
         // ---- the four results, live while running.
         if (state.running || state.advice != null || state.progress.rows.isNotEmpty()) {
@@ -218,33 +231,7 @@ private fun DoctorMain(
             }
         }
 
-        // ---- options, before a run.
-        if (!state.running) {
-            SettingsSectionHeader(stringResource(R.string.doc_options))
-            SettingsGroup {
-                SettingsTextRow(
-                    title = stringResource(R.string.doc_net_label), value = label, onValueChange = { label = it.take(40) },
-                    icon = Icons.Default.Speed, tint = Ios.Indigo, placeholder = stringResource(R.string.doc_net_label_hint),
-                )
-                Separator()
-                SettingsToggle(
-                    title = stringResource(R.string.doc_full), subtitle = stringResource(R.string.doc_full_sub),
-                    checked = full, onCheckedChange = { full = it }, icon = Icons.Default.Radar, tint = Ios.Purple,
-                )
-                if (account == null) {
-                    Separator()
-                    SettingsRow(
-                        title = stringResource(R.string.doc_with_account), subtitle = stringResource(R.string.doc_with_account_sub),
-                        icon = Icons.Default.Person, tint = Ios.Orange,
-                        value = stringResource(if (hasTypedCredential) R.string.doc_account_set else R.string.doc_account_off),
-                        onClick = onAccount,
-                    )
-                }
-            }
-            if (savedAccounts > 0 && account == null) SettingsFooter(stringResource(R.string.doc_saved_accounts, fa(savedAccounts)))
-        }
-
-        // ---- the report.
+        // ---- the report, right under the results: further down it was missed (2026-10-03).
         if (report.isNotBlank() && !state.running) {
             SettingsSectionHeader(stringResource(R.string.doc_report))
             SettingsGroup {
@@ -265,6 +252,44 @@ private fun DoctorMain(
             }
             SettingsFooter(stringResource(R.string.doc_report_footer))
         }
+
+        // ---- what does not work, before a run.
+        if (!state.running) {
+            SettingsSectionHeader(stringResource(R.string.doc_complaint))
+            SettingsGroup {
+                COMPLAINTS.forEachIndexed { i, (key, title) ->
+                    if (i > 0) Separator()
+                    SettingsToggle(
+                        title = stringResource(title), checked = key in complaint,
+                        onCheckedChange = { on -> complaint = if (on) complaint + key else complaint - key },
+                        icon = Icons.Default.Warning, tint = Ios.Orange,
+                    )
+                }
+            }
+            SettingsFooter(stringResource(R.string.doc_complaint_footer))
+        }
+
+        // ---- options, before a run.
+        if (!state.running) {
+            SettingsSectionHeader(stringResource(R.string.doc_options))
+            SettingsGroup {
+                SettingsTextRow(
+                    title = stringResource(R.string.doc_net_label), value = label, onValueChange = { label = it.take(40) },
+                    icon = Icons.Default.Speed, tint = Ios.Indigo, placeholder = stringResource(R.string.doc_net_label_hint),
+                )
+                if (account == null) {
+                    Separator()
+                    SettingsRow(
+                        title = stringResource(R.string.doc_with_account), subtitle = stringResource(R.string.doc_with_account_sub),
+                        icon = Icons.Default.Person, tint = Ios.Orange,
+                        value = stringResource(if (hasTypedCredential) R.string.doc_account_set else R.string.doc_account_off),
+                        onClick = onAccount,
+                    )
+                }
+            }
+            if (savedAccounts > 0 && account == null) SettingsFooter(stringResource(R.string.doc_saved_accounts, fa(savedAccounts)))
+        }
+
         Spacer(Modifier.height(40.dp))
     }
 }
@@ -272,7 +297,7 @@ private fun DoctorMain(
 // ------------------------------------------------------------------------------ the hero card
 
 @Composable
-private fun Hero(state: DoctorEngine.State, onStart: () -> Unit, onStop: () -> Unit) {
+private fun Hero(state: DoctorEngine.State, onStart: () -> Unit, onStop: () -> Unit, onShare: (() -> Unit)? = null) {
     val advice = state.advice
     val tone by animateColorAsState(
         when {
@@ -339,6 +364,11 @@ private fun Hero(state: DoctorEngine.State, onStart: () -> Unit, onStop: () -> U
                     Text(stringResource(R.string.doc_failed), color = Ios.Orange, fontSize = 13.sp, textAlign = TextAlign.Center)
                 }
                 Spacer(Modifier.height(16.dp))
+                // Every finished run has a report, good or bad: sending it is the point of the run.
+                if (onShare != null) {
+                    Capsule(stringResource(R.string.doc_share), Ios.Green, Color.White, onShare)
+                    Spacer(Modifier.height(10.dp))
+                }
                 Capsule(stringResource(R.string.doc_again), Ios.Blue, Color.White, onStart)
             }
             else -> {

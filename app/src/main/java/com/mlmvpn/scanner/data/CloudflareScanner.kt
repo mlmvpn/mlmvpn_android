@@ -25,13 +25,25 @@ data class ScanResult(
      * here is what lets the combine step build a config that can actually connect.
      */
     val port: Int = 443,
-    var downloadSpeed: Float = 0f // real proxied delay in ms, despite the name
+    var downloadSpeed: Float = 0f, // real proxied delay in ms, despite the name
+    /**
+     * The id of the Cloudflare SCAN strategy whose handshake verified this address, or null when it
+     * passed as written. A combine writes that handshake into every config it builds on the address
+     * (CfNetManager.handshakeParams), so the health test and the connect dial it the same way.
+     */
+    var strategy: String? = null,
 )
 
 class CloudflareScanner {
 
     companion object {
         private const val TAG = "CloudflareScanner"
+
+        /** A SCAN shape proven this recently is dialled with as it is; older, it is re-checked first. */
+        private const val SCAN_SHAPE_FRESH_MS = 6 * 3600_000L
+
+        /** One real test through the core. Generous: one handshake on an Iranian mobile line can take 9-14 s. */
+        private const val REAL_DELAY_TIMEOUT_MS = 15_000L
 
         /**
          * Above this an address is not worth a definitive test.
@@ -56,6 +68,7 @@ class CloudflareScanner {
             "172.67.0.0/16",
             "173.245.48.0/20",
             "188.114.96.0/20",
+            "172.64.0.0/15",
             "190.93.240.0/20",
             "197.234.240.0/22",
             "198.41.128.0/17"
@@ -199,8 +212,41 @@ class CloudflareScanner {
         onIpFound: (ScanResult) -> Unit, // Real-time emit of found IP
         onPaused: (String?) -> Unit = {} // non-null while the scan is frozen waiting for connectivity
     ): List<ScanResult> = coroutineScope {
+        // The Cloudflare engine's SCAN stage: the shape proven on this network for measuring this
+        // kind of config is what every real test below dials with (generateSpeedtestConfig applies
+        // it). A winner proven in the last six hours is used as it is; otherwise a bounded search
+        // runs first, shown as a notice rather than a scan that silently does nothing. The address
+        // list is the user's own and is never replaced or filtered here.
+        val cfnet = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context)
+        val base = com.mlmvpn.scanner.utils.VpnConfig.parseUri(baseConfig)
+        val cloudflareBase = base != null && com.mlmvpn.scanner.utils.CfUnfilter.isCloudflareFronted(base)
+        // The family of the addresses being tested. Every real test dials a literal address, and the
+        // engine hands a literal address only a strategy of its own family (an IPv6 winner says
+        // nothing about an IPv4 clean IP), so the shape this scan is judged by is of that family too.
+        val scanFamily = ips.firstNotNullOfOrNull { com.mlmvpn.scanner.engines.cfnet.CfShape.literalFamily(it) }
+            ?: com.mlmvpn.scanner.engines.cfnet.Family.V4
+        val scanShape = if (cfnet.enabled() && cloudflareBase && !healthTest) {
+            val fresh = cfnet.saved(com.mlmvpn.scanner.engines.cfnet.CfStage.SCAN, base, scanFamily)?.takeIf {
+                cfnet.store.provenWithin(cfnet.profile(), com.mlmvpn.scanner.engines.cfnet.CfStage.SCAN, it.id, SCAN_SHAPE_FRESH_MS)
+            }
+            fresh ?: try {
+                withContext(Dispatchers.Main) { onPaused(S(R.string.cfnet_scan_preparing)) }
+                cfnet.ensure(com.mlmvpn.scanner.engines.cfnet.CfStage.SCAN, base, freshMs = SCAN_SHAPE_FRESH_MS,
+                    budget = com.mlmvpn.scanner.engines.cfnet.StrategyEngine.StageBudget(parallel = 1, deadlineMs = 75_000))
+                    ?.takeIf { it.data?.family == scanFamily }
+                    ?: cfnet.saved(com.mlmvpn.scanner.engines.cfnet.CfStage.SCAN, base, scanFamily)
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) { onPaused(null) }
+            }
+        } else null
+        Log.i(TAG, "scan shape: ${scanShape?.id ?: "none"} family=${scanFamily.key}")
         val tuning = strategy.tuning
-        val probePorts = ports.distinct().filter { it in 1..65535 }.ifEmpty { listOf(443) }
+        // The proven port is probed IN ADDITION to the user's own, never instead of them.
+        val savedPort = if (scanShape != null) cfnet.scanPort(base, scanFamily) else 0
+        val probePorts = (ports + listOfNotNull(savedPort.takeIf { it > 0 })).distinct().filter { it in 1..65535 }.ifEmpty { listOf(443) }
+        // A shaped handshake gets through filters a plain one does not, so the plain-TLS pre-filter
+        // would throw away exactly the addresses the shape is for: TCP alone then.
+        val shapedPrefilter = cloudflareBase && (scanShape != null && cfnet.scanNeedsShapedPrefilter(base, scanFamily))
         // Both are user-typed. Zero as a target made every verifier exit on its first check, which
         // left the admission queue undrained and the probe pool running the whole address space for
         // a result that was empty by construction; a budget below the target could never reach it.
@@ -275,7 +321,7 @@ class CloudflareScanner {
                         // remaining IP dead without testing it.
                         ensureOnline(watchdog, onPaused)
                         val result = tcpProbe(ip, probePorts, tuning, probeNetwork)
-                            ?.takeIf { r -> probeNetwork != null || aliveSemaphore.withPermit { ScanScout.alive(r.ip, r.port, aliveTarget) } }
+                            ?.takeIf { r -> probeNetwork != null || shapedPrefilter || aliveSemaphore.withPermit { ScanScout.alive(r.ip, r.port, aliveTarget) } }
                         probedCount.incrementAndGet()
                         // Feeds the watchdog's second detector: a long run of these with no
                         // success is what makes it stop trusting the OS and move a byte itself.
@@ -373,14 +419,17 @@ class CloudflareScanner {
                     emit()
                     var worst = 0f
                     var ok = true
+                    var shape: String? = null
                     repeat(tuning.verifyPasses) {
                         if (!ok) return@repeat
-                        val delay = realDelayTest(candidate.ip, baseConfig, context, candidate.port)
-                        if (delay <= 0f) ok = false else worst = maxOf(worst, delay)
+                        val (delay, used) = realDelayTestWith(candidate.ip, baseConfig, context, candidate.port)
+                        if (delay <= 0f) ok = false else { worst = maxOf(worst, delay); shape = used }
                     }
 
                     if (ok && worst > 0f) {
+                        com.mlmvpn.scanner.data.CfEdge.noteGood(context, candidate.ip, worst.toLong())
                         candidate.downloadSpeed = worst
+                        candidate.strategy = shape
                         finalValidIps.add(candidate)
                         withContext(Dispatchers.Main) { onIpFound(candidate) }
                         verifiedCount.incrementAndGet()
@@ -418,6 +467,22 @@ class CloudflareScanner {
             emit()
             onPaused(null)
             onPhaseChange(ScanPhase.DONE)
+        }
+
+        // Monitor: what this scan proved about the SCAN strategy it dialled with. Real tests that
+        // found addresses reinforce it; a full budget of real tests that found nothing lowers it, so
+        // the next scan searches for another shape instead of repeating this one.
+        if (scanShape != null) {
+            // Only what this shape verified: a mixed list's other family was dialled another way.
+            val proven = finalValidIps.filter { it.strategy == scanShape.id }
+            val healthy = proven.size
+            val tested = testedCount.get()
+            val result = when {
+                healthy > 0 -> com.mlmvpn.scanner.engines.cfnet.ValidationResult.pass(proven.minOf { it.downloadSpeed }.toLong(), "found=$healthy")
+                tested >= 8 -> com.mlmvpn.scanner.engines.cfnet.ValidationResult.fail(com.mlmvpn.scanner.engines.cfnet.FailureClass.SCAN_FAILURE, detail = "tested=$tested found=0")
+                else -> null
+            }
+            if (result != null) cfnet.report(com.mlmvpn.scanner.engines.cfnet.CfStage.SCAN, scanShape, cfnet.profile(), result)
         }
 
         return@coroutineScope finalValidIps.sortedBy { it.downloadSpeed }
@@ -531,11 +596,23 @@ class CloudflareScanner {
         baseConfigUri: String,
         context: android.content.Context,
         port: Int = 443,
-    ): Float {
+    ): Float = realDelayTestWith(ip, baseConfigUri, context, port).first
+
+    /**
+     * [realDelayTest], and the id of the Cloudflare SCAN strategy whose handshake it dialled with
+     * (null: the config as written) -- what the combine writes into the configs it builds on [ip].
+     */
+    internal suspend fun realDelayTestWith(
+        ip: String,
+        baseConfigUri: String,
+        context: android.content.Context,
+        port: Int = 443,
+    ): Pair<Float, String?> {
         var realDelay = 0f
+        var strategy: String? = null
 
         try {
-            val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(baseConfigUri) ?: return 0f
+            val config = com.mlmvpn.scanner.utils.VpnConfig.parseUri(baseConfigUri) ?: return 0f to null
             // Pin the ORIGINAL host into sni/host BEFORE the address is replaced.
             //
             // This is the pairing the whole feature rests on: the packets go to the clean IP, the
@@ -558,23 +635,19 @@ class CloudflareScanner {
             // Trimmed test config (see generateSpeedtestConfig): measureOutboundDelay never
             // serves traffic, so the DNS/routing/second-inbound setup the full config carries
             // was paid once per scanned IP for nothing.
-            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
+            // SCAN: dialled with the shape proven for scanning on this network, if any -- the one
+            // generateSpeedtestConfig stamps on it, named here so the combine can write it down.
+            if (com.mlmvpn.scanner.utils.XrayJsonGenerator.tlsUnfilter) strategy = com.mlmvpn.scanner.engines.cfnet.CfNetManager.current()
+                ?.appliedStrategy(com.mlmvpn.scanner.engines.cfnet.CfStage.SCAN, config)?.id
+            val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(
+                config, strategyStage = com.mlmvpn.scanner.engines.cfnet.CfStage.SCAN)
 
-            withContext(Dispatchers.IO) {
-                // Initialize Core Environment if not already done
-                try {
-                    val keyBytes = ByteArray(32)
-                    java.security.SecureRandom().nextBytes(keyBytes)
-                    val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-                    val xudpBaseKey = android.util.Base64.encodeToString(keyBytes, flags)
-                    libv2ray.Libv2ray.initCoreEnv(context.filesDir.absolutePath, xudpBaseKey)
-                } catch (e: Exception) {}
-
-                val delayMs = libv2ray.Libv2ray.measureOutboundDelay(jsonConfig, "https://clients3.google.com/generate_204")
-                if (delayMs > 0) {
-                    realDelay = delayMs.toFloat()
-                }
-            }
+            // In-process and in parallel (the verifiers run several at once), on a thread the
+            // timeout can ABANDON: a wedged core no longer holds the scan, and the probe process's
+            // one-core-at-a-time lane stays free for the Doctor.
+            CombineEngine.ensureCoreEnv(context)
+            val delayMs = CombineEngine.measureDelay(jsonConfig, timeoutMs = REAL_DELAY_TIMEOUT_MS)
+            if (delayMs > 0) realDelay = delayMs.toFloat()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -583,7 +656,7 @@ class CloudflareScanner {
             // walks straight past and which then killed the whole pipeline job.
             Log.e(TAG, "Real delay test failed for $ip", e)
         }
-        return realDelay
+        return realDelay to strategy
     }
 
     /** Dotted quad to a 32-bit value, or null if it is not one. */

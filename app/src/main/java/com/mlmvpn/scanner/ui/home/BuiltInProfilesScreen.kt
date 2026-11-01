@@ -86,7 +86,7 @@ fun IranConfigsScreen(onBack: () -> Unit) {
         group = NodeManager.IRAN_GROUP,
         footer = stringResource(R.string.iran_home_footer),
         onBack = onBack,
-        tester = { configs -> IranProfileTester.testAll(configs) },
+        tester = { configs, onResult -> IranProfileTester.testAll(context, configs, onResult) },
         header = {
             // The one way these configs fail that is not the network's fault.
             //
@@ -150,7 +150,7 @@ private fun BuiltInProfileScreen(
      * wizard that already reports its own state, so a test button there would be a button that
      * answers a question nobody has.
      */
-    tester: (suspend (Map<String, String>) -> Map<String, IranProfileTester.Verdict>)? = null,
+    tester: (suspend (Map<String, String>, (String, IranProfileTester.Verdict) -> Unit) -> Map<String, IranProfileTester.Verdict>)? = null,
 ) {
     val context = LocalContext.current
     val phase by MyVpnService.connectionPhaseFlow.collectAsState()
@@ -166,23 +166,25 @@ private fun BuiltInProfileScreen(
     // What the measurement said about each row, and whether one is running.
     val verdicts = remember { mutableStateMapOf<String, IranProfileTester.Verdict>() }
     var testing by remember { mutableStateOf(false) }
+    var tested by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
 
     fun runTest() {
         val run = tester ?: return
         if (testing) return
         testing = true
+        tested = 0
+        verdicts.clear()
         scope.launch {
             val configs = profiles.associate { it.id to it.uri }
-            val out = runCatching { run(configs) }.getOrDefault(emptyMap())
-            verdicts.clear()
-            verdicts.putAll(out)
+            // Each row fills in as soon as its own config has been run.
+            runCatching { run(configs) { id, v -> verdicts[id] = v; tested++ } }
             testing = false
         }
     }
 
     fun start(node: VpnNode) {
-        context.startService(
+        com.mlmvpn.scanner.utils.SafeStart.service(context, 
             Intent(context, MyVpnService::class.java).apply {
                 putExtra("NODE_URI", node.uri)
                 putExtra("NODE_ID", node.id)
@@ -212,12 +214,13 @@ private fun BuiltInProfileScreen(
 
     fun disconnect() {
         starting = null
-        context.startService(Intent(context, MyVpnService::class.java).apply { action = "STOP" })
+        com.mlmvpn.scanner.utils.SafeStart.service(context, Intent(context, MyVpnService::class.java).apply { action = "STOP" })
     }
 
     IosScreen(title = title, onBack = onBack, backLabel = stringResource(R.string.emergency_3_back)) {
         Spacer(Modifier.height(14.dp))
         header()
+        com.mlmvpn.scanner.ui.RouteChips()
 
         if (profiles.isEmpty()) {
             SettingsFooter(stringResource(R.string.builtin_profiles_none))
@@ -228,7 +231,7 @@ private fun BuiltInProfileScreen(
         if (tester != null) {
             SettingsGroup {
                 SettingsActionRow(
-                    label = if (testing) stringResource(R.string.iran_test_running)
+                    label = if (testing) stringResource(R.string.iran_test_running_n, tested, profiles.size)
                     else stringResource(R.string.iran_test_action),
                     icon = Icons.Default.Speed,
                     busy = testing,
@@ -319,7 +322,8 @@ private fun ProfileRow(
             val measuredLine: String? = when {
                 connected || busy -> null
                 verdict == null -> null
-                verdict.ok -> stringResource(R.string.iran_test_row_ok, verdict.ms)
+                verdict.level == IranProfileTester.Level.OK -> stringResource(R.string.iran_test_row_ok, verdict.ms)
+                verdict.level == IranProfileTester.Level.PARTIAL -> stringResource(R.string.iran_test_row_partial)
                 else -> stringResource(R.string.iran_test_row_bad, verdict.why)
             }
             Text(
@@ -332,7 +336,8 @@ private fun ProfileRow(
                 ),
                 color = when {
                     connected -> Ios.Green
-                    measuredLine != null && verdict?.ok == true -> Ios.Green
+                    measuredLine != null && verdict?.level == IranProfileTester.Level.OK -> Ios.Green
+                    measuredLine != null && verdict?.level == IranProfileTester.Level.PARTIAL -> Ios.Orange
                     measuredLine != null -> Ios.Red
                     else -> Ios.SecondaryLabel
                 },

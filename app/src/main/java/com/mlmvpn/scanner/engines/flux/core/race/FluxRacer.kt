@@ -63,6 +63,8 @@ class FluxRacer(private val probe: FluxProbe, private val cfg: Config = Config()
         val realDeadlineMs: Long = 7_000,
         /** How long after the first success a better one may still win. */
         val graceMs: Long = 250,
+        /** Stage 2 stops as soon as this many are accepted (the grace is a ceiling, not a wait). */
+        val enough: Int = Int.MAX_VALUE,
     )
 
     data class Outcome(
@@ -107,6 +109,7 @@ class FluxRacer(private val probe: FluxProbe, private val cfg: Config = Config()
             if (accept(c, r)) {
                 accepted += next
                 if (firstOkAt == null) firstOkAt = elapsed()
+                if (accepted.size >= cfg.enough) break
             } else refused += next
         }
         scope.cancel()

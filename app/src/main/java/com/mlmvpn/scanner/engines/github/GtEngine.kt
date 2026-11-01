@@ -11,6 +11,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -82,19 +84,25 @@ data class GtSignIn(val userCode: String = "", val verificationUri: String = "",
 /** SETTING_UP → STARTING → INSTALLING → CONNECTING_NETWORK → READY, or FAILED with a reason. */
 data class GtRun(val step: String = "SETTING_UP", val error: String = "", val code: String = "")
 
-/** The phone's own side: idle, finding clean IPs, starting the VPN, connected, or failed. */
+/**
+ * The phone's own side: idle, finding a way in, starting the VPN, connected, or failed. `ips` are the
+ * clean Cloudflare addresses (with a Worker), `relays` the names of the relays that answered.
+ */
 data class GtLink(val phase: String = "idle", val ips: List<String> = emptyList(), val delayMs: Long = 0,
-                  val error: String = "", val code: String = "", val sessionId: String = "")
+                  val error: String = "", val code: String = "", val sessionId: String = "",
+                  val relays: List<String> = emptyList())
 
 /**
  * GitHub Tunnel on Android — the same system as the Windows app, end to end on the phone:
  *
  *   1. a GitHub account (device-code sign-in) — the cloud server runs on its Actions allowance;
- *   2. a relay Worker on the user's own Cloudflare account ([GtBroker]);
+ *   2. OPTIONAL: a relay Worker on the user's own Cloudflare account ([GtBroker]);
  *   3. a session: the v2 workflow and its agent pushed into the account's private repo, a runner
  *      dispatched with a one-time public key, and its credentials back SEALED to that key;
- *   4. the connection: clean Cloudflare addresses measured through the real outbound, then the
- *      whole Xray config ([GtXray]) handed to [MyVpnService], which adds the tun.
+ *   4. the connection: clean Cloudflare addresses to the Worker AND the runner's own free relays
+ *      ([GtRelay] — no Cloudflare at all), each measured through the real outbound, then the whole
+ *      Xray config ([GtXray]) handed to [MyVpnService], which adds the tun. Without a Worker, or on
+ *      a line where Cloudflare is filtered, the relays alone carry it: a GitHub account is enough.
  *
  * The runner, the workflow and the Worker are the Windows app's own files (assets/gt, synced by
  * scripts/sync-gt-assets.js), so both apps can share a GitHub account without fighting over them.
@@ -106,6 +114,8 @@ object GtEngine {
     private const val MAX_ACCOUNT_ATTEMPTS = 4
     /** Ahead of the end, when the next session is made ready (a boot takes ~70 s, tunnels ~30 s). */
     private const val RENEW_LEAD_MS = 8 * 60_000L
+    /** With no Worker, how long a ready session may take to publish its first relay. */
+    private const val RELAY_WAIT_MS = 90_000L
     const val NODE_PREFIX = "gt_"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -124,6 +134,8 @@ object GtEngine {
     private var planSession = ""
     /** The clean addresses of the running connection — a plan change reuses them, no new scan. */
     private var linkIps: List<String> = emptyList()
+    /** The relays of the running connection, the same way. */
+    private var linkRelays: List<GtRelay> = emptyList()
     private val exitRunning = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var exitAgain = false
     private var lastStatusAt = 0L
@@ -246,9 +258,8 @@ object GtEngine {
 
     /** One pass over the pool: each account at most once, the reason each one failed logged. */
     private suspend fun runSession(standby: Boolean): GtSession {
-        val broker = store.broker()
-        if (!broker.deployed) throw fail("BROKER_NOT_DEPLOYED", S(R.string.gt_err_no_broker))
-        if (broker.version in 1 until GtBroker.REQUIRED_VERSION) throw fail("BROKER_NEEDS_UPDATE", S(R.string.gt_err_broker_old))
+        // No Worker is no reason to stop: the runner's own relays carry the session without one.
+        if (workerHostOrNull() == null) log(S(R.string.gt_log_no_worker))
         val tried = mutableSetOf<String>()
         var last: Exception? = null
         repeat(MAX_ACCOUNT_ATTEMPTS) { attempt ->
@@ -398,8 +409,24 @@ object GtEngine {
             throw if (payload != null) RunFailure(S(R.string.gt_err_no_tunnel, why), "QT_UNAVAILABLE", retryable = false)
             else RunFailure(S(R.string.gt_err_timeout), "SESSION_TIMEOUT", retryable = false)
         }
-        val t = try { GtTransport.from(payload) } catch (e: Exception) {
+        var t = try { GtTransport.from(payload) } catch (e: Exception) {
             throw RunFailure(S(R.string.gt_err_generic, e.message.orEmpty()), "BAD_TRANSPORT", retryable = false)
+        }
+        // With no Worker, only a relay can carry the session — and the runner opens it on its FIRST
+        // way in, which may be a quick tunnel. The relays follow within seconds, republished.
+        if (workerHostOrNull() == null && t.relays.isEmpty()) {
+            log(S(R.string.gt_log_waiting_relays))
+            val until = System.currentTimeMillis() + RELAY_WAIT_MS
+            while (System.currentTimeMillis() < until && t.relays.isEmpty()) {
+                delay(POLL_MS)
+                val s = try { GtGithub.sessionFile(token, repo, session.id) } catch (_: Exception) { null } ?: continue
+                val nt = try { GtTransport.from(GtCrypto.open(priv, s, session.id)) } catch (_: Exception) { continue }
+                if (nt.rev >= t.rev) { t = nt; sealed = s }
+            }
+            if (t.relays.isEmpty()) {
+                store.updateSession(session.id) { it.copy(status = "FAILED", lastError = "no relay") }
+                throw RunFailure(S(R.string.gt_err_no_relay), "NO_RELAY", retryable = false)
+            }
         }
         val anchor = if (runStartedAt > 0) runStartedAt else GtGithub.serverNow()
         val updated = store.updateSession(session.id) {
@@ -459,10 +486,45 @@ object GtEngine {
     private fun transportOf(s: GtSession): GtTransport =
         GtTransport.from(GtCrypto.open(com.mlmvpn.core.tunnel.SecureStore.decrypt(s.sealKeyEnc), JSONObject(s.sealed), s.id))
 
-    private fun workerHost(): String {
-        val url = store.broker().effectiveUrl
-        if (url.isBlank()) throw fail("BROKER_NOT_DEPLOYED", S(R.string.gt_err_no_broker))
-        return java.net.URL(url).host
+    /** The user's Worker, when there is one this app can ride; null means the relays alone. */
+    private fun workerHostOrNull(): String? {
+        val b = store.broker()
+        if (!b.deployed || b.version in 1 until GtBroker.REQUIRED_VERSION) return null
+        return try { java.net.URL(b.effectiveUrl).host.takeIf { it.isNotBlank() } } catch (_: Exception) { null }
+    }
+
+    /**
+     * The runner's newest hand-off from GitHub, kept when it is at least as new as the stored one:
+     * a relay that restarted is under a NEW name, and only the runner knows which.
+     */
+    private fun refreshSealed(s: GtSession): GtSession {
+        val token = store.token(s.accountId)
+        if (token.isBlank() || s.repository.isBlank()) return s
+        return try {
+            val sealed = GtGithub.sessionFile(token, s.repository, s.id) ?: return s
+            val p = GtCrypto.open(com.mlmvpn.core.tunnel.SecureStore.decrypt(s.sealKeyEnc), sealed, s.id)
+            if (p.optString("phase") != "ready") return s
+            val t = GtTransport.from(p)
+            if (t.rev < s.rev) return s
+            store.updateSession(s.id) { it.copy(sealed = sealed.toString(), rev = t.rev) } ?: s
+        } catch (e: Exception) { Log.w(TAG, "hand-off: ${e.message}"); s }
+    }
+
+    /** The same from the status channel: its answer is the runner's live state, sealed the same way. */
+    private fun noteHandoff(s: GtSession, body: String, p: JSONObject) {
+        if (p.optString("phase") != "ready") return
+        val fresh = try { GtTransport.from(p) } catch (_: Exception) { return }
+        if (fresh.rev < s.rev) return
+        val old = try { transportOf(s) } catch (_: Exception) { null }
+        if (old != null && old.hosts == fresh.hosts && old.relays == fresh.relays) return
+        store.updateSession(s.id) { it.copy(sealed = body, rev = fresh.rev) }
+    }
+
+    /** On relays alone, none of the ones the connection rides is still published. */
+    private fun relaysMoved(s: GtSession): Boolean {
+        if (linkRelays.isEmpty() || linkIps.isNotEmpty()) return false
+        val now = try { transportOf(s).relays.map { it.host }.toSet() } catch (_: Exception) { return false }
+        return now.isNotEmpty() && linkRelays.none { it.host in now }
     }
 
     /** Connect to the live session (the caller has VPN consent). */
@@ -476,36 +538,64 @@ object GtEngine {
         linkJob = scope.launch { connectNow(s) }
     }
 
-    private suspend fun connectNow(session: GtSession) {
-        _state.value = _state.value.copy(link = GtLink("picking", sessionId = session.id))
+    private suspend fun connectNow(session0: GtSession) {
+        _state.value = _state.value.copy(link = GtLink("picking", sessionId = session0.id))
         try {
+            // The newest hand-off first: a relay's name can move while the session runs.
+            val session = refreshSealed(session0)
             val t = transportOf(session)
-            val host = workerHost()
+            val host = workerHostOrNull()
             val secret = store.installSecret()
             val exp = session.expiresAt.takeIf { it > 0 } ?: (System.currentTimeMillis() + 6 * 3600_000L)
-            val pass = GtCrypto.signPass(secret, GtXray.label(t.hosts.first()), session.id, exp)
-            val picked = GtCleanIp.pick(app, store, { ip -> GtXray.outbound(ip, host, pass, t) }) { n -> log(S(R.string.gt_log_clean_ips, n)) }
-            if (picked.isEmpty()) {
-                val n = GtCleanIp.candidates(app, store, GtCleanIp.networkKey(app)).size
-                throw fail("NO_CLEAN_IP", S(R.string.gt_err_no_clean_ip, n))
+            // Both ways in at once, each through the real outbound: the Worker on clean Cloudflare
+            // addresses (when there is one) and the runner's relays. Whatever answers is used.
+            val (picked, relayRes) = coroutineScope {
+                val cf = async {
+                    if (host == null || t.hosts.isEmpty()) emptyList()
+                    else {
+                        val pass = GtCrypto.signPass(secret, GtXray.label(t.hosts.first()), session.id, exp)
+                        GtCleanIp.pick(app, store, { ip -> GtXray.outbound(ip, host, pass, t) }) { n -> log(S(R.string.gt_log_clean_ips, n)) }
+                    }
+                }
+                val rl = async {
+                    if (t.relays.isEmpty()) emptyList()
+                    else {
+                        log(S(R.string.gt_log_relays, t.relays.size))
+                        val byHost = t.relays.associateBy { it.host }
+                        GtCleanIp.measure(app, t.relays.map { it.host }, { h -> GtXray.relayOutbound(byHost.getValue(h), t) })
+                    }
+                }
+                cf.await() to rl.await()
             }
             val ips = picked.map { it.ip }
-            log(S(R.string.gt_log_clean_ok, ips.joinToString("، "), picked.first().delayMs.toInt()))
-            _state.value = _state.value.copy(link = GtLink("connecting", ips, picked.first().delayMs, sessionId = session.id))
+            val relays = relayRes.mapNotNull { r -> t.relays.firstOrNull { it.host == r.ip } }
+            if (ips.isEmpty() && relays.isEmpty()) {
+                throw if (host != null && t.hosts.isNotEmpty() && t.relays.isEmpty()) {
+                    val n = GtCleanIp.candidates(app, store, GtCleanIp.networkKey(app)).size
+                    fail("NO_CLEAN_IP", S(R.string.gt_err_no_clean_ip, n))
+                } else fail("NO_WAY", S(R.string.gt_err_no_way))
+            }
+            if (ips.isNotEmpty()) log(S(R.string.gt_log_clean_ok, ips.joinToString("، "), picked.first().delayMs.toInt()))
+            if (relays.isNotEmpty()) log(S(R.string.gt_log_relay_ok, relays.joinToString("، ") { it.label }, relayRes.first().delayMs.toInt()))
+            val best = listOfNotNull(picked.firstOrNull()?.delayMs, relayRes.firstOrNull()?.delayMs).minOrNull() ?: 0L
+            val labels = relays.map { it.label }
+            _state.value = _state.value.copy(link = GtLink("connecting", ips, best, sessionId = session.id, relays = labels))
             // Marked here, before the service is asked: startService is asynchronous, and the flow
             // may still read CONNECTED from whatever ran before — including this very session.
             MyVpnService.connectionPhaseFlow.value = MyVpnService.Phase.CONNECTING
             // A new session starts on the runner's own address; its exits are asked for once it is up.
             if (planSession != session.id) { plan = GtXray.ExitPlan(); planSession = session.id }
             linkIps = ips
-            startVpn(session, GtXray.config(session, t, host, secret, ips, com.mlmvpn.scanner.utils.LocalPort.get(app), plan))
+            linkRelays = relays
+            startVpn(session, GtXray.config(session, t, host.takeIf { ips.isNotEmpty() }, secret, ips,
+                com.mlmvpn.scanner.utils.LocalPort.get(app), plan, relays))
             // What the service reports is the only thing that counts as up; IDLE means it stopped.
             val phase = withTimeoutOrNull(45_000) {
                 MyVpnService.connectionPhaseFlow.first { it != MyVpnService.Phase.CONNECTING }
             }
             if (phase == MyVpnService.Phase.CONNECTED) {
                 log(S(R.string.gt_log_connected))
-                _state.value = _state.value.copy(link = GtLink("connected", ips, picked.first().delayMs, sessionId = session.id))
+                _state.value = _state.value.copy(link = GtLink("connected", ips, best, sessionId = session.id, relays = labels))
                 store.updateSession(session.id) { if (it.status == "READY") it.copy(status = "ACTIVE") else it }
                 refresh { it.copy(exit = it.exit.copy(use = plan.use, inUse = inUseOf(plan), seenCountry = "", seenCity = "", seenIp = "",
                     udpState = "", udpIp = "", udpCountry = "", udpCity = "")) }
@@ -515,24 +605,24 @@ object GtEngine {
             }
         } catch (e: Exception) {
             val f = e as? RunFailure
-            _state.value = _state.value.copy(link = GtLink("failed", error = e.message.orEmpty(), code = f?.code.orEmpty(), sessionId = session.id))
+            _state.value = _state.value.copy(link = GtLink("failed", error = e.message.orEmpty(), code = f?.code.orEmpty(), sessionId = session0.id))
         }
     }
 
     private fun startVpn(session: GtSession, config: String) {
         try { Log.i(TAG, "config users: " + GtXray.describeUsers(config, transportOf(session))) } catch (_: Exception) {}
-        app.startService(Intent(app, MyVpnService::class.java).apply {
+        com.mlmvpn.scanner.utils.SafeStart.service(app, Intent(app, MyVpnService::class.java).apply {
             putExtra("NODE_URI", config)
             putExtra("NODE_ID", NODE_PREFIX + session.id)
             putExtra("PROXY_MODE", com.mlmvpn.scanner.utils.NetworkSettings.proxyMode(app))
             putExtra("LOCAL_PORT", com.mlmvpn.scanner.utils.LocalPort.getString(app))
-            putExtra("MTU_PROFILE", com.mlmvpn.scanner.utils.NetworkSettings.Method.V2RAY.id)
+            putExtra("MTU_PROFILE", com.mlmvpn.scanner.utils.NetworkSettings.Method.GITHUB.id)
         })
     }
 
     fun disconnect() {
         linkJob?.cancel()
-        if (isConnected()) app.startService(Intent(app, MyVpnService::class.java).apply { action = "STOP" })
+        if (isConnected()) com.mlmvpn.scanner.utils.SafeStart.service(app, Intent(app, MyVpnService::class.java).apply { action = "STOP" })
         _state.value = _state.value.copy(link = GtLink(),
             exit = _state.value.exit.copy(job = "idle", jobError = "", seenCountry = "", seenCity = "", seenIp = "",
                 udpState = "", udpIp = "", udpCountry = "", udpCity = ""))
@@ -613,6 +703,7 @@ object GtEngine {
                 if (body.isBlank()) return null
                 val payload = GtCrypto.open(com.mlmvpn.core.tunnel.SecureStore.decrypt(s.sealKeyEnc), JSONObject(body), s.id)
                 noteExits(payload)
+                noteHandoff(s, body, payload)
                 payload
             }
         } catch (e: Exception) { Log.w(TAG, "runner $path: ${e.message}"); null }
@@ -728,11 +819,11 @@ object GtEngine {
      * restarts once on the new config, a second or two, and must come back up to count.
      */
     private suspend fun applyPlan(session: GtSession, next: GtXray.ExitPlan): Boolean {
-        if (linkIps.isEmpty()) return false
+        if (linkIps.isEmpty() && linkRelays.isEmpty()) return false
         val t = transportOf(session)
         MyVpnService.connectionPhaseFlow.value = MyVpnService.Phase.CONNECTING
-        startVpn(session, GtXray.config(session, t, workerHost(), store.installSecret(), linkIps,
-            com.mlmvpn.scanner.utils.LocalPort.get(app), next))
+        startVpn(session, GtXray.config(session, t, workerHostOrNull().takeIf { linkIps.isNotEmpty() }, store.installSecret(), linkIps,
+            com.mlmvpn.scanner.utils.LocalPort.get(app), next, linkRelays))
         val phase = withTimeoutOrNull(45_000) { MyVpnService.connectionPhaseFlow.first { it != MyVpnService.Phase.CONNECTING } }
         if (phase != MyVpnService.Phase.CONNECTED) return false
         plan = next.normalize(t)
@@ -866,10 +957,23 @@ object GtEngine {
         // back onto whatever still works instead of leaving it on a dead user.
         if (isConnected() && _state.value.link.phase == "connected" && System.currentTimeMillis() - lastStatusAt > 60_000) {
             lastStatusAt = System.currentTimeMillis()
-            askRunner("/s")?.let { p ->
-                val exits = exitsOf(p).orEmpty()
-                val lost = (listOf(plan.use) + plan.rules.map { it.id }).any { id -> id != "direct" && exits.none { it.id == id && it.state == "ready" } }
+            val p = askRunner("/s")
+            p?.let {
+                val exits = exitsOf(it).orEmpty()
+                val lost = (listOf(plan.use) + plan.rules.map { r -> r.id }).any { id -> id != "direct" && exits.none { x -> x.id == id && x.state == "ready" } }
                 if (lost && !exitRunning.get()) scheduleExits()
+            }
+            // On relays alone, a relay that restarted comes back under a NEW name. The status
+            // channel says which — or GitHub, when no relay carries the status channel any more —
+            // and the connection moves onto the new names.
+            store.activeSession()?.let { s ->
+                if (linkIps.isEmpty() && linkRelays.isNotEmpty()) {
+                    val cur = if (p == null) refreshSealed(s) else store.session(s.id) ?: s
+                    if (relaysMoved(cur) && linkJob?.isActive != true) {
+                        log(S(R.string.gt_log_relay_moved))
+                        linkJob = scope.launch { connectNow(cur) }
+                    }
+                }
             }
         }
         // Where the default exit really leaves from, every few minutes: an exit can go wrong long
@@ -926,7 +1030,7 @@ object GtEngine {
         signInJob?.cancel(); runJob?.cancel(); linkJob?.cancel()
         if (isConnected()) disconnect()
         store.resetAll()
-        plan = GtXray.ExitPlan(); planSession = ""; linkIps = emptyList()
+        plan = GtXray.ExitPlan(); planSession = ""; linkIps = emptyList(); linkRelays = emptyList()
         _state.value = GtUiState()
         refresh()
     }

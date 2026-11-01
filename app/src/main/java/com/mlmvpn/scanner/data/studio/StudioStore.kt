@@ -136,11 +136,26 @@ class StudioStore private constructor(private val context: Context) {
      * that person's configs, point each at it — and routing them through the store's fleet-wide
      * helpers would fan a per-person action out across accounts that have nothing to do with it.
      */
-    internal fun apiFor(account: CloudAccount): StudioApi = StudioHttpApi(context, account)
+    internal fun apiFor(account: CloudAccount): StudioApi =
+        // An account's central Worker is answered from this phone (data/studio/central); an engine, over HTTP.
+        if (com.mlmvpn.scanner.data.studio.central.Central.isCentral(account.id)) {
+            com.mlmvpn.scanner.data.studio.central.StudioCentralApi(context, account)
+        } else {
+            StudioHttpApi(context, account)
+        }
 
-    /** Accounts that actually carry an installation. The fleet is derived, never a second store. */
-    fun installedAccounts(): List<CloudAccount> =
-        CloudManager(context).accounts.filter { it.isStudioManaged }
+    /**
+     * Accounts that actually carry an installation. The fleet is derived, never a second store: the
+     * engines from the account records, and — after them — every account this phone runs the Studio
+     * on through its central Worker, as an installation of its own (`<account>#gw`).
+     */
+    fun installedAccounts(): List<CloudAccount> {
+        val all = CloudManager(context).accounts.toList()
+        return all.filter { it.isStudioManaged } + com.mlmvpn.scanner.data.studio.central.CentralFleet.shards(context, all)
+    }
+
+    /** Whether an installation is an account's central Worker rather than an engine. */
+    fun isCentral(installationId: String?): Boolean = com.mlmvpn.scanner.data.studio.central.Central.isCentral(installationId)
 
     // ------------------------------------------------------------------ health & sync
 
@@ -148,16 +163,38 @@ class StudioStore private constructor(private val context: Context) {
     suspend fun refreshInstallations(): List<StudioInstallation> = withContext(Dispatchers.IO) {
         val previous = _state.value.installations.associateBy { it.installationId }
         val out = mutableListOf<StudioInstallation>()
+        // The central Worker side of the fleet (data/studio/central): an account on an engine gets its
+        // central Worker beside it for new people, and an account another phone already runs the
+        // Studio on is taken in (D8). Then each shard's Worker is brought in step — an ended term
+        // taken off, ids another device dropped put back — before its health is read.
+        val cloudAccounts = CloudManager(context).accounts.toList()
+        runCatching { com.mlmvpn.scanner.data.studio.central.CentralFleet.adoptOrphans(context, cloudAccounts) }
+        runCatching { com.mlmvpn.scanner.data.studio.central.CentralFleet.ensureForEngineAccounts(context, cloudAccounts) }
+        runCatching { com.mlmvpn.scanner.data.studio.central.CentralFleet.discover(context, cloudAccounts) }
+        // The check that ends a term while the app is closed, now that the set of accounts is known.
+        com.mlmvpn.scanner.data.studio.central.StudioCentralJob.ensure(context)
         for (account in installedAccounts()) {
             // Carried across a refresh so a shard does not lose its user count — and therefore its
             // place in the capacity ordering — every time health is polled without the dashboard.
             val knownUsers = previous[account.id]?.users ?: -1
+            val central = isCentral(account.id)
+            val centralProblem = if (!central) null else {
+                val r = com.mlmvpn.scanner.data.studio.central.CentralFleet.reconcile(context, account)
+                when {
+                    r == null -> "central_apply_failed"
+                    r.unreadable -> com.mlmvpn.scanner.data.studio.central.CentralEngine.UNREADABLE
+                    r.leftOut > 0 -> "central_full"
+                    else -> null
+                }
+            }
             when (val res = apiFor(account).health()) {
                 is StudioResult.Ok -> out.add(
                     res.value.copy(
                         lastSyncAt = index.lastSyncAt(account.id),
-                        syncError = index.syncErrorOf(account.id),
-                        users = knownUsers,
+                        syncError = centralProblem ?: index.syncErrorOf(account.id),
+                        // A central shard counts its people on this phone, exactly; an engine's
+                        // count comes from its dashboard and is carried until that is read again.
+                        users = if (central) res.value.users else knownUsers,
                         reachable = true,
                     )
                 )
@@ -203,20 +240,26 @@ class StudioStore private constructor(private val context: Context) {
      * the screen says which account it used.
      */
     fun placementFor(installations: List<StudioInstallation> = _state.value.installations): CloudAccount? {
-        val accounts = installedAccounts()
+        // New people go to an account's central Worker (the operator's choice, 2026-10-18): an
+        // engine keeps the people it already has, and nobody new is placed on one. Among the
+        // central Workers, the one with the most room left wins — room is a hard number there.
+        val accounts = installedAccounts().filter { isCentral(it.id) }
         if (accounts.isEmpty()) return null
         if (accounts.size == 1) return accounts.first()
+        val healthy = installations.filter { it.reachable }.map { it.installationId }.toSet()
+        return accounts
+            .sortedWith(compareBy({ it.id !in healthy }, { -centralRoomLeft(it) }))
+            .first()
+    }
 
-        val byId = accounts.associateBy { it.id }
-        val eligible = installations
-            .filter { it.isHealthy && !it.isStale(PanelBuild.MLM, PanelBuild.MLM_SCHEMA) }
-            .filter { byId.containsKey(it.installationId) }
-
-        val chosen = eligible
-            .sortedWith(compareBy({ it.users < 0 }, { it.users }))
-            .firstOrNull()
-
-        return chosen?.let { byId[it.installationId] } ?: accounts.first()
+    /**
+     * How many more people fit on this central Worker right now: its room (the Worker's cap less its
+     * own id and the panels) less the people who may pass. From this phone's copies, no request.
+     */
+    fun centralRoomLeft(account: CloudAccount): Int {
+        val doc = com.mlmvpn.scanner.data.studio.central.CentralFleet.doc(context, account.id) ?: return 0
+        val room = com.mlmvpn.scanner.engines.gateway.EdgeGateway.status(context, account).studioRoom
+        return (room - doc.liveCount(System.currentTimeMillis())).coerceAtLeast(0)
     }
 
     /**
@@ -329,6 +372,16 @@ class StudioStore private constructor(private val context: Context) {
      * get to delete a credential the rest of the app is using (D2).
      */
     suspend fun disconnect(installationId: String): Unit = withContext(Dispatchers.IO) {
+        // A central Worker shard: this phone stops running the Studio on it. The Worker keeps its ids
+        // and the account keeps its list, so every link handed out keeps working, and the next phone
+        // (or this one, added again) finds the same people.
+        if (isCentral(installationId)) {
+            com.mlmvpn.scanner.data.studio.central.CentralFleet.unregister(context, installationId)
+            index.forgetInstallation(installationId)
+            refreshInstallations()
+            refreshSyncState()
+            return@withContext
+        }
         val cloud = CloudManager(context)
         cloud.accounts.firstOrNull { it.id == installationId }?.let { account ->
             account.studioApiRoute = null
@@ -514,6 +567,71 @@ class StudioStore private constructor(private val context: Context) {
             }
         }
 
+    // ------------------------------------------------------------------ the central Worker (data/studio/central)
+
+    private fun centralApi(account: CloudAccount): com.mlmvpn.scanner.data.studio.central.StudioCentralApi? =
+        apiFor(account) as? com.mlmvpn.scanner.data.studio.central.StudioCentralApi
+
+    private fun notCentral(): StudioResult.Err =
+        StudioResult.Err(StudioError(com.mlmvpn.scanner.data.studio.central.StudioCentralApi.NOT_SUPPORTED))
+
+    /** «لینک تازه» for one person on a central Worker: a new id; every device on the old one is cut off. */
+    suspend fun centralRotate(account: CloudAccount, userId: String): StudioResult<StudioUser> = withContext(Dispatchers.IO) {
+        val api = centralApi(account) ?: return@withContext notCentral()
+        api.rotateLink(userId).also { if (it is StudioResult.Ok) index.upsert(account.id, it.value) }
+    }
+
+    /** One person's links on a central Worker, built on this phone. */
+    suspend fun centralLinks(account: CloudAccount, userId: String, refresh: Boolean = false): StudioResult<List<String>> =
+        withContext(Dispatchers.IO) { centralApi(account)?.links(userId, refresh) ?: notCentral() }
+
+    /** Bring one central Worker in step now, and re-read its people. */
+    suspend fun centralApplyNow(account: CloudAccount): StudioResult<com.mlmvpn.scanner.data.studio.central.Reconciled> =
+        withContext(Dispatchers.IO) {
+            val api = centralApi(account) ?: return@withContext notCentral()
+            api.applyNow().also { sync(account); refreshSyncState() }
+        }
+
+    /**
+     * Move a person from an engine installation onto a central Worker ([to]): the same name, end,
+     * note and tags, and a new link. The engine keeps them as they were — their old link works until
+     * its own end, or until the operator switches it off there — so nothing anyone holds stops by
+     * surprise. Volume and device limits do not move: the central Worker has neither.
+     */
+    suspend fun moveToCentral(from: CloudAccount, user: StudioUser, to: CloudAccount): StudioResult<StudioUser> =
+        withContext(Dispatchers.IO) {
+            val api = centralApi(to) ?: return@withContext notCentral()
+            api.createMoved(user.username, user.policy.expiresAt ?: 0L, user.note, user.tags, "${from.id}|${user.id}").also {
+                if (it is StudioResult.Ok) {
+                    index.upsert(to.id, it.value)
+                    refreshSyncState()
+                }
+            }
+        }
+
+    /** Many people on one central Worker in one upload («ساخت انبوه»). [days] null or 0 = no end. */
+    suspend fun centralCreateMany(
+        account: CloudAccount,
+        names: List<String>,
+        days: Int?,
+        planId: String?,
+    ): com.mlmvpn.scanner.data.studio.central.CentralFleet.CreateOutcome = withContext(Dispatchers.IO) {
+        val expiresAt = days?.takeIf { it > 0 }
+            ?.let { System.currentTimeMillis() + it * com.mlmvpn.scanner.data.studio.central.Central.DAY_MS } ?: 0L
+        com.mlmvpn.scanner.data.studio.central.CentralFleet.createMany(context, account, names, expiresAt, planId).also {
+            sync(account)
+            refreshSyncState()
+        }
+    }
+
+    /** Where a person on [account]'s engine moves to: its own central Worker when it has room, else the roomiest. */
+    fun centralTargetFor(account: CloudAccount): CloudAccount? {
+        val shards = installedAccounts().filter { isCentral(it.id) }
+        val own = shards.firstOrNull { com.mlmvpn.scanner.data.studio.central.Central.accountIdOf(it.id) == account.id }
+        if (own != null && centralRoomLeft(own) > 0) return own
+        return shards.filter { centralRoomLeft(it) > 0 }.maxByOrNull { centralRoomLeft(it) } ?: own
+    }
+
     // ------------------------------------------------------------------ bulk (see StudioBulk.kt)
 
     /**
@@ -533,6 +651,12 @@ class StudioStore private constructor(private val context: Context) {
     private suspend fun bulkApply(
         targets: List<UserRef>,
         onProgress: (done: Int, total: Int) -> Unit,
+        /**
+         * The same change for a person on an account's central Worker, as a rule on its record. All
+         * of a selection's people on one account then go up in ONE upload — a hundred uploads for a
+         * hundred people would be minutes and a hundred writes to the account's record.
+         */
+        central: ((com.mlmvpn.scanner.data.studio.central.CentralDoc, UserRef, Int, Long) -> com.mlmvpn.scanner.data.studio.central.CentralDoc)? = null,
         op: suspend (StudioApi, CloudAccount, UserRef) -> StudioResult<*>,
     ): BulkResult = withContext(Dispatchers.IO) {
         val accounts = installedAccounts().associateBy { it.id }
@@ -540,9 +664,27 @@ class StudioStore private constructor(private val context: Context) {
         // them for a hundred people on one shard is a hundred round trips through CloudManager.
         val apis = HashMap<String, StudioApi>()
         var ok = 0
+        var done = 0
         val failures = mutableListOf<BulkFailure>()
 
-        targets.forEachIndexed { i, ref ->
+        val batched = if (central == null) emptyList() else targets.filter { isCentral(it.installationId) }
+        for ((installationId, refs) in batched.groupBy { it.installationId }) {
+            val account = accounts[installationId]
+            if (account == null) {
+                refs.forEach { failures.add(BulkFailure(it.username, StudioError.NETWORK)) }
+            } else {
+                val outcome = com.mlmvpn.scanner.data.studio.central.CentralFleet.batch(context, account, refs, central!!)
+                ok += outcome.done
+                outcome.failures.forEach { (ref, code) -> failures.add(BulkFailure(ref.username, code)) }
+                // The index learns the new state from this phone's copy, tombstones and all.
+                sync(account)
+            }
+            done += refs.size
+            onProgress(done, targets.size)
+        }
+
+        val batchedKeys = batched.map { it.key }.toHashSet()
+        targets.filter { it.key !in batchedKeys }.forEach { ref ->
             val account = accounts[ref.installationId]
             if (account == null) {
                 failures.add(BulkFailure(ref.username, StudioError.NETWORK))
@@ -553,7 +695,8 @@ class StudioStore private constructor(private val context: Context) {
                     is StudioResult.Err -> failures.add(BulkFailure(ref.username, res.error.code))
                 }
             }
-            onProgress(i + 1, targets.size)
+            done++
+            onProgress(done, targets.size)
         }
 
         refreshSyncState()
@@ -565,7 +708,10 @@ class StudioStore private constructor(private val context: Context) {
         targets: List<UserRef>,
         enabled: Boolean,
         onProgress: (Int, Int) -> Unit = { _, _ -> },
-    ): BulkResult = bulkApply(targets, onProgress) { api, account, ref ->
+    ): BulkResult = bulkApply(
+        targets, onProgress,
+        central = { d, ref, room, now -> com.mlmvpn.scanner.data.studio.central.CentralRules.setEnabled(d, ref.userId, enabled, now, room).first },
+    ) { api, account, ref ->
         api.setEnabled(ref.userId, enabled).also {
             if (it is StudioResult.Ok) index.upsert(account.id, it.value)
         }
@@ -585,7 +731,16 @@ class StudioStore private constructor(private val context: Context) {
         addBytes: Long? = null,
         mode: RenewMode = RenewMode.EXTEND,
         onProgress: (Int, Int) -> Unit = { _, _ -> },
-    ): BulkResult = bulkApply(targets, onProgress) { api, account, ref ->
+    ): BulkResult = bulkApply(
+        targets, onProgress,
+        central = { d, ref, room, now ->
+            // Volume is not counted on the central Worker: a renewal that is only volume is refused.
+            if ((addDays == null || addDays == 0) && addBytes != null && mode == RenewMode.EXTEND) {
+                throw com.mlmvpn.scanner.data.studio.central.CentralRules.RuleError(com.mlmvpn.scanner.data.studio.central.StudioCentralApi.NOT_SUPPORTED)
+            }
+            com.mlmvpn.scanner.data.studio.central.CentralRules.renew(d, ref.userId, addDays, mode, now, room).first
+        },
+    ) { api, account, ref ->
         api.renewUser(ref.userId, null, addDays, addBytes, mode).also {
             if (it is StudioResult.Ok) index.upsert(account.id, it.value)
         }
@@ -609,7 +764,11 @@ class StudioStore private constructor(private val context: Context) {
         connLimit: Int? = null,
         ipLimit: Int? = null,
         onProgress: (Int, Int) -> Unit = { _, _ -> },
-    ): BulkResult = bulkApply(targets, onProgress) { api, account, ref ->
+    ): BulkResult = bulkApply(
+        targets, onProgress,
+        // No device, connection or IP counter on the central Worker: every such person is named.
+        central = { _, _, _, _ -> throw com.mlmvpn.scanner.data.studio.central.CentralRules.RuleError(com.mlmvpn.scanner.data.studio.central.StudioCentralApi.NOT_SUPPORTED) },
+    ) { api, account, ref ->
         when (val fresh = api.getUser(ref.userId)) {
             is StudioResult.Err -> fresh
             is StudioResult.Ok -> {
@@ -654,7 +813,10 @@ class StudioStore private constructor(private val context: Context) {
     suspend fun bulkDelete(
         targets: List<UserRef>,
         onProgress: (Int, Int) -> Unit = { _, _ -> },
-    ): BulkResult = bulkApply(targets, onProgress) { api, account, ref ->
+    ): BulkResult = bulkApply(
+        targets, onProgress,
+        central = { d, ref, _, now -> com.mlmvpn.scanner.data.studio.central.CentralRules.delete(d, ref.userId, now) },
+    ) { api, account, ref ->
         api.deleteUser(ref.userId).also {
             if (it is StudioResult.Ok) index.remove(account.id, ref.userId)
         }
@@ -679,6 +841,15 @@ class StudioStore private constructor(private val context: Context) {
             val account = accounts[ref.installationId]
             if (account == null) {
                 out.add(BulkLink(ref.username, null, StudioError.NETWORK))
+            } else if (isCentral(ref.installationId)) {
+                // A central-Worker person has no subscription link: their own configs, on one line.
+                val gw = com.mlmvpn.scanner.data.studio.central.CentralFleet.doc(context, ref.installationId)
+                    ?.user(ref.userId)?.takeIf { !it.isDeleted }
+                if (gw == null) out.add(BulkLink(ref.username, null, StudioError.NOT_FOUND))
+                else com.mlmvpn.scanner.engines.gateway.EdgeGateway.studioLinks(context, account, gw.gw, gw.name).fold(
+                    onSuccess = { out.add(BulkLink(ref.username, it.configs.joinToString(" "))) },
+                    onFailure = { out.add(BulkLink(ref.username, null, StudioError.NETWORK)) },
+                )
             } else {
                 val api = apis.getOrPut(ref.installationId) { apiFor(account) }
                 when (val sub = api.getSubscription(ref.userId)) {
@@ -1066,6 +1237,8 @@ class StudioStore private constructor(private val context: Context) {
 
         for (account in installedAccounts()) {
             val label = account.name.ifEmpty { account.email }
+            // A central Worker has no endpoint groups to read — its own settings decide its addresses.
+            if (isCentral(account.id)) continue
             // Too old to have the endpoint at all. Reported as an update rather than as a failure,
             // because "could not be read" sends the operator to check a network that is fine.
             if (known[account.id]?.can("node.groups") == false) { stale.add(label); continue }
@@ -1093,8 +1266,8 @@ class StudioStore private constructor(private val context: Context) {
             val ok = mutableListOf<String>()
             val failed = mutableListOf<Pair<String, StudioError>>()
             val known = _state.value.installations.associateBy { it.installationId }
-            val targets = if (toWholeFleet) installedAccounts()
-            else installedAccounts().filter { it.id == group.installationId }
+            val targets = (if (toWholeFleet) installedAccounts()
+            else installedAccounts().filter { it.id == group.installationId }).filter { !isCentral(it.id) }
 
             for (account in targets) {
                 if (known[account.id]?.can("node.groups") == false) continue
@@ -1159,8 +1332,9 @@ class StudioStore private constructor(private val context: Context) {
         withContext(Dispatchers.IO) {
             val ok = mutableListOf<String>()
             val failed = mutableListOf<Pair<String, StudioError>>()
-            val targets = if (toWholeFleet) installedAccounts()
-            else installedAccounts().filter { it.id == node.installationId }
+            // A central Worker's addresses are its own settings (the Cloud tab), not endpoints written here.
+            val targets = (if (toWholeFleet) installedAccounts()
+            else installedAccounts().filter { it.id == node.installationId }).filter { !isCentral(it.id) }
 
             for (account in targets) {
                 val label = account.name.ifEmpty { account.email }

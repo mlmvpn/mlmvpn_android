@@ -295,11 +295,14 @@ private fun RowFrame(
     tint: Color,
     onClick: (() -> Unit)?,
     trailing: @Composable () -> Unit,
+    /** The row's title, for the home screen's search to land on it; see SettingsSpotlight. */
+    spotlight: String? = null,
     label: @Composable () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (spotlight != null) Modifier.settingsSpotlight(spotlight) else Modifier)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .heightIn(min = 44.dp)
             .padding(horizontal = 16.dp, vertical = 7.dp),
@@ -397,6 +400,7 @@ fun SettingsRow(
         icon = icon,
         tint = tint,
         onClick = onClick,
+        spotlight = title,
         trailing = {
             if (badge > 0) {
                 IosBadge(badge, modifier = Modifier.padding(end = if (showChevron) 6.dp else 0.dp))
@@ -459,6 +463,7 @@ fun SettingsToggle(
         icon = icon,
         tint = tint,
         onClick = null,
+        spotlight = title,
         trailing = {
             Switch(
                 checked = checked,
@@ -505,6 +510,11 @@ fun SettingsTextRow(
     placeholder: String = "",
     error: String? = null,
     numeric: Boolean = false,
+    /**
+     * A credential: dots instead of the text, and the password keyboard, which keeps the phone's
+     * keyboard from learning or suggesting what is typed. Pasting still works.
+     */
+    secret: Boolean = false,
 ) {
     // The whole row focuses the field. The field itself is 150dp wide on the trailing edge, so
     // aiming at "Global API Key" -- the obvious target, and the only part of the row that names
@@ -520,6 +530,7 @@ fun SettingsTextRow(
                 focus.requestFocus()
                 keyboard?.show()
             },
+            spotlight = title,
             trailing = {
                 BasicTextField(
                     value = value,
@@ -534,10 +545,17 @@ fun SettingsTextRow(
                     keyboardOptions = KeyboardOptions(
                         keyboardType = if (numeric) {
                             androidx.compose.ui.text.input.KeyboardType.Number
+                        } else if (secret) {
+                            androidx.compose.ui.text.input.KeyboardType.Password
                         } else {
                             androidx.compose.ui.text.input.KeyboardType.Text
                         }
                     ),
+                    visualTransformation = if (secret) {
+                        androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    } else {
+                        androidx.compose.ui.text.input.VisualTransformation.None
+                    },
                     modifier = Modifier.width(150.dp).focusRequester(focus),
                     decorationBox = { inner ->
                         Box(contentAlignment = Alignment.CenterEnd) {
@@ -887,7 +905,10 @@ fun IosScreen(
                     )
                 }
             }
-            content()
+            // The scroll, for a row the home screen's search opened this page for (SettingsSpotlight).
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalSettingsScroll provides (if (scrollable) scrollState else null),
+            ) { content() }
             Spacer(Modifier.height(bottomInset))
         }
 
@@ -1106,6 +1127,7 @@ fun SettingsSlider(
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .frostedGlass(RowShape)
+            .settingsSpotlight(title)
             .padding(horizontal = 20.dp, vertical = 14.dp),
     ) {
         Row(

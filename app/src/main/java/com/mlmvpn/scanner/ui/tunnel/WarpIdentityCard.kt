@@ -173,6 +173,7 @@ internal fun ColumnScope.WarpIdentitySection(transport: Transport, refresh: Any?
                 !id.made -> tr("هنوز ساخته نشده", "Not made yet")
                 id.via == WarpIdRelay.VIA_WORKER -> tr("ساخته شد · از راه ورکر", "Made · through the worker")
                 id.via == WarpIdRelay.VIA_DIRECT -> tr("ساخته شد · مستقیم", "Made · directly")
+                id.via == WarpIdRelay.VIA_ECH -> tr("ساخته شد · با نام رمزگذاری‌شده (ECH)", "Made · with its name encrypted (ECH)")
                 else -> tr("ساخته شد", "Made")
             },
             showChevron = false,

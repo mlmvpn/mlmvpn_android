@@ -41,12 +41,37 @@ internal class IPTerminal(private val bridge: SharedBridge) {
 
         builder.setBlocking(true)
         builder.setMtu(bridge.internalEthernetMTU)
+        applySplitTunnel(builder)
 
         fd = builder.establish()
         inputStream = FileInputStream(fd!!.fileDescriptor)
         outputStream = FileOutputStream(fd!!.fileDescriptor)
     }
     
+    /**
+     * The app-wide split tunnel (Settings > Advanced VPN), as every other engine applies it. This
+     * app stays inside, as on the AmneziaWG path: its own sockets to the server are protected, and
+     * the connection check asks through the tunnel.
+     */
+    private fun applySplitTunnel(builder: android.net.VpnService.Builder) {
+        val service = bridge.service
+        val split = com.mlmvpn.core.tunnel.SplitTunnelSettings(service)
+        // Smart Iran route: Iranian apps never tunnelled (out of an allow list, or excluded).
+        val (apps, iranian) = com.mlmvpn.core.tunnel.SmartIranRoute.appsFor(service, split.mode(), split.packages() - service.packageName)
+        com.mlmvpn.core.tunnel.SmartIranRoute.excludeIranRoutes(service, builder)
+        if (apps.isEmpty() || split.mode() != com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.INCLUDE) iranian.forEach { runCatching { builder.addDisallowedApplication(it) } }
+        when (split.mode()) {
+            com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.INCLUDE -> {
+                var added = 0
+                apps.forEach { runCatching { builder.addAllowedApplication(it); added++ } }
+                if (added > 0) runCatching { builder.addAllowedApplication(service.packageName) }
+            }
+            com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.EXCLUDE ->
+                apps.forEach { runCatching { builder.addDisallowedApplication(it) } }
+            com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.ALL -> Unit
+        }
+    }
+
     internal suspend fun retrievePacket(buffer: ByteBuffer) {
         while (true) {
             yield()

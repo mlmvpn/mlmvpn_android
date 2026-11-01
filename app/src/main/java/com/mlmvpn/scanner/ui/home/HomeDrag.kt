@@ -91,10 +91,31 @@ internal class GridGeometry(
     /** From a cell's top to its tile's top: the tile and its caption sit centred in the cell. */
     val tileTopPx: Float,
     val rtl: Boolean,
+    /**
+     * Slots at the start of the FIRST page that hold no icon: the connection widget's rows
+     * (HomeConnectionWidget). Zero for a folder's panel and for a board without the widget, where
+     * every formula below reduces to the plain `page * perPage + slot`.
+     */
+    val reserved: Int = 0,
 ) {
     val perPage: Int get() = columns * rows
     val cellW: Float get() = bounds.width / columns
     val cellH: Float get() = bounds.height / rows
+
+    /** Icons the first page holds. */
+    private val firstCapacity: Int get() = (perPage - reserved).coerceAtLeast(0)
+
+    /** The visual index [slot] of the current page stands for, or -1 for a slot the widget takes. */
+    fun visualAt(slot: Int): Int = when {
+        page == 0 -> if (slot < reserved) -1 else slot - reserved
+        else -> firstCapacity + (page - 1) * perPage + slot
+    }
+
+    /** The page visual index [visual] is on. */
+    fun pageOf(visual: Int): Int = if (visual < firstCapacity) 0 else 1 + (visual - firstCapacity) / perPage
+
+    /** The slot, on its page, of visual index [visual]. */
+    fun slotOf(visual: Int): Int = if (visual < firstCapacity) visual + reserved else (visual - firstCapacity) % perPage
 
     /** The slot of this page under [p], or -1 when [p] is outside the grid. */
     fun slotAt(p: Offset): Int {
@@ -369,7 +390,9 @@ internal class HomeDrag(private val scope: CoroutineScope) {
         if (!g.bounds.contains(c)) return Hover.Nowhere
         val slot = g.slotAt(c)
         if (slot < 0) return Hover.Nowhere
-        val visual = g.page * g.perPage + slot
+        // Over the connection widget's rows: not a place an icon can go.
+        val visual = g.visualAt(slot)
+        if (visual < 0) return Hover.Nowhere
         val gap = boardGap
         val itemIndex = when {
             gap == null -> visual
@@ -530,13 +553,13 @@ internal class HomeDrag(private val scope: CoroutineScope) {
         if (where != null && where == openKey && folderPanelKey == openKey) {
             val g = folderGeometry
             val index = result.folders[where]?.apps?.indexOf(id) ?: -1
-            if (g != null && index >= 0 && index / g.perPage == g.page) target = g.tileRect(index % g.perPage)
+            if (g != null && index >= 0 && g.pageOf(index) == g.page) target = g.tileRect(g.slotOf(index))
         } else {
             val g = boardGeometry
             val ref = if (where != null) BoardLayoutRules.folderRef(where) else id
             into = where != null
             val index = result.order.indexOf(ref)
-            if (g != null && index >= 0 && index / g.perPage == g.page && openKey == null) target = g.tileRect(index % g.perPage)
+            if (g != null && index >= 0 && g.pageOf(index) == g.page && openKey == null) target = g.tileRect(g.slotOf(index))
         }
         // The landing tile stays hidden until its flying copy arrives; a folder it flies INTO stays
         // in view, since that is what it is flying into.
@@ -640,8 +663,14 @@ internal fun Modifier.homeItemGestures(
         } else {
             when (val press = awaitTapOrHold(down)) {
                 is Press.Held -> {
-                    onEnterEditMode()
-                    start(press.change.id, press.change.position)
+                    val held = item()
+                    if (fromFolder == null && held is BoardItem.App && held.app.id == com.mlmvpn.scanner.chat.MlmChat.TILE_ID) {
+                        // the Gereh tile's own menu; edit mode is one of its rows (GerehTileMenu)
+                        GerehTileMenu.open.value = true
+                    } else {
+                        onEnterEditMode()
+                        start(press.change.id, press.change.position)
+                    }
                 }
                 Press.Tapped -> onTap()
                 Press.Cancelled -> Unit

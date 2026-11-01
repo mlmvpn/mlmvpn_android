@@ -66,6 +66,9 @@ class MyVpnService : VpnService() {
     }
 
     companion object {
+        @Volatile var activeGameSessionId: String? = null
+        @Volatile var runtimeSocksPort: Int = 0
+        @Volatile var runtimeControlSocksPort: Int = 0
         /** Game session route profiles, sent as the GAME_ROUTE_PROFILE extra. See setupVpn. */
         const val GAME_ROUTE_FULL = "FULL"
         const val GAME_ROUTE_DNS_ONLY = "DNS_ONLY"
@@ -116,11 +119,18 @@ class MyVpnService : VpnService() {
         var instance: MyVpnService? = null
     }
 
+    /** A traffic counter, or 0 when the system cannot answer (DeadSystemException while it restarts). */
+    private inline fun stat(read: () -> Long): Long = try { read() } catch (_: RuntimeException) { 0L }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
+        com.mlmvpn.scanner.utils.SafeStart.attach(this)
         com.mlmvpn.scanner.utils.ScreenState.watch(this)
         registerNetworkWatchdog()
+        // The Xray core runs in its own process (XrayHosts). When Xray panics there, that process
+        // ends and this service hears about it here -- before, the same panic closed the whole app.
+        com.mlmvpn.core.warp.VlessXrayInjector.onTunnelLost = { serviceScope.launch { onXrayCoreLost() } }
         // If the update check on app launch failed silently (GitHub filtered/unreachable before
         // any tunnel was up), retry it once real connectivity exists -- whichever engine got us
         // there. Cheap: UpdateChecker throttles itself internally, so repeated CONNECTED events
@@ -136,7 +146,8 @@ class MyVpnService : VpnService() {
                     // Not for game sessions: those are per-game configs (a DNS-only resolver, a
                     // game-only tunnel), and replaying one from the Quick Settings tile would
                     // bring it up as a whole-device VPN that routes nothing the user expects.
-                    lastConnectIntent?.takeIf { !it.getBooleanExtra("GAME_MODE", false) }?.let { started ->
+                    lastConnectIntent?.takeIf { !it.getBooleanExtra("GAME_MODE", false) &&
+                        it.getStringExtra("NODE_ID") != com.mlmvpn.scanner.engines.windscribe.WindscribeEngine.NODE_ID }?.let { started ->
                         com.mlmvpn.scanner.data.LastEngine.recordXray(
                             applicationContext,
                             started.getStringExtra("NODE_URI"),
@@ -151,17 +162,29 @@ class MyVpnService : VpnService() {
     private fun registerNetworkWatchdog() {
         if (networkWatchdogCallback != null) return
         val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return
-        val request = android.net.NetworkRequest.Builder()
-            .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
+        // The DEFAULT network only -- the one the tunnel really rides (this app is outside its own
+        // tunnel, so its default is the underlying Wi-Fi or mobile network). This used to watch every
+        // network with internet: with Wi-Fi and mobile data both on, mobile data going idle and
+        // coming back -- which phones do all the time behind a working Wi-Fi -- tore the whole
+        // tunnel down and built it again each time. Users of MAE saw it as constant drops.
         val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+            private var current: android.net.Network? = null
             override fun onLost(network: android.net.Network) {
+                if (network != current) return
+                current = null
                 if (isRunning && connectionPhaseFlow.value == Phase.CONNECTED) {
                     Log.w("MyVpnService", "Underlying network lost while connected -- will reconnect once it's back")
                     lostNetworkWhileConnected = true
                 }
             }
             override fun onAvailable(network: android.net.Network) {
+                val vpn = runCatching { cm.getNetworkCapabilities(network)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true }.getOrDefault(false)
+                if (vpn) return
+                // A switch (Wi-Fi to mobile) can arrive as the new default before the old one is
+                // reported lost: the tunnel's sockets are on the old one, so that is a drop too.
+                val switched = current != null && current != network
+                current = network
+                if (switched && isRunning && connectionPhaseFlow.value == Phase.CONNECTED) lostNetworkWhileConnected = true
                 if (lostNetworkWhileConnected && isRunning) {
                     lostNetworkWhileConnected = false
                     Log.d("MyVpnService", "Network back after a drop -- reconnecting")
@@ -170,11 +193,47 @@ class MyVpnService : VpnService() {
             }
         }
         try {
-            cm.registerNetworkCallback(request, cb)
+            cm.registerDefaultNetworkCallback(cb)
             networkWatchdogCallback = cb
         } catch (e: Exception) {
             Log.w("MyVpnService", "Could not register network watchdog", e)
         }
+    }
+
+    /** When the core's process died under a running tunnel, in elapsed-realtime ms. */
+    private val coreLosses = ArrayDeque<Long>()
+
+    /**
+     * The Xray core's process died under the tunnel (a Go panic in the core). A connected tunnel
+     * reconnects, as after a network drop; a core that keeps dying (three times in two minutes:
+     * the config itself panics it) ends the connection instead of looping.
+     */
+    private suspend fun onXrayCoreLost() {
+        if (!isRunning) return
+        CrashReporter.note("xray core process died under the tunnel")
+        val now = android.os.SystemClock.elapsedRealtime()
+        val again = synchronized(coreLosses) {
+            coreLosses.addLast(now)
+            while (coreLosses.isNotEmpty() && now - coreLosses.first() > 120_000) coreLosses.removeFirst()
+            coreLosses.size
+        }
+        if (again < 3 && connectionPhaseFlow.value == Phase.CONNECTED && lastConnectIntent != null) {
+            Log.w("MyVpnService", "Xray core process died -- reconnecting")
+            triggerReconnect()
+            return
+        }
+        Log.w("MyVpnService", "Xray core process died ($again in 2 min) -- ending the connection")
+        xrayMutex.withLock {
+            try { currentEngine?.stop() } catch (_: Exception) {}
+            currentEngine = null
+            try { vpnInterface?.close() } catch (_: Exception) {}
+            vpnInterface = null
+        }
+        isRunning = false
+        connectedNodeId = null
+        lastConnectIntent = null
+        connectionPhaseFlow.value = Phase.FAILED
+        stopSelf()
     }
 
     private fun triggerReconnect() {
@@ -189,7 +248,7 @@ class MyVpnService : VpnService() {
                 action = "STOP"
                 putExtra("INTERNAL_RECONNECT", true)
             }
-            startService(stopIntent)
+            com.mlmvpn.scanner.utils.SafeStart.service(this@MyVpnService, stopIntent)
             // connectionPhaseFlow flips to IDLE synchronously at the top of the STOP handler,
             // before the actual (async, behind xrayMutex) engine teardown below it even starts --
             // it can't be used as a "teardown finished" signal. There's no such signal exposed,
@@ -216,14 +275,25 @@ class MyVpnService : VpnService() {
                     }
                 }.getOrNull()
                 if (fresh != null) Intent(intentToRestore).putExtra("NODE_URI", fresh) else intentToRestore
+            } else if (intentToRestore.getStringExtra("NODE_ID") == com.mlmvpn.scanner.engines.fenix.FenixEngine.NODE_ID) {
+                // FENIX: the same server with a pass that is still good (the stored config's may
+                // have run out while the network was gone).
+                val fresh = runCatching {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.mlmvpn.scanner.engines.fenix.FenixEngine.freshConfig(applicationContext)
+                    }
+                }.getOrNull()
+                if (fresh != null) Intent(intentToRestore).putExtra("NODE_URI", fresh) else intentToRestore
             } else intentToRestore
-            startService(restore)
+            com.mlmvpn.scanner.utils.SafeStart.service(this@MyVpnService, restore)
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         if (action == "STOP") {
+            val expected = intent.getStringExtra(com.mlmvpn.scanner.utils.GameSessionOwner.EXPECTED)
+            if (expected != null && expected != activeGameSessionId) return START_NOT_STICKY
             connectedNodeId = null
             isRunning = false
             connectionPhaseFlow.value = Phase.IDLE
@@ -245,6 +315,7 @@ class MyVpnService : VpnService() {
                 .edit().putBoolean("game_mode_active", false).apply()
             serviceScope.launch {
                 xrayMutex.withLock {
+                    if (expected != null && expected != activeGameSessionId) return@launch
                     try { currentEngine?.stop() } catch (e: Exception) {}
                     currentEngine = null
                     try { vpnInterface?.close() } catch (e: Exception) {}
@@ -277,6 +348,12 @@ class MyVpnService : VpnService() {
             return START_NOT_STICKY
         }
         
+        val gameSession = intent?.getStringExtra(com.mlmvpn.scanner.utils.GameSessionOwner.EXTRA)
+        if (!com.mlmvpn.scanner.utils.GameSessionOwner.accepts(gameSession)) {
+            if (!isRunning) stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        activeGameSessionId = gameSession
         isRunning = true
         connectedNodeId = intent?.getStringExtra("NODE_ID")
         connectionPhaseFlow.value = Phase.CONNECTING
@@ -313,6 +390,7 @@ class MyVpnService : VpnService() {
         // Tell the delay tester which ports are taken, so its throwaway instances cannot land
         // on the tunnel's own inbound or its probe.
         com.mlmvpn.scanner.utils.XrayJsonGenerator.reservePorts(localPort)
+        runtimeSocksPort = localPort
 
         val isGameMode = intent.getBooleanExtra("GAME_MODE", false)
         if (isGameMode) {
@@ -382,6 +460,8 @@ class MyVpnService : VpnService() {
 
         serviceScope.launch {
             xrayMutex.withLock {
+                if (gameSession != null && (!com.mlmvpn.scanner.utils.GameSessionOwner.accepts(gameSession) ||
+                        activeGameSessionId != gameSession)) return@launch
                 // The five-transport stack (MASQUE/WireGuard/WoW/Psiphon/Tor) runs under its own
                 // VpnService, and Android grants the device tun to exactly one at a time. The
                 // second establish() does not fail -- it takes the interface away from the first,
@@ -391,14 +471,19 @@ class MyVpnService : VpnService() {
                 // nothing else is running.
                 com.mlmvpn.scanner.ui.tunnel.TunnelExclusion.releaseForXray(this@MyVpnService)
 
-                // Clean up any existing connection before starting a new one
+                // Clean up any existing connection before starting a new one. The core first, then
+                // the interface: closing the interface first freed its descriptor while the core
+                // still read and wrote it, and the number was soon handed to some other file --
+                // which the core then wrote packets into and later closed (fdsan aborts, a core
+                // spinning on a dead descriptor). The core holds its own copy now (XrayHosts), but
+                // an engine that runs here still uses the interface's.
+                try { currentEngine?.stop() } catch (e: Exception) {}
+                currentEngine = null
+
                 try { vpnInterface?.close() } catch (e: Exception) {}
                 vpnInterface = null
 
                 kotlinx.coroutines.delay(300)
-
-                try { currentEngine?.stop() } catch (e: Exception) {}
-                currentEngine = null
 
                 val isRawJsonConfig = nodeUri.startsWith("{") && nodeUri.contains("\"inbounds\"") && nodeUri.contains("\"outbounds\"")
                 val isAmneziaWg = nodeUri.trim().startsWith("[Interface]")
@@ -535,6 +620,7 @@ class MyVpnService : VpnService() {
                             stopSelf()
                         } else {
                             Log.d("MyVpnService", "Aether Engine (full tunnel) started")
+                            runtimeSocksPort = com.mlmvpn.core.aether.AetherEngine.AETHER_SOCKS_PORT
                             connectionPhaseFlow.value = Phase.CONNECTED
                         }
                     } else if (isGst) {
@@ -617,8 +703,8 @@ class MyVpnService : VpnService() {
                                     dedicatedDnsDomains = dedicatedDnsDomains,
                                     pinnedHostIps = pinnedHybridHosts
                                 )
-                                currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd)
-                                val success = currentEngine?.start(this@MyVpnService, jsonConfig, localPort) ?: false
+                                currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd, com.mlmvpn.core.warp.XrayHosts.TUNNEL)
+                                val success = currentEngine?.start(this@MyVpnService, com.mlmvpn.core.tunnel.SmartIranRoute.injectXray(this@MyVpnService, jsonConfig), localPort) ?: false
                                 if (!success) {
                                     Log.e("MyVpnService", "Failed to start Hybrid engine")
                                     stopSelf()
@@ -650,6 +736,7 @@ class MyVpnService : VpnService() {
                             connectionPhaseFlow.value = Phase.CONNECTED
                         }
                     } else if (isAmneziaWg) {
+                        runtimeSocksPort = 0 // Native WireGuard owns the VPN; it has no SOCKS listener.
                         Log.d("MyVpnService", "AmneziaWG Config detected")
                         currentEngine = com.mlmvpn.core.warp.AmneziaWgInjector(fd)
                         val success = currentEngine?.start(this@MyVpnService, nodeUri, localPort) ?: false
@@ -676,7 +763,7 @@ class MyVpnService : VpnService() {
                             // tunnel is gone; the session must not go on claiming it is up.
                             com.mlmvpn.core.warp.AwgHostClient.tunnel.onDied = {
                                 Log.w("MyVpnService", ":awg process died under a running tunnel -- stopping")
-                                startService(Intent(this@MyVpnService, MyVpnService::class.java).setAction("STOP"))
+                                com.mlmvpn.scanner.utils.SafeStart.service(this@MyVpnService, Intent(this@MyVpnService, MyVpnService::class.java).setAction("STOP"))
                             }
                         }
                     } else if (nodeUri.startsWith("{") && nodeUri.contains("\"inbounds\"") && nodeUri.contains("\"outbounds\"")) {
@@ -766,6 +853,24 @@ class MyVpnService : VpnService() {
                                     }
                                 }
 
+                                // Local Network sharing hands other devices the tunnel through the
+                                // listener on the Local Port. An engine's whole config (MAE, FLUX,
+                                // FENIX, …) may ship none there, and then the share showed «ready»
+                                // and dialled nothing: one is added, sniffing like the tun's.
+                                if (allowLan) run {
+                                    val cur = jsonObj.getJSONArray("inbounds")
+                                    val has = (0 until cur.length()).any { cur.getJSONObject(it).optInt("port") == localPort }
+                                    if (!has) {
+                                        cur.put(org.json.JSONObject()
+                                            .put("tag", "lan-in").put("port", localPort).put("listen", "127.0.0.1").put("protocol", "mixed")
+                                            .put("settings", org.json.JSONObject().put("auth", "noauth").put("udp", true))
+                                            .put("sniffing", org.json.JSONObject().put("enabled", true)
+                                                .put("destOverride", org.json.JSONArray().put("tls").put("http").put("quic"))
+                                                .put("routeOnly", routesByApp)))
+                                        com.mlmvpn.scanner.engines.gst.GstLog.i("MyVpnService", "Injected Local Network inbound on 127.0.0.1:$localPort")
+                                    }
+                                }
+
                                 jsonObj.toString()
                             } catch (e: Exception) {
                                 Log.e("MyVpnService", "Failed to inject tun inbound, using raw config", e)
@@ -782,7 +887,10 @@ class MyVpnService : VpnService() {
                         // MAE decides Google/Gemini routing itself, per service and per network.
                         val isMae = jsonRemarks == com.mlmvpn.scanner.engines.mae.compile.MaeConfigCompiler.REMARKS
                         // FLUX likewise: its routes, DNS and QUIC handling are its own.
-                        val isFlux = com.mlmvpn.scanner.engines.flux.core.compile.FluxConfigCompiler.isFlux(jsonRemarks)
+                        val isFlux = com.mlmvpn.scanner.engines.flux.core.compile.FluxConfigCompiler.isFlux(jsonRemarks) ||
+                            com.mlmvpn.scanner.engines.fenix.FenixEngine.isFenixConfig(jsonRemarks) ||
+                            // Amnezia through Cloudflare: its routes and DNS are its own too.
+                            com.mlmvpn.scanner.engines.amnezia.AmzCarrier.isCarrierConfig(jsonRemarks)
                         val startConfig = (if (isMae || isFlux) null else com.mlmvpn.scanner.utils.XrayJsonGenerator.applyGoogleFix(finalConfig))
                             ?.also {
                                 com.mlmvpn.scanner.engines.gst.GstLog.i(
@@ -791,12 +899,80 @@ class MyVpnService : VpnService() {
                             }
                             ?: finalConfig
 
-                        currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd)
-
-                        val success = currentEngine?.start(this@MyVpnService, startConfig, localPort) ?: false
-                        if (!success) {
-                            com.mlmvpn.scanner.engines.gst.GstLog.e("MyVpnService", "JSON engine failed to start")
+                        // A whole config from an engine of its own (MAE, FLUX, FENIX) chose its handshake
+                        // and checks its own data path; the Cloudflare engine neither reshapes it nor
+                        // second-guesses it. Any other whole config with a Cloudflare outbound gets the
+                        // proven CONNECT shape and must carry real data before it counts as connected.
+                        val cfnet = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(this@MyVpnService)
+                        val ownEngine = isMae || isFlux
+                        runtimeControlSocksPort = 0
+                        var working = false
+                        var lastShape: com.mlmvpn.scanner.engines.cfnet.Strategy? = null
+                        for (attempt in 0 until 2) {
+                            val raw = org.json.JSONObject(startConfig)
+                            val outs = raw.optJSONArray("outbounds")
+                            val cfOutbound = if (ownEngine) null else outs?.let { list -> (0 until list.length()).mapNotNull(list::optJSONObject)
+                                .firstOrNull(com.mlmvpn.scanner.utils.CfUnfilter::isCloudflareOutbound) }
+                            // A clean-IP outbound with its own handshake is dialled as written, and its
+                            // outcome is no evidence about the engine's strategies (judged before any shape).
+                            val asWritten = cfOutbound?.let { cfnet.outboundConfig(it) }?.let(cfnet::dialledAsWritten) == true
+                            // First the proven shape (if any); if that carries nothing, the config as written.
+                            val selected = if (cfOutbound != null && attempt == 0) cfnet.savedForOutbound(com.mlmvpn.scanner.engines.cfnet.CfStage.CONNECT, cfOutbound) else null
+                            if (attempt == 1 && lastShape == null) break
+                            lastShape = selected
+                            if (cfOutbound != null) {
+                                selected?.data?.let { shape ->
+                                    val stream = cfOutbound.getJSONObject("streamSettings")
+                                    com.mlmvpn.scanner.engines.cfnet.CfShape.apply(stream, shape, stream.optString("network"))
+                                }
+                                val checkPort = java.net.ServerSocket(0).use { it.localPort }
+                                val inbounds = raw.optJSONArray("inbounds") ?: org.json.JSONArray().also { raw.put("inbounds", it) }
+                                inbounds.put(org.json.JSONObject().put("tag", "cfnet-check").put("listen", "127.0.0.1")
+                                    .put("port", checkPort).put("protocol", "socks").put("settings", org.json.JSONObject().put("auth", "noauth").put("udp", false)))
+                                val tag = cfOutbound.optString("tag").ifBlank { "cfnet-proxy".also { cfOutbound.put("tag", it) } }
+                                routeCfProbe(raw, tag)
+                                runtimeControlSocksPort = checkPort
+                            }
+                            // A serverless «کانفیگ ایران» has no server to fail on, so "the core
+                            // started" said nothing: it was shown connected while opening nothing.
+                            // It gets a check port of its own (its rules untouched) and must open a
+                            // site through it before it counts as connected.
+                            val serverlessCheckPort = if (cfOutbound == null && !ownEngine &&
+                                com.mlmvpn.scanner.data.IranProfileTester.isServerless(raw)) {
+                                java.net.ServerSocket(0).use { it.localPort }.also { p ->
+                                    val inbounds = raw.optJSONArray("inbounds") ?: org.json.JSONArray().also { raw.put("inbounds", it) }
+                                    val sniff = inbounds.optJSONObject(0)?.optJSONObject("sniffing")
+                                    inbounds.put(org.json.JSONObject().put("tag", "iran-check").put("listen", "127.0.0.1")
+                                        .put("port", p).put("protocol", "socks").put("settings", org.json.JSONObject().put("auth", "noauth").put("udp", false))
+                                        .apply { sniff?.let { put("sniffing", org.json.JSONObject(it.toString())) } })
+                                }
+                            } else 0
+                            // Smart Iran route: Iranian names and addresses leave by the direct outbound.
+                            com.mlmvpn.core.tunnel.SmartIranRoute.injectXray(this@MyVpnService, raw)
+                            currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd, com.mlmvpn.core.warp.XrayHosts.TUNNEL)
+                            val started = currentEngine?.start(this@MyVpnService, raw.toString(), localPort) ?: false
+                            val result = when {
+                                !started -> com.mlmvpn.scanner.engines.cfnet.ValidationResult.fail(com.mlmvpn.scanner.engines.cfnet.FailureClass.TUNNEL_FAILURE)
+                                cfOutbound != null -> com.mlmvpn.scanner.engines.cfnet.CfDataProbe.validate(runtimeControlSocksPort)
+                                serverlessCheckPort != 0 -> {
+                                    val level = com.mlmvpn.scanner.data.IranProfileTester.liveCheck(this@MyVpnService, serverlessCheckPort)
+                                    com.mlmvpn.scanner.engines.gst.GstLog.i("MyVpnService", "serverless config live check: $level")
+                                    if (level == com.mlmvpn.scanner.data.IranProfileTester.Level.FAIL)
+                                        com.mlmvpn.scanner.engines.cfnet.ValidationResult.fail(com.mlmvpn.scanner.engines.cfnet.FailureClass.TUNNEL_FAILURE)
+                                    else com.mlmvpn.scanner.engines.cfnet.ValidationResult.pass(0)
+                                }
+                                else -> com.mlmvpn.scanner.engines.cfnet.ValidationResult.pass(0)
+                            }
+                            if (cfOutbound != null && started && !asWritten) cfnet.report(com.mlmvpn.scanner.engines.cfnet.CfStage.CONNECT, selected ?: cfnet.asIs(), cfnet.profile(), result)
+                            if (result.ok) { working = true; break }
+                            currentEngine?.stop()
+                            currentEngine = null
+                            if (!started) break
+                        }
+                        if (!working) {
+                            com.mlmvpn.scanner.engines.gst.GstLog.e("MyVpnService", "JSON engine failed to start or carried no data")
                             Log.e("MyVpnService", "Failed to start JSON engine")
+                            connectionPhaseFlow.value = Phase.FAILED
                             stopSelf()
                         } else {
                             com.mlmvpn.scanner.engines.gst.GstLog.i("MyVpnService", "JSON engine started — CONNECTED")
@@ -804,18 +980,33 @@ class MyVpnService : VpnService() {
                             connectionPhaseFlow.value = Phase.CONNECTED
                         }
                     } else {
-                        val parsed = com.mlmvpn.scanner.utils.VpnConfig.parseUri(nodeUri)
+                        // An SNI config whose remembered method is ECH: no front, the same server
+                        // dialled straight to an edge with its name encrypted (SniEch).
+                        val parsed = com.mlmvpn.scanner.utils.VpnConfig.parseUri(nodeUri)?.let { c ->
+                            if (com.mlmvpn.scanner.utils.CfUnfilter.isLocalFront(c) &&
+                                com.mlmvpn.scanner.engines.rstaspoof.SniEch.enabled(this@MyVpnService)) {
+                                val (routeIp, _, _) = com.mlmvpn.scanner.engines.rstaspoof.RstaSpoofManager.storedRoute(this@MyVpnService)
+                                com.mlmvpn.scanner.engines.rstaspoof.SniEch.direct(c,
+                                    com.mlmvpn.scanner.engines.rstaspoof.SniEch.edgeFor(this@MyVpnService, routeIp))
+                                    ?.also { com.mlmvpn.scanner.engines.gst.GstLog.i("MyVpnService", "SNI config via ECH to ${it.address}") } ?: c
+                            } else c
+                        }
                         if (parsed == null) {
                             Log.e("MyVpnService", "Failed to parse VLESS URI")
                             stopSelf()
                             return@withLock
                         }
-                        // Self-healing (CfEdgeHeal): a Cloudflare-fronted config whose IPv4 edge
-                        // carries nothing on this network is moved to a Cloudflare IPv6 edge, same
-                        // Worker, same name -- measured, and only when it is actually needed.
-                        val config = com.mlmvpn.scanner.data.CfEdgeHeal.heal(this@MyVpnService, parsed)
-                        
-                        Log.d("MyVpnService", "VLESS Config: addr=${config.address}:${config.port} sni=${config.sni} host=${config.wsHost} path=${config.wsPath}")
+                        // The Cloudflare engine (cfnet): the strategy proven for CONNECT on this network
+                        // is applied by generateConfig, and the live tunnel's own data check below IS
+                        // its fast validation -- no separate probe run before every connect. Only when
+                        // that check fails is a bounded rediscovery run, and the connect retried once
+                        // with the replacement it proves (self-healing). Optimization off: as written.
+                        val cfnet = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(this@MyVpnService)
+                        val cloudflareConfig = com.mlmvpn.scanner.utils.CfUnfilter.isCloudflareFronted(parsed)
+                        val config = parsed
+                        runtimeControlSocksPort = 0
+
+                        Log.d("MyVpnService", "VLESS config prepared; Cloudflare=$cloudflareConfig")
 
                         // Resolve the server domain here, before the core starts, and pin the
                         // answer into the config (see DomainPreResolver). Skipped entirely for a
@@ -859,6 +1050,15 @@ class MyVpnService : VpnService() {
                             }
                         }
 
+                        // A connect that dials ECH -- the link's own `ech`, or the ECH strategy proven here --
+                        // carries Cloudflare's key itself, fetched on the real line (CfEchKey, an hour's cache):
+                        // with only «cloudflare-ech.com+udp://1.1.1.1» the core asks 1.1.1.1 over UDP at dial
+                        // time, and a line that drops that loses a method that works.
+                        if (cloudflareConfig && !isSniConfig && (config.ech.isNotBlank() ||
+                                cfnet.appliedStrategy(com.mlmvpn.scanner.engines.cfnet.CfStage.CONNECT, config)?.data?.shape == com.mlmvpn.scanner.engines.cfnet.TunnelShape.ECH)) {
+                            runCatching { com.mlmvpn.scanner.engines.cfnet.CfEchKey.fetch(this@MyVpnService) }
+                        }
+
                         val jsonConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(
                             config = config,
                             localPort = localPort,
@@ -895,18 +1095,66 @@ class MyVpnService : VpnService() {
                             )
                         }
                         
-                        currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd)
-                        val success = currentEngine?.start(this@MyVpnService, jsonConfig, localPort) ?: false
-                        if (!success) {
-                            Log.e("MyVpnService", "Failed to start VLESS engine")
-                            stopSelf()
-                        } else {
-                            Log.d("MyVpnService", "VLESS Engine Started Successfully!" + if (isSniConfig) " [via RSTA SNI Spoof]" else "")
-                            connectionPhaseFlow.value = Phase.CONNECTED
+                        var working = false
+                        // An SNI config rides the local front, which does the unfiltering itself: it is
+                        // data-checked like any Cloudflare config, but never reshaped, and its result is
+                        // not this network's evidence about direct Cloudflare strategies.
+                        // A clean-IP config that carries the handshake its scan proved (a combine wrote
+                        // it in) is dialled as written: data-checked, never reshaped, and its outcome is
+                        // not evidence about the engine's strategies.
+                        val asWritten = cloudflareConfig && cfnet.dialledAsWritten(config)
+                        if (asWritten) com.mlmvpn.scanner.engines.gst.GstLog.i("MyVpnService", "Cloudflare config dialled with its own handshake (from its scan)")
+                        val optimize = cloudflareConfig && cfnet.enabled() && !isSniConfig && !asWritten
+                        var liveConfig = jsonConfig
+                        for (attempt in 0 until if (optimize) 2 else 1) {
+                            val p = cfnet.profile()
+                            // The strategy this attempt runs: the proven one generateConfig applied, or
+                            // the config exactly as written when nothing is proven here yet.
+                            val selected = if (optimize) cfnet.runtimeStrategy(com.mlmvpn.scanner.engines.cfnet.CfStage.CONNECT, config) ?: cfnet.asIs() else null
+                            val validationPort = java.net.ServerSocket(0).use { it.localPort }
+                            val liveJson = org.json.JSONObject(liveConfig)
+                            if (cloudflareConfig) liveJson.getJSONArray("inbounds").put(org.json.JSONObject()
+                                .put("tag", "cfnet-check").put("listen", "127.0.0.1").put("port", validationPort)
+                                .put("protocol", "socks").put("settings", org.json.JSONObject().put("auth", "noauth").put("udp", false)))
+                            if (cloudflareConfig) routeCfProbe(liveJson, "proxy")
+                            if (cloudflareConfig) runtimeControlSocksPort = validationPort
+                            // Smart Iran route: Iranian names and addresses leave by the direct outbound.
+                            com.mlmvpn.core.tunnel.SmartIranRoute.injectXray(this@MyVpnService, liveJson)
+                            currentEngine = com.mlmvpn.core.warp.VlessXrayInjector(fd, com.mlmvpn.core.warp.XrayHosts.TUNNEL)
+                            val started = currentEngine?.start(this@MyVpnService, liveJson.toString(), localPort) == true
+                            // Connected means data moved: HTTP and HTTPS inside the tunnel, an exact-size
+                            // download and an echoed upload. A core that started and carries nothing FAILS.
+                            val result = if (!started) com.mlmvpn.scanner.engines.cfnet.ValidationResult.fail(com.mlmvpn.scanner.engines.cfnet.FailureClass.TUNNEL_FAILURE)
+                                else if (cloudflareConfig) com.mlmvpn.scanner.engines.cfnet.CfDataProbe.validate(validationPort)
+                                else com.mlmvpn.scanner.engines.cfnet.ValidationResult.pass(0)
+                            if (cloudflareConfig && started && !isSniConfig) cfnet.report(com.mlmvpn.scanner.engines.cfnet.CfStage.CONNECT, selected, p, result)
+                            if (result.ok) { working = true; break }
+                            currentEngine?.stop()
+                            currentEngine = null
+                            runtimeControlSocksPort = 0
+                            if (!started || attempt > 0 || !optimize) break
+                            // Self-healing: the proven strategy (or the config as written) carried nothing.
+                            // Its failure is recorded; a bounded rediscovery proves a replacement, and the
+                            // connect is retried with it. Nothing proven: FAILED, not a fake CONNECTED.
+                            com.mlmvpn.scanner.engines.gst.GstLog.i("MyVpnService", "Cloudflare data check failed (${result.failure}); finding another way")
+                            val healed = cfnet.diagnose(com.mlmvpn.scanner.engines.cfnet.CfStage.CONNECT, parsed,
+                                budget = com.mlmvpn.scanner.engines.cfnet.StrategyEngine.StageBudget(parallel = 1, deadlineMs = 90_000))
+                            if (!healed.ok) break
+                            liveConfig = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateConfig(config, localPort,
+                                backendDns = backendDns, allowLan = allowLan, lanPassword = lanPassword,
+                                lanBlocked = lanBlocked, includeTun = fd > 0, mtu = mtu,
+                                useFragment = false, gameMode = isGameMode, dedicatedDnsUrl = dedicatedDnsUrl,
+                                dedicatedDnsDomains = dedicatedDnsDomains, pinnedHostIps = pinnedHosts)
                         }
+                        if (working) Log.d("MyVpnService", "VLESS Engine Started Successfully!" + if (isSniConfig) " [via RSTA SNI Spoof]" else "")
+                        else Log.e("MyVpnService", "VLESS engine failed to start or carried no data")
+                        connectionPhaseFlow.value = if (working) Phase.CONNECTED else Phase.FAILED
+                        if (!working) stopSelf()
                     }
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     Log.e("MyVpnService", "Failed to start Engine", e)
+                    connectionPhaseFlow.value = Phase.FAILED
                     stopSelf()
                 }
             }
@@ -925,8 +1173,22 @@ class MyVpnService : VpnService() {
      * FLUX in IPv4 mode: the TUN gets no IPv6 at all, so Android blocks the family for every app
      * instead of letting it leave outside the tunnel.
      */
+    private fun routeCfProbe(json: org.json.JSONObject, proxyTag: String) {
+        val routing = json.optJSONObject("routing") ?: org.json.JSONObject().also { json.put("routing", it) }
+        val old = routing.optJSONArray("rules") ?: org.json.JSONArray()
+        val rules = org.json.JSONArray().put(org.json.JSONObject().put("type", "field")
+            .put("inboundTag", org.json.JSONArray().put("cfnet-check")).put("outboundTag", proxyTag))
+        for (i in 0 until old.length()) rules.put(old.get(i))
+        routing.put("rules", rules)
+    }
+
     private fun fluxIpv4Only(config: String): Boolean = try {
-        org.json.JSONObject(config).optString("remarks") == com.mlmvpn.scanner.engines.flux.core.compile.FluxConfigCompiler.REMARKS_V4
+        val remarks = org.json.JSONObject(config).optString("remarks")
+        // FENIX too: its proxy carries IPv4 only, and without a v6 address Android blocks the family.
+        remarks == com.mlmvpn.scanner.engines.flux.core.compile.FluxConfigCompiler.REMARKS_V4 ||
+            com.mlmvpn.scanner.engines.fenix.FenixEngine.isFenixConfig(remarks) ||
+            // Amnezia through Cloudflare carries IPv4 only (its DNS asks for A records alone).
+            com.mlmvpn.scanner.engines.amnezia.AmzCarrier.isCarrierConfig(remarks)
     } catch (_: Exception) { false }
 
     private fun routesByApp(config: String): Boolean = try {
@@ -987,7 +1249,9 @@ class MyVpnService : VpnService() {
                 builder.addDnsServer(dnsIp)
                 Log.i("MyVpnService", "game routing: DNS only ($dnsIp) -- gameplay stays on the physical network")
             } else {
-                builder.addRoute("0.0.0.0", 0)
+                // The whole IPv4 space -- minus Iran's ranges when the Smart Iran route is on.
+                // The resolvers handed to apps below always stay inside the tunnel.
+                com.mlmvpn.core.tunnel.SmartIranRoute.routeAllV4(applicationContext, builder, listOf(backendDns, "8.8.8.8"))
                 // IPv6 as a whole, and only above 1280.
                 //
                 // 1280 is IPv6's minimum link MTU and the kernel enforces it: putting a v6
@@ -1000,7 +1264,7 @@ class MyVpnService : VpnService() {
                     Log.i("MyVpnService", "IPv6 blocked: this config routes by app (routeOnly keeps v6 addresses)")
                 } else if (mtu >= 1280) {
                     builder.addAddress("fd00:1:2:3:4:5:6:2", 128)
-                    builder.addRoute("::", 0)
+                    com.mlmvpn.core.tunnel.SmartIranRoute.routeAllV6(applicationContext, builder)
                 } else {
                     Log.i("MyVpnService", "IPv6 blocked: MTU $mtu is under the IPv6 minimum")
                 }
@@ -1063,18 +1327,30 @@ class MyVpnService : VpnService() {
                 val routingApps = prefs.getStringSet("vpn_routing_apps", emptySet()) ?: emptySet()
 
                 if (routingMode == "ALLOW") {
-                    for (app in routingApps) {
+                    var allowed = 0
+                    // Smart Iran route: an Iranian app is never among the tunnelled ones.
+                    for (app in com.mlmvpn.core.tunnel.SmartIranRoute.allowedFilter(applicationContext, routingApps)) {
                         if (app != applicationContext.packageName) {
-                            try { builder.addAllowedApplication(app) } catch (e: Exception) {}
+                            try { builder.addAllowedApplication(app); allowed++ } catch (e: Exception) {}
                         }
+                    }
+                    // None of the chosen apps is installed: with no allowed app Android tunnels
+                    // EVERY app, this one included, and the core's own sockets loop into the tun.
+                    if (allowed == 0) {
+                        Log.w("MyVpnService", "split tunnel: no selected app is installed; tunnelling all apps")
+                        try { builder.addDisallowedApplication(applicationContext.packageName) } catch (e: Exception) {}
+                        com.mlmvpn.core.tunnel.SmartIranRoute.excludeApps(applicationContext, builder, com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.ALL)
                     }
                 } else if (routingMode == "BYPASS") {
                     for (app in routingApps) {
                         try { builder.addDisallowedApplication(app) } catch (e: Exception) {}
                     }
                     try { builder.addDisallowedApplication(applicationContext.packageName) } catch (e: Exception) {}
+                    // Smart Iran route: Iranian apps are left outside too (an app already listed is harmless).
+                    com.mlmvpn.core.tunnel.SmartIranRoute.excludeApps(applicationContext, builder, com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.EXCLUDE, skip = routingApps)
                 } else {
                     try { builder.addDisallowedApplication(applicationContext.packageName) } catch (e: Exception) {}
+                    com.mlmvpn.core.tunnel.SmartIranRoute.excludeApps(applicationContext, builder, com.mlmvpn.core.tunnel.SplitTunnelSettings.Mode.ALL)
                 }
             }
             vpnInterface = builder.establish()
@@ -1100,7 +1376,7 @@ class MyVpnService : VpnService() {
                             kotlinx.coroutines.delay(timeoutMinutes * 60 * 1000)
                             Log.d("MyVpnService", "Timeout reached. Disconnecting VPN.")
                             val stopIntent = Intent(context, MyVpnService::class.java).apply { this.action = "STOP" }
-                            startService(stopIntent)
+                            com.mlmvpn.scanner.utils.SafeStart.service(this@MyVpnService, stopIntent)
                         }
                     } else {
                         Log.d("MyVpnService", "Screen off. Timeout is 0 (Always On).")
@@ -1122,6 +1398,7 @@ class MyVpnService : VpnService() {
         // Teardown is where the native engines have historically aborted (double-closed fds,
         // locks taken on destroyed objects), so mark both ends of it.
         CrashReporter.note("MyVpnService.onDestroy begin engine=${currentEngine?.javaClass?.simpleName}")
+        com.mlmvpn.scanner.utils.SafeStart.detach(this)
         // Only clear the static handle if it still points at us. Android can construct the
         // next MyVpnService before the previous one's onDestroy() runs; an unconditional
         // null here would blank out the LIVE instance and leave callers holding nothing.
@@ -1136,6 +1413,8 @@ class MyVpnService : VpnService() {
         reconnectJob?.cancel()
         lastConnectIntent = null
         isRunning = false
+        runtimeSocksPort = 0
+        runtimeControlSocksPort = 0
         connectedNodeId = null
         isRunningFlow.value = false
         connectedNodeIdFlow.value = null
@@ -1151,19 +1430,17 @@ class MyVpnService : VpnService() {
         super.onDestroy()
         serviceScope.launch {
             xrayMutex.withLock {
-                try {
-                    // Close TUN interface first to stop packet flow into Xray
-                    vpnInterface?.close()
-                } catch (e: Exception) {}
-                vpnInterface = null
-
-                // Wait for Xray to drain its internal queues
-                kotlinx.coroutines.delay(300)
-
+                // The engine first, then the interface (see the restart path in onStartCommand):
+                // an interface closed under a running engine freed a descriptor the engine kept using.
                 try {
                     currentEngine?.stop()
                 } catch (e: Exception) {}
                 currentEngine = null
+
+                try {
+                    vpnInterface?.close()
+                } catch (e: Exception) {}
+                vpnInterface = null
             }
         }
         
@@ -1204,6 +1481,8 @@ class MyVpnService : VpnService() {
     private val BUSY_BYTES_PER_SEC = 16 * 1024L
     /** The live meter is on screen: one sample every two seconds, as it always was. */
     private val SAMPLE_SCREEN_ON_MS = 2_000L
+    /** The live widget's chart is drawing these, one point a second ([SessionTraffic.live]). */
+    private val SAMPLE_LIVE_MS = 1_000L
     /** Nobody is looking: a sample every ten seconds is plenty for usage and for the lock. */
     private val SAMPLE_SCREEN_OFF_MS = 10_000L
     /** The session counters reach disk this often; the screen reads them from memory. */
@@ -1265,12 +1544,12 @@ class MyVpnService : VpnService() {
             if (connectionPhaseFlow.value != Phase.CONNECTED) return@launch
 
             val isGameTrial = connectedNodeId == "game_uae_trial"
-            var lastRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
-            var lastTx = android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
+            var lastRx = stat { android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()) }.coerceAtLeast(0L)
+            var lastTx = stat { android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid()) }.coerceAtLeast(0L)
             
             // Fallback for devices where UDP getUidRxBytes is broken (e.g., Xiaomi/MTK)
-            var lastTotalRx = android.net.TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
-            var lastTotalTx = android.net.TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+            var lastTotalRx = stat { android.net.TrafficStats.getTotalRxBytes() }.coerceAtLeast(0L)
+            var lastTotalTx = stat { android.net.TrafficStats.getTotalTxBytes() }.coerceAtLeast(0L)
 
             var sessionRx = 0L
             var sessionTx = 0L
@@ -1280,17 +1559,26 @@ class MyVpnService : VpnService() {
 
             try {
                 while (true) {
-                    // Every two seconds while the meter can be seen, every ten while it cannot --
-                    // and at once when the screen comes back, so the meter is never stale there.
+                    // Every two seconds while the meter can be seen, every second while the live
+                    // chart is drawing them, every ten while nobody looks -- and at once when the
+                    // screen comes back or the chart appears, so neither starts on a stale count.
                     val screenWasOn = screen.isOn(this@MyVpnService)
-                    kotlinx.coroutines.withTimeoutOrNull(if (screenWasOn) SAMPLE_SCREEN_ON_MS else SAMPLE_SCREEN_OFF_MS) {
-                        screen.on.first { it != screenWasOn }
+                    val liveWas = com.mlmvpn.scanner.data.SessionTraffic.live.value
+                    val period = when {
+                        !screenWasOn -> SAMPLE_SCREEN_OFF_MS
+                        liveWas -> SAMPLE_LIVE_MS
+                        else -> SAMPLE_SCREEN_ON_MS
+                    }
+                    kotlinx.coroutines.withTimeoutOrNull(period) {
+                        kotlinx.coroutines.flow.combine(screen.on, com.mlmvpn.scanner.data.SessionTraffic.live) { on, live ->
+                            on != screenWasOn || (live && !liveWas)
+                        }.first { it }
                     }
 
-                    val currentRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
-                    val currentTx = android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
-                    val currentTotalRx = android.net.TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
-                    val currentTotalTx = android.net.TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+                    val currentRx = stat { android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()) }.coerceAtLeast(0L)
+                    val currentTx = stat { android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid()) }.coerceAtLeast(0L)
+                    val currentTotalRx = stat { android.net.TrafficStats.getTotalRxBytes() }.coerceAtLeast(0L)
+                    val currentTotalTx = stat { android.net.TrafficStats.getTotalTxBytes() }.coerceAtLeast(0L)
 
                     var rxDelta = if (currentRx > lastRx) currentRx - lastRx else 0L
                     var txDelta = if (currentTx > lastTx) currentTx - lastTx else 0L
@@ -1312,10 +1600,12 @@ class MyVpnService : VpnService() {
                     // counters from memory; the preference file behind it is written once a minute
                     // (it used to be on every sample -- a whole file to flash every two seconds,
                     // all day), and the daily usage batches its own writes the same way.
+                    // The in-memory count is the exception: it is renewed on every sample, still
+                    // or not, because the live chart takes its rate over the time between counts.
+                    sessionRx += rxDelta
+                    sessionTx += txDelta
+                    com.mlmvpn.scanner.data.SessionTraffic.publish(sessionRx, sessionTx)
                     if (rxDelta > 0L || txDelta > 0L) {
-                        sessionRx += rxDelta
-                        sessionTx += txDelta
-                        com.mlmvpn.scanner.data.SessionTraffic.publish(sessionRx, sessionTx)
                         if (now - lastPersistAt >= SESSION_PERSIST_MS) {
                             lastPersistAt = now
                             sessionPrefs.edit()
@@ -1338,10 +1628,10 @@ class MyVpnService : VpnService() {
                 }
             } finally {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                    val currentRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
-                    val currentTx = android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid()).coerceAtLeast(0L)
-                    val currentTotalRx = android.net.TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
-                    val currentTotalTx = android.net.TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
+                    val currentRx = stat { android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()) }.coerceAtLeast(0L)
+                    val currentTx = stat { android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid()) }.coerceAtLeast(0L)
+                    val currentTotalRx = stat { android.net.TrafficStats.getTotalRxBytes() }.coerceAtLeast(0L)
+                    val currentTotalTx = stat { android.net.TrafficStats.getTotalTxBytes() }.coerceAtLeast(0L)
                     
                     var rxDelta = if (currentRx > lastRx) currentRx - lastRx else 0L
                     var txDelta = if (currentTx > lastTx) currentTx - lastTx else 0L
@@ -1477,7 +1767,7 @@ class MyVpnService : VpnService() {
                         putExtra("PROXY_MODE", isProxyMode)
                         putExtra("LOCAL_PORT", localPort)
                     }
-                    startService(startIntent)
+                    com.mlmvpn.scanner.utils.SafeStart.service(this@MyVpnService, startIntent)
                     break 
                 } else {
                     Log.d("AutoSwitch", "Current node is still the best or no better node found.")

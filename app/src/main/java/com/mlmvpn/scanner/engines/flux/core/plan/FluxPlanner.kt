@@ -63,7 +63,7 @@ object FluxPlanner {
             val m = FluxMemory.metrics(inp.state, inp.net, cid) ?: return@mapNotNull null
             val fresh = inp.now - m.lastOkAt < WARM_MAX_AGE_MS
             val countryOk = EgressVerifier.accepts(inp.state.egress[c.egressKey], inp.country, inp.now)
-            val cfOk = !(inp.verdict.cf(c.family) == Tri.NO && Cloudflare.isCloudflare(c.dialAddress))
+            val cfOk = c.node.sourceId == "own" || !(inp.verdict.cf(c.family) == Tri.NO && Cloudflare.isCloudflare(c.dialAddress))
             c.takeIf { fresh && !m.coolingDown(inp.now) && countryOk && cfOk && c.family in fams }
         }
     }
@@ -86,8 +86,7 @@ object FluxPlanner {
         val fams = families(inp.mode, inp.verdict)
         if (fams.isEmpty()) return emptyList()
         val net = inp.state.nets[inp.net]
-        val fragment = net?.fragment ?: FragmentProfile.OFF
-        val tryFragmentToo = fragment == FragmentProfile.OFF && (net?.sniResets ?: 0) >= 2
+        val learned = net?.fragment
         val mux = net?.mux == Tri.YES
         val edgeCache = HashMap<Family, List<String>>()
         fun edgesFor(f: Family) = edgeCache.getOrPut(f) {
@@ -103,7 +102,12 @@ object FluxPlanner {
                 val originIsCf = origin != null && Cloudflare.isCloudflare(origin)
                 val cfCut = inp.verdict.cf(f) == Tri.NO
                 val dials = ArrayList<Pair<String?, String>>() // edge (null = origin) to address
-                if (node.edgeExpandable && (originIsCf || origin == null)) {
+                if (node.sourceId == "own" && origin != null) {
+                    // The user's own config dials the clean address its scan found -- that one
+                    // can pass where three random edges did not, so a "cut" verdict skips nothing.
+                    dials += null to origin
+                    if (node.edgeExpandable && originIsCf && !cfCut) edgesFor(f).filter { it != origin }.take(1).forEach { dials += it to it }
+                } else if (node.edgeExpandable && (originIsCf || origin == null)) {
                     // A CDN-fronted node: its own address and a few edges, all Cloudflare. None of
                     // them is worth a try where Cloudflare is cut.
                     if (cfCut) continue
@@ -116,15 +120,13 @@ object FluxPlanner {
                 }
                 for ((edge, addr) in dials) {
                     val base = FluxCandidate(node, edge, f, FragmentProfile.OFF, mux && FluxOutbounds.muxable(FluxCandidate(node, edge, f, dialAddress = addr)), addr)
-                    if (fragment != FragmentProfile.OFF && FluxOutbounds.fragmentable(base)) {
-                        // The learned profile first, and the plain twin too: the day plain works
-                        // again here, the learner sees it and drops fragmenting.
-                        out += base.copy(fragment = fragment)
-                        out += base
-                    } else {
-                        out += base
-                        if (tryFragmentToo && FluxOutbounds.fragmentable(base)) out += base.copy(fragment = FragmentProfile.BALANCED)
-                    }
+                    // Every handshake that can apply to this dial, the way Defyx tries method after
+                    // method: plain, then the Doctor's ECH and PattNG and the fragment splits. The
+                    // one this network taught comes first; the order inside a race is [order]'s.
+                    val shapes = FluxOutbounds.shapes(base, cloudflare = edge != null || Cloudflare.isCloudflare(addr))
+                    if (learned != null && learned in shapes) out += base.copy(fragment = learned)
+                    out += base
+                    shapes.filter { it != learned }.forEach { out += base.copy(fragment = it) }
                 }
             }
         }
@@ -152,10 +154,21 @@ object FluxPlanner {
         val knownSorted = known.sortedWith(compareByDescending<FluxCandidate> { countryMatch(it) }
             .thenByDescending { hinted(it) }
             .thenByDescending { FluxScorer.score(it, FluxMemory.metrics(inp.state, inp.net, it.id), null, inp.now) })
-        val unknownSorted = unknown.shuffled(inp.random).sortedWith(compareByDescending<FluxCandidate> { countryMatch(it) }
-            .thenByDescending { hinted(it) }
-            .thenBy { if (it.edge == null) 0 else 1 }
-            .thenBy { it.fragment != FragmentProfile.OFF })
+        // Untried candidates go method by method in turn -- direct, Cloudflare plain, Cloudflare
+        // with ECH, the cut hellos -- so every round tries every way in at once. Sorting them
+        // origin-first (as before) filled whole rounds with direct servers a line had cut, while
+        // the Cloudflare routes that would have worked there were never reached.
+        val learned = inp.state.nets[inp.net]?.fragment
+        val buckets = unknown.shuffled(inp.random)
+            .sortedWith(compareByDescending<FluxCandidate> { countryMatch(it) }.thenByDescending { hinted(it) })
+            .groupBy { methodOf(it) }
+            .toList()
+            // The method that won here before leads; then the rest in a fixed order.
+            .sortedWith(compareByDescending<Pair<String, List<FluxCandidate>>> { learned != null && it.second.first().fragment == learned }
+                .thenBy { METHOD_ORDER.indexOf(it.first).let { i -> if (i < 0) 99 else i } })
+            .map { it.second.toMutableList() }
+        val unknownSorted = ArrayList<FluxCandidate>(unknown.size)
+        while (buckets.any { it.isNotEmpty() }) buckets.forEach { b -> if (b.isNotEmpty()) unknownSorted += b.removeAt(0) }
         val merged = ArrayList<FluxCandidate>(usable.size)
         var k = 0; var u = 0
         // Three known for every unknown while both last; then whatever remains.
@@ -171,6 +184,26 @@ object FluxPlanner {
         return ordered.filter { c -> (perNode.merge(c.node.id, 1, Int::plus) ?: 0) <= PER_NODE }
     }
 
+    /** Which way in a candidate is: where it dials, and with which handshake. */
+    fun methodOf(c: FluxCandidate): String {
+        val cf = c.edge != null || Cloudflare.isCloudflare(c.dialAddress)
+        val how = when (c.fragment) {
+            FragmentProfile.OFF -> "plain"
+            FragmentProfile.ECH -> "ech"
+            FragmentProfile.PATTNG -> "pattng"
+            else -> "frag"
+        }
+        val where = when {
+            c.node.sourceId == "own" -> "own-"
+            cf -> "cf-"
+            else -> "direct-"
+        }
+        return where + how
+    }
+
+    /** The user's own configs first (proven on their line), then a mix of every other way in. */
+    private val METHOD_ORDER = listOf("own-plain", "own-ech", "own-pattng", "own-frag", "direct-plain", "cf-ech", "cf-plain", "cf-pattng", "direct-pattng", "cf-frag", "direct-frag")
+
     private fun originFor(node: FluxNode, f: Family, inp: Input): String? {
         val lit = Family.ofLiteral(node.server)
         if (lit != null) return node.server.takeIf { lit == f }
@@ -179,5 +212,6 @@ object FluxPlanner {
 
     const val WARM_MAX_AGE_MS = 48 * 3600_000L
     const val EDGES_PER_NODE = 3
+    /** Variants of one node in a race: its dials times its handshakes would otherwise fill it. */
     const val PER_NODE = 4
 }

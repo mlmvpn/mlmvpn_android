@@ -124,7 +124,7 @@ class SoftEtherEngine : IVpnEngine {
             }.commit()
 
             withContext(Dispatchers.Main) {
-                ctx.startService(
+                com.mlmvpn.scanner.utils.SafeStart.service(ctx, 
                     Intent(ctx, SoftEtherVpnService::class.java)
                         .setAction(kittoku.mvc.service.ACTION_VPN_CONNECT)
                 )
@@ -159,7 +159,7 @@ class SoftEtherEngine : IVpnEngine {
         stopped = true
         val ctx = appCtx ?: return
         try {
-            ctx.startService(
+            com.mlmvpn.scanner.utils.SafeStart.service(ctx, 
                 Intent(ctx, SoftEtherVpnService::class.java)
                     .setAction(kittoku.mvc.service.ACTION_VPN_DISCONNECT)
             )

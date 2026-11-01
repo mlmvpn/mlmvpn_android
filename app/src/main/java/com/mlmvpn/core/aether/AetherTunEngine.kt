@@ -87,36 +87,14 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
         // here would throw away a validated gateway and make the user sit through a second scan.
         // Anything else (different options, not connected) goes through the normal start, which
         // refuses a second process the same way it always has.
-        val adopt = eng.state.value.connected && eng.runningOptions == opts && eng.isSocksAlive()
-        if (adopt) {
+        val candidate = eng.process
+        val adopt = eng.state.value.connected && eng.runningOptions?.let { matches(it, opts) } == true && eng.isSocksAlive()
+        if (adopt && eng.adopt(candidate)) {
             android.util.Log.i(TAG, "adopting the running Aether engine (same options, already connected)")
-        } else if (!eng.start(opts) { msg -> android.util.Log.e(TAG, "engine start failed: $msg") }) {
+        } else if (!connectWithCarrier(context, eng, opts)) {
             return false
         }
-
-        // Wait for the SOCKS listener to actually accept a connection BEFORE the TUN exists.
-        // Aether has to discover and validate a gateway first: a cold «متعادل» scan sweeps
-        // ~2000 candidates on a 120s budget. Establishing the interface up front means every
-        // app on the device is routed into a tunnel with nothing on the far end for that
-        // whole window — total loss of connectivity that reads as "it never connects".
-        if (!adopt && !awaitSocks(eng, opts.scan)) {
-            android.util.Log.e(TAG, "Aether never reached a connected state — aborting tunnel")
-            // Only speak up if the engine hasn't already explained itself. When the Rust
-            // side reported its own failure, overwriting it with a generic timeout message
-            // would replace a specific diagnosis with a vague one.
-            if (eng.state.value.stage != AetherStage.FAILED &&
-                eng.state.value.stage != AetherStage.CRASHED
-            ) {
-                eng.reportFailure(
-                    "سرور سالمی پیدا نشد",
-                    "حالت اسکن «${opts.scan.displayFa.substringBefore(" —")}» — دوباره تلاش کنید یا حالت دیگری انتخاب کنید",
-                )
-            }
-            eng.stop()
-            return false
-        }
-
-        // Engine is carrying traffic; now it is safe to capture the device's.
+        // Application data crossed this exact H2/H3/WG path before the TUN captures other apps.
         val rawTunFd = try { openTun() } catch (t: Throwable) {
             android.util.Log.e(TAG, "openTun threw: ${t.message}")
             eng.reportFailure("ساخت رابط VPN با خطا مواجه شد", t.message ?: "")
@@ -166,6 +144,73 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
         tun2proxyRunning.set(true)
 
         android.util.Log.i(TAG, "Aether full-tunnel engine started")
+        return true
+    }
+
+    /**
+     * Bring the engine up and prove it carries data. With transport [AetherCarrier.AUTO] on a
+     * MASQUE-carried protocol, the carriers are tried in [AetherCarrier.ladder] order -- what
+     * worked on this network last time first -- and the one that carried data is remembered.
+     */
+    private suspend fun connectWithCarrier(context: Context, eng: AetherEngine, opts: AetherOptions): Boolean {
+        if (opts.transport != AetherCarrier.AUTO || !AetherCarrier.applies(opts.protocol)) {
+            // A fixed carrier (the game booster's h3, a caller's explicit choice): one attempt.
+            return bringUp(eng, if (opts.transport == AetherCarrier.AUTO) opts.copy(transport = "h3") else opts)
+        }
+        val network = runCatching { com.mlmvpn.scanner.engines.cfnet.CfNetEnv.profile(context).key }.getOrDefault("unknown")
+        val remembered = AetherCarrierMemory.get(context, network, opts.protocol)
+        ladderActive = true
+        try {
+            for (carrier in AetherCarrier.ladder(remembered)) {
+                if (abortRequested) return false
+                android.util.Log.i(TAG, "carrier ${carrier.key} (remembered=${remembered?.key ?: "none"})")
+                eng.log("[AETHER] ${if (carrier == remembered) "روش ذخیره‌شدهٔ این شبکه" else "امتحان"}: ${carrier.label}")
+                if (bringUp(eng, carrier.applyTo(opts))) {
+                    AetherCarrierMemory.remember(context, network, opts.protocol, carrier)
+                    return true
+                }
+                // What worked here before does not any more: the next connect tests again.
+                if (carrier == remembered) AetherCarrierMemory.forget(context, network, opts.protocol)
+            }
+            return false
+        } finally {
+            ladderActive = false
+        }
+    }
+
+    /** One engine start on [opts]: gateway found, SOCKS up, real data through it. Stops it otherwise. */
+    private suspend fun bringUp(eng: AetherEngine, opts: AetherOptions): Boolean {
+        if (!eng.start(opts) { msg -> android.util.Log.e(TAG, "engine start failed: $msg") }) return false
+
+        // Wait for the SOCKS listener to actually accept a connection BEFORE the TUN exists.
+        // Aether has to discover and validate a gateway first: a cold «متعادل» scan sweeps
+        // ~2000 candidates on a 120s budget. Establishing the interface up front means every
+        // app on the device is routed into a tunnel with nothing on the far end for that
+        // whole window — total loss of connectivity that reads as "it never connects".
+        if (!awaitSocks(eng, opts.scan)) {
+            android.util.Log.e(TAG, "Aether never reached a connected state on ${opts.transport}${if (opts.fragment) "+fragment" else ""}")
+            // Only speak up if the engine hasn't already explained itself. When the Rust
+            // side reported its own failure, overwriting it with a generic timeout message
+            // would replace a specific diagnosis with a vague one.
+            if (eng.state.value.stage != AetherStage.FAILED &&
+                eng.state.value.stage != AetherStage.CRASHED
+            ) {
+                eng.reportFailure(
+                    "سرور سالمی پیدا نشد",
+                    "حالت اسکن «${opts.scan.displayFa.substringBefore(" —")}» — دوباره تلاش کنید یا حالت دیگری انتخاب کنید",
+                )
+            }
+            eng.stop()
+            return false
+        }
+
+        val transfer = try { com.mlmvpn.scanner.engines.cfnet.CfDataProbe.validate(AetherEngine.AETHER_SOCKS_PORT) }
+            catch (e: kotlinx.coroutines.CancellationException) { eng.stop(); throw e }
+        if (!transfer.ok) {
+            eng.reportFailure("انتقال داده تأیید نشد", transfer.failure?.name.orEmpty())
+            eng.stop()
+            return false
+        }
         return true
     }
 
@@ -315,6 +360,7 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
                 quickReconnect = o.optBoolean("quickReconnect", true),
                 verbose = o.optBoolean("verbose", false),
                 noDataCheck = o.optBoolean("noDataCheck", false),
+                wgPeer = o.optString("wgPeer").ifBlank { null },
             )
         }
 
@@ -330,6 +376,22 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
          */
         @Volatile
         private var abortRequested: Boolean = false
+
+        /**
+         * True while [connectWithCarrier] is walking its carriers. Between two of them the engine
+         * stops for a moment; a screen watching for "the run ended without connecting" must not
+         * read that as the end and start recovering on its own.
+         */
+        @Volatile
+        var ladderActive: Boolean = false
+            private set
+
+        /** [running] is [wanted], or what [wanted] resolved to when it left the carrier to the app. */
+        fun matches(running: AetherOptions, wanted: AetherOptions): Boolean =
+            running == wanted || (wanted.transport == AetherCarrier.AUTO && AetherCarrier.applies(wanted.protocol) &&
+                running.copy(transport = wanted.transport, fragment = wanted.fragment,
+                    fragmentSize = wanted.fragmentSize, fragmentDelay = wanted.fragmentDelay,
+                    tls = wanted.tls, tlsHelloExit = wanted.tlsHelloExit) == wanted)
 
         /** Ask an in-flight [start] to give up. Call BEFORE contending for xrayMutex. */
         fun requestAbort() {
@@ -442,6 +504,9 @@ class AetherTunEngine(private val openTun: () -> Int, private val mtu: Int) : IV
             put("quickReconnect", opts.quickReconnect)
             put("verbose", opts.verbose)
             put("noDataCheck", opts.noDataCheck)
+            // A pinned WireGuard endpoint -- the exit country's NAT64 gateway -- survives the trip
+            // through the config string (the game booster's WireGuard route uses it).
+            opts.wgPeer?.let { put("wgPeer", it) }
         }.toString()
     }
 }

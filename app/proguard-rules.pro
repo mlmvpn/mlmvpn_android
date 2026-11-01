@@ -15,6 +15,11 @@
 -keep class go.** { *; }
 -keep class libv2ray.** { *; }
 
+# Windscribe's Scapix JNI peers and callbacks are instantiated by libwsnet.so.
+-keep class com.wsnet.** { *; }
+-keep class com.scapix.** { *; }
+-keep class com.windscribe.vpn.backend.openvpn.WSTunnelLib { *; }
+
 # --- OpenVPN core (VPN Gate feature) ----------------------------------------
 # net.openvpn.ovpn3.* is SWIG-generated: libovpn3.so instantiates these classes
 # and invokes their methods by name from C++, so R8 must not rename or drop any

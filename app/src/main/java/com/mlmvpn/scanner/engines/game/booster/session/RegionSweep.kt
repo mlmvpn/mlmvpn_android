@@ -11,8 +11,8 @@ import com.mlmvpn.scanner.engines.game.booster.probe.TrainResult
 import com.mlmvpn.scanner.engines.game.booster.probe.UdpVia
 import com.mlmvpn.scanner.engines.game.booster.probe.tcpTrain
 import com.mlmvpn.scanner.engines.game.booster.probe.udpTrainFlows
+import com.mlmvpn.scanner.engines.game.booster.probe.collectWithin
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import java.net.InetSocketAddress
 
@@ -41,12 +41,11 @@ object RegionSweep {
         val answered: Boolean get() = sample().answered
     }
 
-    suspend fun run(regions: List<GameRegion>, network: Network?, sliceMs: Long = 2000): List<Probe> = coroutineScope {
-        regions.distinctBy { it.key }.map { gr ->
-            async {
+    suspend fun run(regions: List<GameRegion>, network: Network?, sliceMs: Long = 2000, budgetMs: Long = 8000): List<Probe> =
+        collectWithin(regions.distinctBy { it.key }, budgetMs) { gr ->
                 val anchor = RegionCatalog.byKey(gr.anchorRegion)
                 val (echoTarget, tcpTarget) = coroutineScope {
-                    val e = async { Anchors.echoTarget(anchor) }
+                    val e = async { Anchors.echoTarget(anchor, network) }
                     val t = async { Anchors.pickTcp(anchor, network) }
                     e.await() to t.await()
                 }
@@ -63,7 +62,5 @@ object RegionSweep {
                     e.await() to t.await()
                 }
                 Probe(gr, anchor, echoTarget, tcpTarget, echo, tcp)
-            }
-        }.awaitAll()
-    }
+        }
 }

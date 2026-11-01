@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#ccc"
+    android:orientation="vertical">
+
+    <ru.noties.jlatexmath.JLatexMathView
+        android:id="@+id/j_latex_math_view"
+        android:layout_width="128dip"
+        android:layout_height="wrap_content"
+        android:background="@color/white"
+        android:padding="16dip"
+        app:jlmv_alignHorizontal="center"
+        app:jlmv_alignVertical="center"
+        app:jlmv_textSize="16sp" />
+
+</FrameLayout>

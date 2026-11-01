@@ -133,11 +133,12 @@ fun AntiSanctionScreen(onBack: () -> Unit) {
         val localPort = com.mlmvpn.scanner.utils.LocalPort.getString(context)
         val intent = Intent(context, MyVpnService::class.java).apply {
             putExtra("NODE_URI", cfg)
+            putExtra("MTU_PROFILE", com.mlmvpn.scanner.utils.NetworkSettings.Method.ANTI_SANCTION.id)
             putExtra("NODE_ID", AntiSanctionManager.NODE_ID)
             putExtra("PROXY_MODE", isProxyMode)
             putExtra("LOCAL_PORT", localPort)
         }
-        context.startService(intent)
+        com.mlmvpn.scanner.utils.SafeStart.service(context, intent)
     }
 
     val vpnPrepareLauncher = rememberLauncherForActivityResult(
@@ -186,7 +187,7 @@ fun AntiSanctionScreen(onBack: () -> Unit) {
 
     fun turnOff() {
         val stop = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
-        context.startService(stop)
+        com.mlmvpn.scanner.utils.SafeStart.service(context, stop)
     }
 
     fun deployWorker() {
@@ -714,11 +715,13 @@ private fun AppRow(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (icon != null) {
+        // Drawn once per icon and at the size shown: toBitmap() at the icon's own size on every
+        // recomposition froze the list on long app lists, and an icon with no size of its own
+        // (width or height 0) threw «width and height must be > 0» (1.2.42 #2344, #2410).
+        val bitmap = remember(icon) { icon?.let { runCatching { it.toBitmap(96, 96).asImageBitmap() }.getOrNull() } }
+        if (bitmap != null) {
             androidx.compose.foundation.Image(
-                painter = androidx.compose.ui.graphics.painter.BitmapPainter(
-                    icon.toBitmap().asImageBitmap()
-                ),
+                painter = remember(bitmap) { androidx.compose.ui.graphics.painter.BitmapPainter(bitmap) },
                 contentDescription = null,
                 modifier = Modifier.size(30.dp).clip(ControlShape),
             )

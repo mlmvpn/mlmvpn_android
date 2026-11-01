@@ -1,6 +1,7 @@
 package com.mlmvpn.scanner.engines.cfdoctor
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -12,7 +13,9 @@ class DoctorRunnerTest {
             override suspend fun quic(ip: String,timeout: Int)=Evidence("Q1",ip,"ok")
         })
         val job=launch { runner.run(false) }
-        delay(150); job.cancelAndJoin()
+        // Cancel after real evidence has been published, independent of machine scheduling load.
+        withTimeout(5_000) { runner.state.first { it.rows.isNotEmpty() } }
+        job.cancelAndJoin()
         assertFalse(runner.state.value.running)
         assertFalse(runner.state.value.complete)
         assertTrue(runner.state.value.rows.isNotEmpty())

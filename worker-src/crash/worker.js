@@ -29,7 +29,7 @@
  */
 
 /** Also in the app (CrashClient.APP_KEY). */
-const APP_KEY = 'mlmvpn-crash-collector-v1';
+const APP_KEY = 'redacted-crash-key';
 
 const MAX_BODY = 24 * 1024;
 /** Reports wait on phones for days; a phone's clock can be wrong by hours. Replays only repeat. */

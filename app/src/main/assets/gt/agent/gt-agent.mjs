@@ -13,12 +13,15 @@
 // only ciphertext to the repo. A supervisor restarts whatever dies and republishes.
 //
 // The client never reaches *.trycloudflare.com directly — that domain is blocked from Iran —
-// but through the user's own Worker (cloudflare-worker/gt-broker › THE PASSTHROUGH).
+// but through the user's own Worker (cloudflare-worker/gt-broker › THE PASSTHROUGH). A client
+// with no Worker (no Cloudflare account, or a line where Cloudflare itself is filtered) comes in
+// by the RELAYS instead (relays.mjs): free public relays this runner dials out to, no account.
 //
 // Every value generated here is masked from the job log before anything can print it.
 import { seal } from './seal.mjs';
 import { buildXrayConfig, WS_PORT, STATUS_PORT } from './xray-config.mjs';
 import { createExitBroker, exitSlots, EXIT_SLOTS } from './exits.mjs';
+import { createRelays } from './relays.mjs';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import crypto from 'node:crypto';
@@ -72,7 +75,10 @@ let rev = 0;
 const DEADLINE = T0 + KEEP_ALIVE_MINUTES * 60 * 1000;
 const result = { v: 2, rev, phase: 'starting', hosts: [], wsPath: S.wsPath,
     uuids: { direct: S.uuid, ...Object.fromEntries(EXIT_UUIDS.map((u, i) => [`x${i + 1}`, u])) },
-    xrayVersion: XRAY_VERSION, runner: {}, startedAt: T0, endsAt: DEADLINE, ending: false, errors: [], exits: [], catalog: null };
+    xrayVersion: XRAY_VERSION, runner: {}, startedAt: T0, endsAt: DEADLINE, ending: false, errors: [], exits: [], catalog: null,
+    // The ways in that are not Cloudflare: [{ host, kind }] (relays.mjs). A field of its own, so a
+    // client that knows only quick tunnels never meets a name it would refuse.
+    relays: [] };
 const fail = (where, e) => { const msg = `${where}: ${e && e.message ? e.message : e}`; result.errors.push(msg.slice(0, 200)); log(`ERROR ${msg}`); };
 
 // ── publishing ──────────────────────────────────────────────────────────────────
@@ -309,6 +315,11 @@ async function curlJson(url) {
 
     for (let n = 1; n <= TUNNELS; n++) tunnels.push(startTunnel(n));
     if (SLOT && SLOT_TOKEN) startSlot();
+    // Beside the quick tunnels, the ways in without Cloudflare. Once the session is open, a relay
+    // that comes up late, dies or moves to another name is republished at once.
+    const relays = createRelays({ work: WORK, log, pexec, sleep, wsPort: WS_PORT, wsPath: S.wsPath,
+        onChange: () => { result.relays = relays.live(); publish(); } });
+    const relayP = await relays.begin();
     // The client only ever learns whether its slot answers — never the token, never an id.
     if (SLOT) result.slot = { name: SLOT, ready: false };
     const geoP = (async () => {
@@ -325,19 +336,21 @@ async function curlJson(url) {
     // picks it up).
     const bringing = tunnels.map((t) => bring(t).then(() => t.ok, () => false));
     const slotP = slotProc ? bringSlot().then((ok) => { result.slot.ready = ok; return ok; }, () => false) : Promise.resolve(false);
-    const all = Promise.all([...bringing, slotP]);
-    await firstTrue([...bringing, slotP]);
+    const all = Promise.all([...bringing, slotP, ...relayP]);
+    await firstTrue([...bringing, slotP, ...relayP]);
     await Promise.race([all, sleep(8000)]);
     await Promise.race([geoP, sleep(5000)]);
     result.hosts = liveHosts();
-    const describe = () => `tunnels: ${tunnels.map((t) => (t.ok ? 'ok' : t.host === null && !t.status ? '…' : `FAIL(${t.status || 'no host'})`)).join(' ')}; stable ${SLOT || '-'}: ${result.slot && result.slot.ready ? 'ready' : SLOT && !SLOT_TOKEN ? 'no token' : SLOT ? 'not yet' : 'off'}`;
+    result.relays = relays.live();
+    const describe = () => `tunnels: ${tunnels.map((t) => (t.ok ? 'ok' : t.host === null && !t.status ? '…' : `FAIL(${t.status || 'no host'})`)).join(' ')}; stable ${SLOT || '-'}: ${result.slot && result.slot.ready ? 'ready' : SLOT && !SLOT_TOKEN ? 'no token' : SLOT ? 'not yet' : 'off'}; relays: ${relays.describe()}`;
     log(describe());
 
-    // Either path is a way in: the quick tunnels, or the stable one alone.
-    const usable = () => result.hosts.length > 0 || !!(result.slot && result.slot.ready);
+    // Any path is a way in: the quick tunnels, the stable one, or a relay alone.
+    const usable = () => result.hosts.length > 0 || !!(result.slot && result.slot.ready) || result.relays.length > 0;
     result.phase = usable() ? 'ready' : 'failed';
     await publish();
     if (!usable()) { log('no tunnel came up'); process.exit(1); }
+    relays.started();
     // The countries an exit can be asked for — fetched once the session is open, never before it —
     // then the ones the user chose (the `exits` input), started now so they are ready by the time
     // the client asks. Only well-formed codes: `JP` or `JP:psiphon`, six at most.
@@ -361,7 +374,10 @@ async function curlJson(url) {
         await sleep(20000);
         let changed = false;
         if (xray.exitCode !== null) { log('xray died; restarting'); xray = daemon('xray', XRAY_BIN, ['run', '-c', path.join(WORK, 'xray.json')]); }
-        if (Date.now() - lastHealth >= HEALTH_EVERY_MS) {
+        const healthTurn = Date.now() - lastHealth >= HEALTH_EVERY_MS;
+        // The relays publish their own changes (onChange above).
+        await relays.supervise(healthTurn);
+        if (healthTurn) {
             lastHealth = Date.now();
             // Exits that stopped carrying data are brought up again; the catalog is refreshed now
             // and then (VPN Gate's list changes through the day).
@@ -412,6 +428,7 @@ async function curlJson(url) {
         if (changed) { result.hosts = liveHosts(); await publish(); }
     }
     log('session over');
+    relays.stopAll();
     if (exitBroker) await exitBroker.stopAll();
     process.exit(0);
 })().catch(async (e) => {

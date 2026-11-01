@@ -3,7 +3,9 @@ package com.mlmvpn.scanner.ui.tunnel
 import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Shield
@@ -117,6 +119,35 @@ enum class Transport(
         icon = Icons.Default.Public,
         tint = HomeDestinations.Teal,
         artRes = R.drawable.ic_app_warp,
+    ),
+    /**
+     * «لنترن»: Lantern's own network on Lantern 10's own core (radiance, built proxy-only), run as a
+     * local proxy behind tun2proxy -- the desktop's lantern-manager.js. Its own servers and its own
+     * protocols (Shadowsocks-2022, VLESS-Reality, Lantern's own); the server list is kept, so after
+     * the first start it connects in seconds. arm64 only (see LanternEngine).
+     */
+    LANTERN(
+        id = "lantern",
+        value = "lantern",
+        label = "Lantern",
+        labelFa = S(R.string.home_lantern),
+        icon = Icons.Default.Lightbulb,
+        tint = HomeDestinations.Teal,
+        artRes = R.drawable.ic_app_lantern,
+    ),
+    /**
+     * «URnetwork»: URnetwork's own network of provider devices, on its own SDK built as a core of its
+     * own (see UrnetworkEngine), carrying the TUN on the SDK's own packet path. arm64 only; an
+     * instant account made on its screen once the user accepts URnetwork's terms.
+     */
+    URNETWORK(
+        id = "urnetwork",
+        value = "urnetwork",
+        label = "URnetwork",
+        labelFa = S(R.string.home_urnetwork),
+        icon = Icons.Default.Hub,
+        tint = HomeDestinations.Indigo,
+        artRes = R.drawable.ic_app_urnetwork,
     );
 
     /**
@@ -132,6 +163,14 @@ enum class Transport(
             TOR -> S(R.string.three_layers_of_encryption_over_all_of)
             GEPH -> S(R.string.geph_tagline)
             CFWG -> S(R.string.cfwarp_tagline)
+            LANTERN -> com.mlmvpn.scanner.store.tr(
+                "شبکهٔ لنترن با هستهٔ رسمی نسخهٔ ۱۰ خودش (Shadowsocks-2022، VLESS-Reality و پروتکل‌های خود لنترن). سرورها را خودش انتخاب می‌کند و سریع‌ترین را برمی‌دارد؛ فهرست سرورها ذخیره می‌شود.",
+                "Lantern's network on its own version 10 core (Shadowsocks-2022, VLESS-Reality and Lantern's own protocols). It picks its servers itself and takes the fastest; the server list is kept.",
+            )
+            URNETWORK -> com.mlmvpn.scanner.store.tr(
+                "شبکهٔ URnetwork با SDK رسمی خودش: ترافیک هم‌زمان از چند دستگاه ارائه‌دهنده در کشورهای مختلف بیرون می‌رود.",
+                "URnetwork's network on its own official SDK: traffic leaves through several provider devices at once, in many countries.",
+            )
         }
 
     /** The one sentence worth reading before deciding this is the transport to try. */
@@ -154,6 +193,14 @@ enum class Transport(
                     S(R.string.turn_on_tor_inside_warp)
             GEPH -> S(R.string.geph_advice)
             CFWG -> S(R.string.cfwarp_advice)
+            LANTERN -> com.mlmvpn.scanner.store.tr(
+                "بار اول، هسته فهرست سرورهایش را از سرویس لنترن می‌گیرد و ذخیره می‌کند؛ از آن به بعد مستقیم و در چند ثانیه وصل می‌شود. اگر اینترنت شما بار اول به سرویس لنترن نرسد، فهرست از راه وارپ گرفته می‌شود — فقط همین یک بار؛ خود ترافیک همیشه مستقیم به سرورهای لنترن می‌رود. کشور خروج را خود لنترن انتخاب می‌کند.",
+                "The first time, the core fetches its server list from Lantern's service and keeps it; from then on it connects straight away, in seconds. If your internet cannot reach Lantern's service that first time, the list is fetched through WARP -- only that once; the traffic itself always goes straight to Lantern's servers. Lantern picks the exit country itself.",
+            )
+            URNETWORK -> com.mlmvpn.scanner.store.tr(
+                "حساب رایگان URnetwork سهمیهٔ دادهٔ روزانه دارد که مصرف و زمان پر شدن دوباره‌اش بالای همین صفحه دیده می‌شود. تونل فقط وقتی باز می‌شود که داده واقعاً از ارائه‌دهنده‌ها رد شده باشد؛ مسیر هوشمند ایران، MTU، کلید قطع اضطراری و فهرست‌های «بیرون از تونل» و «مسدود» تنظیمات برنامه روی آن هم اعمال می‌شوند.",
+                "A free URnetwork account has a daily data allowance, with its use and the time of the next grant at the top of this screen. The tunnel opens only once data really went through the providers; the app's smart Iran route, MTU, kill switch and «outside the tunnel» and «blocked» lists apply to it too.",
+            )
         }
 
     /**
@@ -163,15 +210,30 @@ enum class Transport(
      * connect that dies on a file-not-found the user cannot act on.
      */
     val supportedHere: Boolean
-        get() = (this != TOR && this != GEPH && this != CFWG) ||
-            android.os.Build.SUPPORTED_ABIS.any { it.startsWith("arm") }
+        get() = when (this) {
+            // Lantern's core is pure Go without cgo, which armv7 does not build: 64-bit ARM only.
+            LANTERN -> com.mlmvpn.core.lantern.LanternEngine.supported()
+            URNETWORK -> com.mlmvpn.core.urnetwork.UrnetworkEngine.supported()
+            TOR, GEPH, CFWG -> android.os.Build.SUPPORTED_ABIS.any { it.startsWith("arm") }
+            else -> true
+        }
+
+    /**
+     * Why this transport cannot connect in this build, in the user's language; null when it can.
+     * Asked before the VPN consent dialog, so a core that is not in the build is said plainly instead
+     * of failing after the user has said yes.
+     */
+    fun unavailableReason(context: Context): String? = when (this) {
+        URNETWORK -> com.mlmvpn.core.urnetwork.UrnetworkEngine.unavailableReason(context)
+        else -> null
+    }
 
     /**
      * Whether this transport runs on the tunnel core (libtunnelcore). Geph brings its own engine,
      * so a core that failed to load on this phone is no reason to refuse it.
      */
     val needsTunnelCore: Boolean
-        get() = this != GEPH && this != CFWG
+        get() = this != GEPH && this != CFWG && this != LANTERN && this != URNETWORK
 
     companion object {
         fun byId(id: String): Transport? = entries.firstOrNull { it.id == id }

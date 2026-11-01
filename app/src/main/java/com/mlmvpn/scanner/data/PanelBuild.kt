@@ -67,7 +67,14 @@ object PanelBuild {
     //     Measured: speed back to normal (so build 19's cut-off came from the credential cache), but
     //     latency no better (205/208 ms vs 132-181) -- not kept.
     // 22: build 18's data plane again; the number moves so the Store replaces 21.
-    const val MLM = 22
+    // 23: XHTTP packet-up works on workers.dev: every request of a session is handed to that
+    //     session's Durable Object (the existing SessionDO class, named `x:{session}`), so the
+    //     download and the upload POSTs finally meet in one isolate. No new class, no new migration.
+    // 24: the same code; the number moves so every MLM panel is redeployed WITH the SESSIONS
+    //     binding. The MLM panel's own deployer (MlmDeployer) never sent it -- only Config
+    //     Studio's did -- so a panel updated to 23 from there still had no object and XHTTP still
+    //     carried nothing (device, 2026-10-04).
+    const val MLM = 24
 
     /**
      * The highest schema version the bundled Config Studio worker knows how to migrate to.

@@ -51,6 +51,12 @@ data class TunnelUiState(
     val progress: Int = -1,
     /** False when the core was not bundled for this device's ABI. */
     val engineAvailable: Boolean = TunnelEngine.isAvailable,
+    /**
+     * The WARP tile the user tapped when the service handed the connect to another member (MASQUE did
+     * not come up in its budget, so WireGuard carries -- the same exit country). Its screen owns the
+     * session and says what happened, instead of offering to "take over" from a stand-in it chose.
+     */
+    val handedOverFrom: Transport? = null,
 ) {
     val isBusy: Boolean get() = stage == TunnelStage.STARTING || stage == TunnelStage.RUNNING
 }
@@ -137,6 +143,10 @@ object TunnelController {
                 // here made that screen read «آماده» the moment «وارپ» failed. Every other reader
                 // of `active` also checks for RUNNING or busy, so a failed owner holds nothing.
                 active = if (status == TunnelVpnService.STATUS_DISCONNECTED) null else running ?: prev.active,
+                handedOverFrom = if (status == TunnelVpnService.STATUS_DISCONNECTED) null
+                    else intent.getStringExtra(TunnelVpnService.EXTRA_LADDER_FROM)?.takeIf { it.isNotBlank() }
+                        ?.let { name -> Transport.entries.firstOrNull { it.name == name.uppercase() } }
+                        ?.takeIf { it != running },
                 connectedAt = if (stopped) 0L else intent.getLongExtra(
                     TunnelVpnService.EXTRA_CONNECTED_AT, prev.connectedAt
                 ),
@@ -215,14 +225,14 @@ object TunnelController {
             TunnelExclusion.releaseForTunnelStack(app)
 
             if (TunnelStatus.isActive() || Tun2SocksManager.isNativeAlive) {
-                app.startService(
+                com.mlmvpn.scanner.utils.SafeStart.service(app, 
                     Intent(app, TunnelVpnService::class.java)
                         .apply { action = TunnelVpnService.ACTION_DISCONNECT }
                 )
                 waitForTeardown()
             }
             val config = withContext(Dispatchers.IO) { CoreConfig.json(app, transport.value) }
-            app.startService(
+            com.mlmvpn.scanner.utils.SafeStart.service(app, 
                 Intent(app, TunnelVpnService::class.java).apply {
                     action = TunnelVpnService.ACTION_CONNECT
                     putExtra(TunnelVpnService.EXTRA_CONFIG, config)
@@ -233,10 +243,14 @@ object TunnelController {
 
     fun disconnect(context: Context) {
         val app = context.applicationContext
-        app.startService(
-            Intent(app, TunnelVpnService::class.java)
-                .apply { action = TunnelVpnService.ACTION_DISCONNECT }
-        )
+        // Off the main thread: startService is a call into the system server, and while that was
+        // busy the disconnect button froze the app for seconds (1.2.42 #2109, #2391).
+        Thread({
+            com.mlmvpn.scanner.utils.SafeStart.service(app,
+                Intent(app, TunnelVpnService::class.java)
+                    .apply { action = TunnelVpnService.ACTION_DISCONNECT }
+            )
+        }, "tunnel-disconnect").start()
     }
 
     /** Called when the user declines the VPN consent dialog, so the button does not stay busy. */
@@ -274,7 +288,13 @@ object TunnelController {
      */
     fun hasNetwork(context: Context): Boolean {
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: return true
-        val caps = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
+        // Some Android 11 builds throw SecurityException ("Package android does not belong to
+        // ...") from getNetworkCapabilities. Not knowing is not "offline": let the connect try.
+        val caps = try {
+            manager.getNetworkCapabilities(manager.activeNetwork)
+        } catch (_: SecurityException) {
+            return true
+        } ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 

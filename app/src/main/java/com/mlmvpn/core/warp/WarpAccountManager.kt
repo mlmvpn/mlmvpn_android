@@ -52,10 +52,10 @@ class WarpAccountManager(context: Context) {
 
             val responseBody = response.body?.string() ?: throw Exception("Empty response body")
             val json = JSONObject(responseBody)
-            
-            // Log the full response for debugging (truncate to 2000 chars max)
-            Log.d("WarpManager", "CF API FULL Response: ${responseBody.take(2000)}")
-            Log.d("WarpManager", "CF API Response keys: ${json.keys().asSequence().toList()}")
+
+            // The registration response carries the account token, the private config and the peer
+            // keys. It is never logged -- not even truncated -- because a debug log is readable by
+            // anything with the device's logcat. (This used to Log.d the whole body.)
 
             // 3. We ALREADY have the private key from our local generation
             val privateKey = keyPair.privateKeyBase64
@@ -77,7 +77,6 @@ class WarpAccountManager(context: Context) {
             
             if (clientIdB64 != null) {
                 try {
-                    Log.d("WarpManager", "client_id found: $clientIdB64")
                     val decoded = android.util.Base64.decode(clientIdB64, android.util.Base64.DEFAULT)
                     if (decoded.size >= 3) {
                         reserved = listOf(

@@ -22,7 +22,7 @@
 const crypto = require('crypto');
 
 const ENDPOINT = process.env.POOL_ENDPOINT
-  || 'https://mlm-pool-7f3a2c.ehsan2novenic2.workers.dev';
+  || 'https://pool.redacted.invalid';
 
 const sign = (secret, message) =>
   crypto.createHmac('sha256', secret).update(message).digest('hex');
@@ -97,7 +97,7 @@ async function main() {
   console.log('\nNow check https://github.com/mlmvpn/crashes/issues for an issue titled');
   console.log(`"TEST java.lang.IllegalStateException: pipeline check ${nonce} ..."`);
   console.log('If nothing appears, GH_TOKEN / GH_REPO are not set on the Worker:');
-  console.log('  npx wrangler secret list --name mlm-pool-7f3a2c');
+  console.log('  npx wrangler secret list --name mlm-pool');
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

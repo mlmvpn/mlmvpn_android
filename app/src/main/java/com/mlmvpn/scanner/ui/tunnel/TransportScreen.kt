@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Route
@@ -71,6 +72,16 @@ import com.mlmvpn.core.tunnel.ConnectionLog
 import com.mlmvpn.core.tunnel.IpFormatter
 import com.mlmvpn.core.tunnel.TunnelPreferences
 import com.mlmvpn.scanner.ui.cfwarp.CfWarpPanel
+import com.mlmvpn.scanner.ui.lantern.LanternPanel
+import com.mlmvpn.scanner.ui.urnetwork.UrnetworkLiveCard
+import com.mlmvpn.scanner.ui.urnetwork.UrnetworkOnboarding
+import com.mlmvpn.scanner.ui.urnetwork.UrnetworkPages
+import com.mlmvpn.scanner.ui.urnetwork.UrnetworkPanel
+import com.mlmvpn.scanner.ui.urnetwork.UrnetworkUsageCard
+import com.mlmvpn.scanner.ui.cfwarp.NAT64_EXIT_PAGE
+import com.mlmvpn.scanner.ui.cfwarp.Nat64ExitRow
+import com.mlmvpn.scanner.ui.cfwarp.hasNat64Exit
+import com.mlmvpn.scanner.ui.cfwarp.hasExitCountry
 import com.mlmvpn.scanner.ui.geph.GephPanel
 import com.mlmvpn.scanner.ui.home.frostedGlass
 import com.mlmvpn.scanner.ui.settings.Ios
@@ -120,15 +131,31 @@ fun TransportScreen(
     detail: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
+
+    // «URnetwork»: until there is an account, the screen is URnetwork's terms and one button --
+    // nothing else; the connect screen comes once the account is made.
+    if (transport == Transport.URNETWORK && com.mlmvpn.core.urnetwork.UrnetworkEngine.available(context)) {
+        var hasAccount by remember { mutableStateOf(com.mlmvpn.core.urnetwork.UrnetworkEngine.hasAccount(context)) }
+        if (!hasAccount) {
+            IosScreen(title = transport.labelFa, onBack = onBack, backLabel = S(R.string.home)) {
+                UrnetworkOnboarding(onCreated = { hasAccount = true })
+            }
+            return
+        }
+    }
+
     val state by TunnelController.state.collectAsStateWithLifecycle()
     val prefs = remember { TunnelPreferences(context) }
 
     // Which transport this screen is about, versus which one holds the tunnel. They differ
     // whenever the user opened a second transport while the first was up, and that difference
     // is the whole reason the control can say "take over" instead of lying about the state.
-    val ownsTunnel = state.active == transport
+    // A WARP tile whose connect the service handed to another member (the ladder) still owns the
+    // session: its button disconnects it, and a card says which member carries it.
+    val handedTo = state.active?.takeIf { state.handedOverFrom == transport && it != transport && state.isBusy }
+    val ownsTunnel = state.active == transport || handedTo != null
     val stage = if (ownsTunnel) state.stage else TunnelStage.IDLE
-    val someoneElse = state.active?.takeIf { it != transport && state.isBusy }
+    val someoneElse = state.active?.takeIf { it != transport && state.isBusy && handedTo == null }
 
     var pendingStart by remember { mutableStateOf(false) }
     val vpnPrepare = rememberLauncherForActivityResult(
@@ -151,6 +178,10 @@ fun TransportScreen(
         }
         if (transport.needsTunnelCore && !state.engineAvailable) {
             Toast.makeText(context, S(R.string.the_tunnel_core_for_this_device_was), Toast.LENGTH_LONG).show()
+            return
+        }
+        transport.unavailableReason(context)?.let { reason ->
+            Toast.makeText(context, reason, Toast.LENGTH_LONG).show()
             return
         }
         if (!TunnelController.hasNetwork(context)) {
@@ -234,8 +265,28 @@ fun TransportScreen(
             stage = stage,
             detail = if (ownsTunnel) com.mlmvpn.core.warp.WarpIdRelay.readable(state.message) else null,
             takenBy = someoneElse,
+            unavailable = transport.unavailableReason(context) != null,
             modifier = Modifier.align(Alignment.CenterHorizontally),
         )
+        com.mlmvpn.scanner.ui.RouteChips()
+
+        // «سایفون»: which method of how many while it searches, then what carried it and how it holds.
+        if (transport == Transport.PSIPHON && ownsTunnel && (stage == TunnelStage.STARTING || stage == TunnelStage.RUNNING)) {
+            Spacer(Modifier.height(12.dp))
+            PsiphonLiveCard()
+        }
+
+        // «URnetwork»: each step while it connects -- the providers being checked and joining, as its
+        // own app counts them -- then the providers it carries through; a failed try keeps its reason.
+        if (transport == Transport.URNETWORK) {
+            Spacer(Modifier.height(10.dp))
+            UrnetworkLiveCard(ownsTunnel = ownsTunnel && stage != TunnelStage.IDLE)
+        }
+
+        if (handedTo != null) {
+            Spacer(Modifier.height(12.dp))
+            LadderHandOverCard(from = transport, to = handedTo)
+        }
 
         // The identity could not be made: offer the way around it here, not in Settings.
         if (ownsTunnel && stage == TunnelStage.FAILED &&
@@ -255,6 +306,11 @@ fun TransportScreen(
             Spacer(Modifier.height(8.dp))
             com.mlmvpn.scanner.ui.geph.GephLiveCard()
         }
+
+        // «URnetwork»: the account's monthly data -- the bar, used and left, the days to the reset.
+        if (transport == Transport.URNETWORK && com.mlmvpn.core.urnetwork.UrnetworkEngine.available(context)) {
+            UrnetworkUsageCard(onRestore = { onOpenPage(UrnetworkPages.RESTORE) })
+        }
     }
 
     // The half a user ACTS on: the choices this transport offers and the pages behind them.
@@ -264,11 +320,17 @@ fun TransportScreen(
 
         if (transport.usesWarpIdentity) WarpIdentitySection(transport, stage)
 
+        // The exit country, for the three that reach Cloudflare's WARP: through a NAT64 gateway
+        // in that country, or direct (see Nat64Exits).
+        // WARP-in-WARP too: a free proxy after the engine (IPv4) works behind any WARP engine.
+        if (transport.hasExitCountry()) Nat64ExitRow(transport, onOpen = { onOpenPage(NAT64_EXIT_PAGE) })
+
         // What a user picks routinely, on the transport's own screen. For MASQUE and WireGuard
-        // that is nothing at all: their defaults are the answer until something is wrong, and
-        // then the advanced page is where to go.
+        // that is otherwise nothing at all: their defaults are the answer until something is
+        // wrong, and then the advanced page is where to go.
         when (transport) {
             Transport.PSIPHON -> {
+                PsiphonMethodRows(onOpenPage)
                 SettingsSectionHeader(S(R.string.exit_country))
                 SettingsGroup {
                     SettingsRow(
@@ -298,6 +360,16 @@ fun TransportScreen(
                         onClick = onOpenTorMode,
                     )
                     Separator()
+                    // Bridges: the way IN to Tor -- not how it is disguised (the mode above) and
+                    // not where it comes out (the country below).
+                    SettingsRow(
+                        title = S(R.string.tor_br_row),
+                        icon = Icons.Default.Hub,
+                        tint = Ios.Teal,
+                        value = torBridgesValue(),
+                        onClick = { onOpenPage(TOR_BRIDGES_PAGE) },
+                    )
+                    Separator()
                     SettingsRow(
                         title = S(R.string.exit_country),
                         icon = Icons.Default.Language,
@@ -307,6 +379,7 @@ fun TransportScreen(
                     )
                 }
                 Footer(
+                    S(R.string.tor_br_main_footer) + " " +
                     S(R.string.the_exit_country_is_applied_with_strictnodes) +
                         S(R.string.goes_elsewhere_if_it_cannot_build_a) +
                         S(R.string.is_written_next_to_its_name_because)
@@ -347,6 +420,10 @@ fun TransportScreen(
             Transport.GEPH -> GephPanel(onOpenPage)
 
             Transport.CFWG -> CfWarpPanel()
+
+            Transport.LANTERN -> LanternPanel()
+
+            Transport.URNETWORK -> UrnetworkPanel(onOpenPage)
 
             else -> Unit
         }
@@ -666,10 +743,13 @@ private fun StatusLine(
     stage: TunnelStage,
     detail: String?,
     takenBy: Transport?,
+    /** This build cannot connect it at all (see [Transport.unavailableReason]): never «ready». */
+    unavailable: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val headline = when {
         takenBy != null -> S(R.string.is_connected_right_now, takenBy.labelFa)
+        unavailable && stage != TunnelStage.FAILED -> com.mlmvpn.scanner.store.tr("در دسترس نیست", "Not available")
         stage == TunnelStage.RUNNING -> S(R.string.connected)
         stage == TunnelStage.STARTING -> S(R.string.connecting)
         stage == TunnelStage.FAILED -> S(R.string.could_not_connect)
@@ -748,7 +828,13 @@ private fun LiveStats(state: TunnelUiState, transport: Transport) {
         // and a full one is 39 characters, which is what pushed this card into two lines and
         // then out of its own bounds. It is still measured, still logged, and still on the
         // notification for anyone diagnosing a connection.
-        ExitCountryCard(code = state.country.trim(), fallbackName = state.countryName.trim())
+        // «URnetwork» leaves through several providers at once: one country only when the user chose
+        // one (its live card lists the providers' countries otherwise).
+        if (transport != Transport.URNETWORK || state.country.isNotBlank()) {
+            ExitCountryCard(code = state.country.trim(), fallbackName = state.countryName.trim())
+        }
+        // Tor: the bridge it came in through, and why its country is not the exit's.
+        if (transport == Transport.TOR) TorEntryCard(exitCode = state.country.trim())
 
         // What that country actually means on this transport, for the three that ride WARP.
         //
@@ -845,5 +931,7 @@ internal fun torModeLabel(mode: String): String = when (mode.lowercase()) {
     "obfs4" -> "obfs4"
     "meek" -> "Meek"
     "snowflake" -> "Snowflake"
+    "webtunnel" -> "WebTunnel"
+    "vanilla" -> S(R.string.tor_mode_vanilla)
     else -> S(R.string.automatic)
 }

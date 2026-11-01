@@ -1,0 +1,21 @@
+// netprobe: MLM CHAT phase-0 network measurement (docs/PLAN.fa.md section 17).
+// A standalone build, deliberately outside every app: it installs as its own package
+// (com.mlmchat.netprobe) and never touches MLMVPN.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "netprobe"
+include ':app'

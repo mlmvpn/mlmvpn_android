@@ -107,8 +107,10 @@ class St1RealPath(private val cloud: CloudManager, private val env: AndroidNetEn
 
         fun conclude(route: String, p: CloudVerifyProbe?, wire: List<Evidence>, ms: Long): Evidence =
             AccountConclusion.of(route, p?.let {
+                // A typed credential has no account chosen yet, so its subdomain is never looked up
+                // ("credential" basis): "no subdomain" there is not a finding (2026-10-03 report).
                 AccountConclusion.Check(it.tokenVerifyHttp, it.subdomainHttp, it.tokenVerifyErrors + " " + it.subdomainErrors,
-                    it.hasSubdomain, it.emailVerified, it.transport, it.scheme)
+                    it.hasSubdomain || it.basis.startsWith("credential"), it.emailVerified, it.transport, it.scheme)
             }, wire, ms)
     }
 }

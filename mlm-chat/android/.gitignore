@@ -1,0 +1,5 @@
+# Build outputs. The native library (core/src/main/jniLibs) IS kept in the team repo: whoever
+# changes core/ or jni/ rebuilds it with scripts/build-native.sh and commits it with the change,
+# so the other team builds the app without Rust or the NDK.
+core/build/
+jni/target/

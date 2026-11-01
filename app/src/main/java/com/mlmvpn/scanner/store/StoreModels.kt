@@ -67,6 +67,19 @@ sealed class StoreSource {
         val versionInContent: Regex? = null,
     ) : StoreSource()
 
+    /**
+     * Several files on a branch of a repo that publishes no releases, taken together at ONE
+     * commit (the newest that touched any of them) and turned into the item's data file by
+     * [DataSpec.build] -- @patterniha's Serverless-for-Iran: two `.jsonc` → «کانفیگ‌های ایران».
+     * Each file is also fetched through jsDelivr when raw.githubusercontent.com is filtered.
+     */
+    data class GithubFiles(
+        val repo: String,
+        val branch: String,
+        val paths: List<String>,
+        val versionInContent: Regex? = null,
+    ) : StoreSource()
+
     /** Our own builds: only what the signed channel offers. */
     object Channel : StoreSource()
 
@@ -101,6 +114,13 @@ data class EngineSpec(
     val probeRe: Regex? = null,
     /** What this build of the app ships, when it cannot be asked (JNI libraries). */
     val shipped: String? = null,
+    /**
+     * Names the app drives this engine by -- environment variables, config fields, the log line it
+     * waits for. A new version missing any of them would install, start, pass the version probe
+     * and then break a feature on the next connect, so it is refused before it is used and the
+     * working copy stays. Checked in the first file of [libs].
+     */
+    val requires: List<String> = emptyList(),
 ) {
     enum class Mode { EXEC, JNI }
 }
@@ -145,6 +165,13 @@ data class DataSpec(
     val target: Target,
     val minBytes: Long = 16,
     val json: Boolean = false,
+    /** The version the app ships, so an equal upstream version is not offered as an update. */
+    val shipped: String? = null,
+    /**
+     * Turns the downloaded files (by their path in the repo) into this data file's text. Throws
+     * when it cannot -- the store then installs nothing and keeps what works.
+     */
+    val build: ((android.content.Context, Map<String, String>) -> String)? = null,
 ) {
     enum class Target { OVERLAY, FILES_DIR }
 }
@@ -206,6 +233,12 @@ data class StoreRow(
     val checkedAt: Long = 0L,
     /** Workers: every deployed copy on the user's accounts. */
     val deployments: List<Deployment> = emptyList(),
+    /**
+     * Engines built into the app: the newest version on the developer's own GitHub. It cannot be
+     * installed from here -- it arrives with the next app version -- but it is shown, so the user
+     * sees where the app stands against the developer.
+     */
+    val upstream: String? = null,
 ) {
     enum class State { UPDATE, CURRENT, UNKNOWN, WITH_APP, UNCHECKED }
 
@@ -231,6 +264,12 @@ data class StoreJob(
     val running: Boolean,
     val error: String? = null,
     val done: String? = null,
+    /** Stopped by the user with the downloaded part kept: [StoreManager.resume] continues it. */
+    val paused: Boolean = false,
+    /** Bytes downloaded so far and in all (0 when unknown), and the current speed. */
+    val bytes: Long = 0,
+    val total: Long = 0,
+    val speedBps: Long = 0,
 )
 
 /** One line of «بروزرسانی‌های اخیر». */

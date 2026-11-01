@@ -95,7 +95,7 @@ WG is being filtered.
 ## UAE server migration note
 
 The original WireGuard pipeline pointed at a single UAE endpoint
-(`194.50.233.133`, UDP 443). That endpoint is no longer reachable from this app, so it
+(`203.0.113.20`, UDP 443). That endpoint is no longer reachable from this app, so it
 cannot be the single point of failure anymore.
 
 The replacement has three properties the UAE pipeline didn't have:

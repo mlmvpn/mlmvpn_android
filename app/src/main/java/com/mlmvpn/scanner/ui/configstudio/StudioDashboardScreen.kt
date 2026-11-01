@@ -97,7 +97,10 @@ fun StudioDashboardScreen(
     }
 
     val stale = state.installations.filter { it.isStale(PanelBuild.MLM, PanelBuild.MLM_SCHEMA) }
-    val noLimits = state.installations.filter { it.reachable && !it.can("enforcement.strict") }
+    // A central Worker counts no devices by design: there is nothing to turn on, so it is not named here.
+    val noLimits = state.installations.filter { it.reachable && !it.isCentral && !it.can("enforcement.strict") }
+    // Traffic is counted by an engine; a fleet of central Workers alone has no number to show.
+    val trafficKnown = state.installations.isEmpty() || state.installations.any { !it.isCentral }
 
     IosScreen(
         largeTitle = S(R.string.studio_title),
@@ -196,14 +199,14 @@ fun StudioDashboardScreen(
         StudioTilePair {
             StudioStatTile(
                 label = S(R.string.studio_traffic_24h),
-                value = d?.let { bytesFa(it.trafficDownBytes24h + it.trafficUpBytes24h) } ?: S(R.string.studio_unknown_dash),
+                value = d?.takeIf { trafficKnown }?.let { bytesFa(it.trafficDownBytes24h + it.trafficUpBytes24h) } ?: S(R.string.studio_unknown_dash),
                 icon = StudioIcons.Traffic,
                 tint = Ios.Purple,
                 modifier = Modifier.weight(1f),
             )
             StudioStatTile(
                 label = S(R.string.studio_traffic_30d),
-                value = d?.let { bytesFa(it.trafficDownBytes30d + it.trafficUpBytes30d) } ?: S(R.string.studio_unknown_dash),
+                value = d?.takeIf { trafficKnown }?.let { bytesFa(it.trafficDownBytes30d + it.trafficUpBytes30d) } ?: S(R.string.studio_unknown_dash),
                 icon = StudioIcons.Calendar,
                 tint = Ios.Indigo,
                 modifier = Modifier.weight(1f),

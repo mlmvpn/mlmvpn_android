@@ -59,8 +59,20 @@ data class AmzServer(
     val warp: Boolean = false,
     /** Only the AmneziaWG core can talk to it (custom S/H, or I-packets Xray cannot imitate). */
     val needsAwgCore: Boolean = false,
+    /**
+     * Hysteria2 whose link said `insecure=1`: a self-signed certificate. Its own certificate is
+     * read before each test ([QuicCertProbe]) and pinned in [raw] as `pinSHA256`.
+     */
+    val selfSigned: Boolean = false,
+    /**
+     * When a list last carried this server (0 = never recorded: [addedAt] stands in). The pool has no
+     * size limit, so a server its list stopped carrying goes after [AmzBrain.STALE_MS] rather than
+     * piling up for ever (lists are rebuilt daily or faster).
+     */
+    val seenAt: Long = 0,
 ) {
     val user: Boolean get() = sourceId == USER_SOURCE
+    val lastSeen: Long get() = if (seenAt > 0) seenAt else addedAt
 
     /** A better-sourced country replaces this one; a weaker one does not. */
     fun withCountry(cc: String?, from: CountryFrom): AmzServer =
@@ -86,9 +98,21 @@ data class AmzStat(
     val lastMs: Long = -1,
     val lastOkAt: Long = 0,
     val lastTestAt: Long = 0,
+    /**
+     * How the last success reached the server on this network: "" straight over the line, [VIA_CF]
+     * inside Cloudflare WARP ([AmzCarrier]) because the line drops UDP to the server itself.
+     */
+    val via: String = "",
 ) {
     val tested: Boolean get() = lastTestAt > 0
     val alive: Boolean get() = tested && lastMs >= 0
+    /** Working on this network, and only from inside Cloudflare. */
+    val viaCloudflare: Boolean get() = alive && via == VIA_CF
+
+    companion object {
+        /** [via] for a server reached inside Cloudflare WARP. */
+        const val VIA_CF = "cf"
+    }
 }
 
 /** How useful a source's servers have been, so a better list is tested first next time. */
@@ -128,7 +152,8 @@ sealed class AmzConnect {
     object Idle : AmzConnect()
     /** [step] is what is happening right now; [serverId] the server being tried. */
     data class Connecting(val serverId: String, val step: Step, val attempt: Int = 1) : AmzConnect()
-    data class Connected(val serverId: String, val country: String?, val delayMs: Long?, val since: Long) : AmzConnect()
+    /** [via]: the relay's way to the server when it has one (Proton: "v6", "v4" or "cf" -- through Cloudflare). */
+    data class Connected(val serverId: String, val country: String?, val delayMs: Long?, val since: Long, val via: String? = null) : AmzConnect()
     data class Failed(val serverId: String?, val reason: Reason) : AmzConnect()
 
     enum class Step { PREPARING, STARTING, HANDSHAKE, VERIFYING }
@@ -143,4 +168,6 @@ data class AmzTestProgress(
     val done: Int = 0,
     val total: Int = 0,
     val alive: Int = 0,
+    /** The way the relayed servers are being tried right now (Proton: "v6", "cf", "v4"); null otherwise. */
+    val via: String? = null,
 )

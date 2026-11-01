@@ -144,7 +144,11 @@ fun AmneziaScreen(onBack: () -> Unit) {
     val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         uris.forEach { uri -> readUri(context, uri)?.let { (bytes, name) -> AmzEngine.importFile(context, bytes, name) } }
     }
-    val pickFile = { fileLauncher.launch(arrayOf("*/*")) }
+    // Some TVs and stripped ROMs have no file picker at all; say so instead of crashing.
+    val pickFile = {
+        try { fileLauncher.launch(arrayOf("*/*")) }
+        catch (_: android.content.ActivityNotFoundException) { Toast.makeText(context, S(R.string.amz_no_file_picker), Toast.LENGTH_LONG).show() }
+    }
     val paste = {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         val text = cm?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
@@ -231,6 +235,7 @@ private fun AmzHome(
                 }
             },
         )
+        com.mlmvpn.scanner.ui.RouteChips()
 
         SettingsSectionHeader(stringResource(R.string.amz_location))
         SettingsGroup {
@@ -242,8 +247,13 @@ private fun AmzHome(
             AnimatedVisibility(progress.running, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.amz_testing, fa(progress.done), fa(progress.total), fa(progress.alive)),
-                            color = Ios.Label, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(R.string.amz_testing, fa(progress.done), fa(progress.total), fa(progress.alive)),
+                                color = Ios.Label, fontSize = 15.sp)
+                            if (progress.via == com.mlmvpn.scanner.engines.amnezia.AmzStat.VIA_CF) {
+                                Text(stringResource(R.string.amz_testing_cf), color = Ios.SecondaryLabel, fontSize = 13.sp)
+                            }
+                        }
                         Text(stringResource(R.string.amz_stop), color = Ios.Red, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { AmzEngine.stopTest() }.padding(horizontal = 8.dp, vertical = 4.dp))
                     }
@@ -433,7 +443,10 @@ private fun subLine(conn: AmzConnect, server: AmzServer?): String {
             where.ifEmpty { null },
             if (conn.attempt > 1) stringResource(R.string.amz_status_attempt, fa(conn.attempt)) else null,
         ).joinToString(" · ")
-        is AmzConnect.Connected -> where
+        is AmzConnect.Connected -> listOfNotNull(
+            where.ifEmpty { null },
+            if (conn.via == com.mlmvpn.scanner.engines.amnezia.AmzStat.VIA_CF) stringResource(R.string.amz_via_cf) else null,
+        ).joinToString(" · ")
     }
 }
 

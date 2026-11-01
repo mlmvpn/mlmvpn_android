@@ -24,6 +24,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,15 +61,23 @@ import kotlinx.coroutines.withContext
 fun GephAccountScreen(onBack: () -> Unit, backLabel: String) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var cred by remember { mutableStateOf(GephAccount.credential(ctx)) }
+    // Read off the main thread: the credential is decrypted through the Keystore, which can take
+    // seconds, under GephAccount's lock (Geph's freezes and ANRs, 1.2.41).
+    var cred by remember { mutableStateOf<GephCredential?>(null) }
+    var loading by remember { mutableStateOf(GephAccount.hasAccount(ctx)) }
     var info by remember { mutableStateOf(GephAccount.cachedInfo(ctx)) }
     var busy by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
 
     fun reload() {
-        cred = GephAccount.credential(ctx)
         info = GephAccount.cachedInfo(ctx)
+        scope.launch {
+            cred = withContext(Dispatchers.IO) { GephAccount.credential(ctx) }
+            loading = false
+        }
     }
+
+    LaunchedEffect(Unit) { reload() }
 
     fun refresh() {
         busy = "refresh"
@@ -86,7 +95,9 @@ fun GephAccountScreen(onBack: () -> Unit, backLabel: String) {
             SettingsFooter(it)
             Spacer(Modifier.height(8.dp))
         }
-        if (cred == null) {
+        if (cred == null && loading) {
+            // The stored account is still being read; a moment, not "no account".
+        } else if (cred == null) {
             NoAccount(
                 busy = busy,
                 setBusy = { busy = it },

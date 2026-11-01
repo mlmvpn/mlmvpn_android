@@ -127,11 +127,56 @@ class AmzBrainTest {
         assertEquals(listOf("s4"), AmzBrain.pickForTest(s, net, AmzTestMode.COUNTRY, now, country = AmzBrain.UNKNOWN).map { it.id })
     }
 
-    @Test fun `pool is capped and warp accounts do not drown the rest`() {
-        val warps = (1..AmzBrain.MAX_WARP + 50).map { server(it, warp = true) }
+    @Test fun `the pool has no size limit - every WARP account and the user's own stay`() {
+        val warps = (1..400).map { server(it, warp = true) }
         val s = AmzBrain.merge(AmzState(), warps + server(9999, user = true), now, net)
-        assertEquals(AmzBrain.MAX_WARP, s.servers.count { it.warp })
+        assertEquals(400, s.servers.count { it.warp })
         assertTrue(s.servers.any { it.user })
+    }
+
+    @Test fun `every server of a big list is kept, plain WireGuard included`() {
+        val hy2 = (1..5_000).map { server(it, src = "good") }
+        val wg = (1..40).map { i -> server(10_000 + i, src = "weak").copy(id = "wg$i", kind = AmzKind.WG) }
+        val s = AmzBrain.merge(AmzState(sources = mapOf("weak" to AmzSourceStat(50, 0), "good" to AmzSourceStat(50, 40))), hy2 + wg, now, net)
+        assertEquals(5_040, s.servers.size)
+        assertEquals(40, s.servers.count { it.kind == AmzKind.WG })
+    }
+
+    @Test fun `a server its answering list stopped carrying goes after three days unless it worked`() {
+        val day = 24 * 3_600_000L
+        var s = state(server(1), server(2), server(3))
+        s = AmzBrain.record(s, net, listOf(AmzBrain.Result("s3", 300)), now + 1)
+        // Two days on the list carries only s1: nothing is stale yet.
+        s = AmzBrain.merge(s, listOf(server(1)), now + 2 * day, net)
+        assertEquals(setOf("s1", "s2", "s3"), s.servers.map { it.id }.toSet())
+        // Four days on, still not carried: s2 goes, s3 once worked and stays.
+        s = AmzBrain.merge(s, listOf(server(1)), now + 4 * day, net)
+        assertEquals(setOf("s1", "s3"), s.servers.map { it.id }.toSet())
+        // A list that did not answer says nothing about its servers, however long it has been.
+        s = AmzBrain.merge(s, listOf(server(7, src = "other")), now + 30 * day, net)
+        assertTrue(s.servers.any { it.id == "s1" })
+    }
+
+    @Test fun `line-only failures of WireGuard servers are forgotten once, working ones and Hysteria2 kept`() {
+        var s = state(server(1), server(2).copy(id = "w1", kind = AmzKind.WG), server(3).copy(id = "w2", kind = AmzKind.WG))
+        s = AmzBrain.record(s, net, listOf(AmzBrain.Result("s1", null), AmzBrain.Result("w1", null), AmzBrain.Result("w2", 300)), now)
+        val after = AmzBrain.forgetLineOnlyFailures(s)
+        assertTrue("w1" !in after.statsFor(net))
+        assertTrue(after.statsFor(net)["w2"]!!.alive)
+        assertTrue(after.statsFor(net)["s1"]!!.tested)
+    }
+
+    @Test fun `a test of the best takes every plain WireGuard server that works or is untried`() {
+        val hy2 = (1..400).map { server(it, src = "good") }
+        val wg = (1..30).map { i -> server(10_000 + i, src = "weak").copy(id = "wg$i", kind = AmzKind.WG) }
+        var s = AmzBrain.merge(AmzState(sources = mapOf("weak" to AmzSourceStat(50, 0), "good" to AmzSourceStat(50, 40))), hy2 + wg, now, net)
+        // One failed both ways here, one works: the failed one is not taken, the working one is.
+        s = AmzBrain.record(s, net, listOf(AmzBrain.Result("wg1", null), AmzBrain.Result("wg2", 700, via = AmzStat.VIA_CF)), now)
+        val picked = AmzBrain.pickForTest(s, net, AmzTestMode.BEST, now).map { it.id }
+        assertEquals(AmzBrain.BEST_COUNT, picked.size)
+        assertEquals(29, picked.count { it.startsWith("wg") })
+        assertTrue("wg1" !in picked)
+        assertTrue("wg2" in picked)
     }
 
     @Test fun `best connect is the fastest working server of the country`() {
@@ -140,6 +185,28 @@ class AmzBrainTest {
         assertEquals("s3", AmzBrain.best(s, net)!!.id)
         assertEquals("s2", AmzBrain.best(s, net, "DE")!!.id)
         assertEquals("s1", AmzBrain.best(s, net, "DE", exclude = setOf("s2"))!!.id)
+    }
+
+    @Test fun `a success through Cloudflare keeps its way, and a direct one after it starts the delay over`() {
+        var s = state(server(1))
+        s = AmzBrain.record(s, net, listOf(AmzBrain.Result("s1", 900, via = AmzStat.VIA_CF)), now)
+        assertTrue(s.statsFor(net)["s1"]!!.viaCloudflare)
+        assertEquals(900.0, s.statsFor(net)["s1"]!!.ewmaMs, 0.01)
+        // A failure is no news about the way: the last success's way stays, the server is just dead now.
+        s = AmzBrain.record(s, net, listOf(AmzBrain.Result("s1", null)), now + 1)
+        assertEquals(AmzStat.VIA_CF, s.statsFor(net)["s1"]!!.via)
+        assertFalse(s.statsFor(net)["s1"]!!.viaCloudflare)
+        // Straight over the line now: its own delay, not averaged with the one through Cloudflare.
+        s = AmzBrain.record(s, net, listOf(AmzBrain.Result("s1", 200)), now + 2)
+        assertEquals("", s.statsFor(net)["s1"]!!.via)
+        assertEquals(200.0, s.statsFor(net)["s1"]!!.ewmaMs, 0.01)
+    }
+
+    @Test fun `a server alive only through Cloudflare is not removed as dead`() {
+        var s = state(server(1))
+        repeat(5) { s = AmzBrain.record(s, net, listOf(AmzBrain.Result("s1", 800, via = AmzStat.VIA_CF)), now + it) }
+        assertTrue(s.servers.any { it.id == "s1" })
+        assertTrue(AmzBrain.deadIds(s, net).isEmpty())
     }
 
     @Test fun `country order puts working countries first and unknown last`() {

@@ -32,6 +32,9 @@ import javax.net.ssl.SSLException
  * skip the stream, which would quietly send the ClientHello whole.
  */
 internal object WarpApiFront {
+    private val deadlineTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "warp-api-deadline").apply { isDaemon = true }
+    }
 
     private const val TAG = "WarpApiFront"
     const val HOST = "api.cloudflareclient.com"
@@ -40,12 +43,20 @@ internal object WarpApiFront {
     private const val READ_MS = 12_000
     private const val MAX_BODY = 512 * 1024
 
+    /**
+     * An overall deadline across ALL edge attempts. Without it, up to six edges each with a 6 s
+     * connect and several 12 s reads could keep a single `exchange` running for minutes with no
+     * ceiling; the caller (identity acquisition) would then appear to hang. Once this passes, no new
+     * edge is started and the collected failure is thrown.
+     */
+    private const val TOTAL_MS = 45_000L
+
     data class Answer(val status: Int, val body: String, val route: String)
 
     private val rng = SecureRandom()
 
     /** One HTTP/1.1 exchange with the WARP API over the camouflaged route. */
-    fun exchange(method: String, path: String, headers: List<Pair<String, String>>, body: ByteArray?): Answer {
+    fun exchange(method: String, path: String, headers: List<Pair<String, String>>, body: ByteArray?, timeoutMs: Long = TOTAL_MS): Answer {
         val request = buildString {
             append(method).append(' ').append(path).append(" HTTP/1.1\r\n")
             append("Host: ").append(HOST).append("\r\n")
@@ -55,16 +66,25 @@ internal object WarpApiFront {
         }.toByteArray(Charsets.ISO_8859_1) + (body ?: ByteArray(0))
 
         // Three edges with the ClientHello cut up, then one sent whole -- the order the core uses.
-        val plans = edges(4).mapIndexed { i, edge -> edge to (i < 3) }
+        // Then the edges proven on this network (CfEdge): any Cloudflare edge serves the WARP API,
+        // and the Doctor reports showed whole ranges dead in some regions and alive in others, so a
+        // fixed prefix alone can be the one that does not answer here.
+        val core = edges(4).mapIndexed { i, edge -> edge to (i < 3) }
+        val proven = com.mlmvpn.scanner.data.CfEdge.good(null, 2).map { InetSocketAddress(InetAddress.getByName(it), 443) to true }
+        val plans = core.take(3) + proven + core.drop(3)
         var last: Exception? = null
+        val deadline = System.currentTimeMillis() + timeoutMs.coerceIn(1, TOTAL_MS)
         for ((edge, fragment) in plans) {
+            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException()
+            if (System.currentTimeMillis() >= deadline) break
             val route = "${edge.address.hostAddress}${if (fragment) " split" else ""}"
             try {
-                val answer = once(edge, fragment, request, route)
-                Log.i(TAG, "$method $path over $route -> ${answer.status}")
+                val answer = once(edge, fragment, request, route, deadline)
+                Log.i(TAG, "$method WARP API -> ${answer.status}")
                 return answer
             } catch (e: Exception) {
-                Log.w(TAG, "$method $path over $route failed: ${e.message}")
+                if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException()
+                Log.w(TAG, "$method WARP API failed: ${e.javaClass.simpleName}")
                 last = e
             }
         }
@@ -79,11 +99,17 @@ internal object WarpApiFront {
         }
     }
 
-    private fun once(edge: InetSocketAddress, fragment: Boolean, request: ByteArray, route: String): Answer {
+    private fun once(edge: InetSocketAddress, fragment: Boolean, request: ByteArray, route: String, deadline: Long): Answer {
         Socket().use { socket ->
+            val owner = Thread.currentThread()
+            val watchdog = deadlineTimer.scheduleAtFixedRate({
+                if (owner.isInterrupted || System.currentTimeMillis() >= deadline) runCatching { socket.close() }
+            }, 0, 100, java.util.concurrent.TimeUnit.MILLISECONDS)
+            try {
             socket.tcpNoDelay = true
-            socket.connect(edge, CONNECT_MS)
-            socket.soTimeout = READ_MS
+            val remaining = (deadline - System.currentTimeMillis()).coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+            socket.connect(edge, minOf(CONNECT_MS, remaining))
+            socket.soTimeout = minOf(READ_MS, remaining)
             val io = EngineIo(newEngine(), socket.getInputStream(), socket.getOutputStream(), fragment)
             io.handshake()
             if (!HttpsURLConnection.getDefaultHostnameVerifier().verify(HOST, io.engine.session)) {
@@ -92,6 +118,7 @@ internal object WarpApiFront {
             io.send(request)
             val raw = io.receive()
             return parse(raw, route)
+            } finally { watchdog.cancel(false) }
         }
     }
 

@@ -1,0 +1,42 @@
+[package]
+name = "spike-iroh"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "MLM CHAT phase 0: the smallest iroh endpoint, to compare with spike-libp2p (decision T11)"
+publish = false
+
+[lib]
+name = "spike_iroh"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "spike-iroh"
+path = "src/bin/spike-iroh.rs"
+
+[dependencies]
+anyhow = "1"
+# No default features: no n0 relay servers, no DNS discovery, no metrics; ring for TLS.
+# portmapper (UPnP / NAT-PMP / PCP) is off here and measured as a separate row.
+iroh = { version = "1.4", default-features = false, features = ["tls-ring"] }
+# RelayQuicConfig, and the relay server itself for mlm-observer (feature relay-server).
+iroh-relay = { version = "1.4", default-features = false, features = ["tls-ring"] }
+rcgen = { version = "0.14", optional = true }
+# The home relay's TLS is pinned by certificate hash (same versions iroh already uses).
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+jni = { version = "0.21", default-features = false }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util", "sync"] }
+
+[features]
+portmapper = ["iroh/portmapper"]
+# The desktop side (mlm-observer): iroh relay server + hub. Never in the phone library.
+relay-server = ["iroh-relay/server", "dep:rcgen"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "unwind"
+strip = true

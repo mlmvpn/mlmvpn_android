@@ -72,6 +72,10 @@ fun TransportHost(transport: Transport, onExit: () -> Unit) {
             { TunnelLogScreen(onBack = ::pop) }
         }
 
+        com.mlmvpn.scanner.ui.cfwarp.NAT64_EXIT_PAGE -> {
+            { com.mlmvpn.scanner.ui.cfwarp.Nat64ExitScreen(onBack = ::pop, backLabel = transport.labelFa, transport = transport) }
+        }
+
         PAGE_PSIPHON_REGION -> {
             {
                 RegionPickerScreen(
@@ -111,6 +115,34 @@ fun TransportHost(transport: Transport, onExit: () -> Unit) {
                     backLabel = transport.labelFa,
                 )
             }
+        }
+
+        TOR_BRIDGES_PAGE -> {
+            { TorBridgesScreen(onBack = ::pop, backLabel = transport.labelFa) }
+        }
+
+        PsiphonPages.METHOD -> {
+            { PsiphonMethodScreen(onBack = ::pop, backLabel = transport.labelFa, onOpenPage = { push(it) }) }
+        }
+
+        PsiphonPages.PROXY -> {
+            { PsiphonProxyScreen(onBack = ::pop, backLabel = transport.labelFa) }
+        }
+
+        PsiphonPages.CLEAN -> {
+            { PsiphonCleanIpScreen(onBack = ::pop, backLabel = transport.labelFa) }
+        }
+
+        PsiphonPages.PAIRING -> {
+            { PsiphonPairingScreen(onBack = ::pop, backLabel = transport.labelFa) }
+        }
+
+        com.mlmvpn.scanner.ui.urnetwork.UrnetworkPages.LOCATIONS -> {
+            { com.mlmvpn.scanner.ui.urnetwork.UrnetworkLocationsScreen(onBack = ::pop, backLabel = transport.labelFa) }
+        }
+
+        com.mlmvpn.scanner.ui.urnetwork.UrnetworkPages.RESTORE -> {
+            { com.mlmvpn.scanner.ui.urnetwork.UrnetworkRestoreScreen(onBack = ::pop, backLabel = transport.labelFa) }
         }
 
         PAGE_TOR_MODE -> {

@@ -256,7 +256,33 @@ object NetworkSettings {
         // anything measured the line.
         GATEWAY("gateway", 1377),
         SNI("sni", 1500),
-        V2RAY("v2ray", 1500);
+        V2RAY("v2ray", 1500),
+        // The rest each had no field of their own and took V2Ray's (or Quick Connect's) without
+        // the user being able to tell. Their defaults are the values they had: nothing changes
+        // until a field is filled in.
+        AMNEZIA("amnezia", 1500),
+        PROTON("proton", 1500),
+        WINDSCRIBE("windscribe", 1500),
+        OUTLINE("outline", 1500),
+        FLUX("flux", 1500),
+        FENIX("fenix", 1500),
+        MAE("mae", 1500),
+        GITHUB("github", 1500),
+        GST("gst", 1500),
+        ANTI_SANCTION("anti_sanction", 1500),
+        // OpenVPN (its tile and Windscribe's OpenVPN family): the server's pushed value unless set.
+        OPENVPN("openvpn", 1500),
+        // Geph's own tun: a large local buffer by design (GephEngine.VPN_MTU).
+        GEPH("geph", 16384),
+        // «لنترن» is reached through tun2proxy, which terminates TCP on the phone: a local buffer,
+        // like «وارپ»'s. The packet sizes on the wire are the core's own business.
+        LANTERN("lantern", 1500),
+        // «URnetwork»: its core carries the TUN's packets inside URnetwork's own frames (the SDK's
+        // packet path). 1280 is the interface size URnetwork's own apps configure
+        // (connect.DefaultTunnelMtu): the least IPv6 takes, and what the provider side is sized for.
+        URNETWORK("urnetwork", 1280),
+        // «NPV»: its standard links run on the Xray stack, like Outline's keys.
+        NPV("npv", 1500);
 
         /** Where this method's own value lives. */
         val key: String get() = "${KEY_MTU}_$id"
@@ -323,10 +349,19 @@ object NetworkSettings {
     private fun routingPrefs(context: Context) =
         context.applicationContext.getSharedPreferences(ROUTING_PREFS, Context.MODE_PRIVATE)
 
-    const val KEY_TLS_UNFILTER = "tls_unfilter"
+    /**
+     * The «رفع فیلتر کانفیگ‌ها (کلادفلر)» switch: the fragment + fingerprint handshake of
+     * [com.mlmvpn.scanner.utils.CfUnfilter] for Cloudflare-fronted configs. ON by default.
+     *
+     * The key is new on purpose. The switch used to be stored as `tls_unfilter` while it changed
+     * nothing at all (see CfUnfilter), so what anyone left it at says nothing about what they want
+     * now; reading the old key would have kept the fix off for exactly the people who toggled it
+     * while looking for one. Everyone starts from the default, and a choice made from here on sticks.
+     */
+    const val KEY_TLS_UNFILTER = "tls_unfilter_v2"
 
     fun tlsUnfilter(context: Context): Boolean =
-        defaultPrefs(context).getBoolean(KEY_TLS_UNFILTER, false)
+        defaultPrefs(context).getBoolean(KEY_TLS_UNFILTER, true)
             .also { com.mlmvpn.scanner.utils.XrayJsonGenerator.tlsUnfilter = it }
 
     fun setTlsUnfilter(context: Context, value: Boolean) {

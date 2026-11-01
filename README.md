@@ -21,6 +21,33 @@
 
 ---
 
+## Source code · سورس کد
+
+**English.** This repository holds the full source of the app and of Gereh, the messenger inside it:
+
+| Folder | What it is |
+|---|---|
+| `app/` | The VPN app |
+| `mlm-chat/` | Gereh's core in Rust (identity, Olm/Megolm end-to-end encryption, groups and channels, transports), its Android package, the protocol (`mlm-chat/docs/SPEC.md`) and the relays' code (`mlm-chat/relay/`) |
+| `chat/` | Gereh's interface, a fork of Telegram for Android (GPL) |
+
+What the app itself sends to us is all in the code: crash reports (`app/src/main/java/com/mlmvpn/scanner/crash/`), the Quick Connect pool (`app/src/main/java/com/mlmvpn/scanner/quick/MlmPoolClient.kt`) and Game Booster statistics (`app/src/main/java/com/mlmvpn/scanner/engines/game/booster/crowd/`).
+
+Before publishing, the addresses and keys of our own servers and relays were replaced with placeholders (`203.0.113.x`, `*.redacted.invalid`, `redacted-…`) to protect them from attacks. Prebuilt binaries (`.so`, `.aar`, `.dat`) are not in this repository; they are inside each release's APK.
+
+**فارسی.** این مخزن سورس کامل برنامه و «گره»، پیام‌رسان داخل آن، را دارد:
+
+| پوشه | چیست |
+|---|---|
+| `app/` | برنامهٔ VPN |
+| `mlm-chat/` | هستهٔ گره به زبان Rust (هویت، رمزنگاری سرتاسری Olm/Megolm، گروه و کانال، راه‌های رساندن پیام)، بستهٔ اندروید آن، قرارداد پروتکل (`mlm-chat/docs/SPEC.md`) و کد رله‌ها (`mlm-chat/relay/`) |
+| `chat/` | رابط گره، فورک تلگرام اندروید (GPL) |
+
+هرچه خود برنامه برای ما می‌فرستد همه در کد پیداست: گزارش خطا (`app/src/main/java/com/mlmvpn/scanner/crash/`)، استخر اتصال سریع (`app/src/main/java/com/mlmvpn/scanner/quick/MlmPoolClient.kt`) و آمار گیم بوستر (`app/src/main/java/com/mlmvpn/scanner/engines/game/booster/crowd/`).
+
+پیش از انتشار، آدرس و کلید سرورها و رله‌های خودمان با جای‌نگهدار (`203.0.113.x`، `*.redacted.invalid`، `redacted-…`) عوض شده تا از حمله در امان بمانند. فایل‌های ازپیش‌ساخته (`.so`، `.aar`، `.dat`) در این مخزن نیستند و داخل APK هر نسخه هستند.
+
+
 ## English
 
 ### Overview

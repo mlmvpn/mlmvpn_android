@@ -173,6 +173,21 @@ private fun mtuMethodLabel(method: com.mlmvpn.scanner.utils.NetworkSettings.Meth
         com.mlmvpn.scanner.utils.NetworkSettings.Method.GATEWAY -> stringResource(R.string.home_gateway)
         com.mlmvpn.scanner.utils.NetworkSettings.Method.SNI -> stringResource(R.string.home_emergency_3)
         com.mlmvpn.scanner.utils.NetworkSettings.Method.V2RAY -> "V2Ray"
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.AMNEZIA -> com.mlmvpn.scanner.store.tr("آمنزیا", "Amnezia")
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.PROTON -> "Proton VPN"
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.WINDSCRIBE -> com.mlmvpn.scanner.store.tr("وینداسکرایب", "Windscribe")
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.OUTLINE -> "Outline"
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.FLUX -> "FLUX"
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.FENIX -> "FENIX"
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.MAE -> "MAE"
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.GITHUB -> stringResource(R.string.home_github)
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.GST -> stringResource(R.string.home_emergency_2)
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.ANTI_SANCTION -> stringResource(R.string.home_antisanction)
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.OPENVPN -> stringResource(R.string.home_openvpn)
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.GEPH -> stringResource(R.string.home_geph)
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.LANTERN -> stringResource(R.string.home_lantern)
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.URNETWORK -> stringResource(R.string.home_urnetwork)
+        com.mlmvpn.scanner.utils.NetworkSettings.Method.NPV -> stringResource(R.string.home_npv)
     }
 private const val V_TILE = "tile"
 private const val V_MODE = "mode"
@@ -423,6 +438,10 @@ fun VpnSettingsScreen(onDismiss: () -> Unit) {
                             mtuProbing -> stringResource(R.string.vpn_mtu_measure_running)
                             r == null -> stringResource(R.string.vpn_mtu_measure_footer)
                             r.localTermination -> stringResource(R.string.vpn_mtu_measure_local)
+                            r.fixed -> com.mlmvpn.scanner.store.tr(
+                                "URnetwork بسته‌ها را درون قاب‌های خودش می‌برد و اندازه‌شان را خودش با مسیر هماهنگ می‌کند؛ اندازهٔ رابط رسمی آن ${r.inner} است (کمترین اندازه‌ای که IPv6 لازم دارد) و چیزی برای اندازه‌گیری روی این خط نیست. مقدار دستی هم اعمال می‌شود؛ کمتر از ۱۱۰۰ (بزرگ‌ترین بسته‌ای که ارائه‌دهنده می‌فرستد) ۱۱۰۰ به کار می‌رود، و زیر ۱۲۸۰ تونل IPv6 ندارد.",
+                                "URnetwork carries packets inside its own frames and sizes them to the path itself; its official interface size is ${r.inner} (the least IPv6 needs), and there is nothing on this line to measure. A manual value applies too; below 1100 (the largest packet a provider sends) 1100 is used, and below 1280 the tunnel has no IPv6.",
+                            )
                             r.inner == null -> stringResource(R.string.vpn_mtu_measure_failed)
                             else -> stringResource(
                                 R.string.vpn_mtu_measure_result, r.outerPathMtu ?: 0, r.inner, r.probes

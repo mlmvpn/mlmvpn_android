@@ -87,8 +87,10 @@ class AwgProbeService : Service() {
                 .addProxy(Socks5Proxy("127.0.0.1:$port", null, null))
                 .build()
             backend.setState(tunnel, Tunnel.State.UP, withProxy)
-            // The first request carries the handshake; the second is the delay a user feels.
-            val first = get(port, "www.gstatic.com", "/generate_204", timeoutMs)
+            // The first request carries the handshake and is the proof, over HTTPS (AmzProof): a
+            // server that answers only a small plain-HTTP request carried nothing once connected.
+            // The second is the delay a user feels.
+            val first = proof(port, timeoutMs)
             if (first == null) return -1L to null
             val ms = get(port, "www.gstatic.com", "/generate_204", timeoutMs) ?: first
             val cc = trace(port, timeoutMs)
@@ -101,12 +103,19 @@ class AwgProbeService : Service() {
         }
     }
 
-    private fun open(port: Int, host: String, timeoutMs: Int): Socket {
+    private fun open(port: Int, host: String, timeoutMs: Int, remotePort: Int = 80): Socket {
         val s = Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
         s.soTimeout = timeoutMs
-        s.connect(InetSocketAddress.createUnresolved(host, 80), timeoutMs)
+        s.connect(InetSocketAddress.createUnresolved(host, remotePort), timeoutMs)
         return s
     }
+
+    /** HTTPS through the SOCKS port, its time, or null when it did not carry. */
+    private fun proof(port: Int, timeoutMs: Int): Long? = runCatching {
+        val start = System.nanoTime()
+        val host = com.mlmvpn.scanner.engines.amnezia.AmzProof.HOST
+        if (com.mlmvpn.scanner.engines.amnezia.AmzProof.https204(open(port, host, timeoutMs, 443), timeoutMs)) (System.nanoTime() - start) / 1_000_000 else null
+    }.getOrNull()
 
     private fun get(port: Int, host: String, path: String, timeoutMs: Int): Long? = runCatching {
         val start = System.nanoTime()

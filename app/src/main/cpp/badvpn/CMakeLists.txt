@@ -83,6 +83,10 @@ target_include_directories(tun2socks PRIVATE
 )
 
 target_compile_definitions(tun2socks PRIVATE
+    # Release, as Psiphon ships it (ndk-build adds NDEBUG in release). Without it every ASSERT is
+    # an abort(): the copy built with them on closed the app whenever lwIP acknowledged more than
+    # tun2socks had counted ("tun2socks.c:2070 Assertion failed", Psiphon and WireGuard, 1.2.41).
+    NDEBUG
     BADVPN_THREAD_SAFE=0
     BADVPN_LINUX
     BADVPN_BREACTOR_BADVPN

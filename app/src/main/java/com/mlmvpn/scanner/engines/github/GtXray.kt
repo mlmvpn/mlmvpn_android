@@ -20,6 +20,8 @@ data class GtTransport(
     val errors: List<String>,
     /** The runner's own public address: traffic seen leaving from it went out by no exit at all. */
     val runnerIp: String = "",
+    /** The ways in that are not Cloudflare (runner/relays.mjs) — reached directly, no Worker. */
+    val relays: List<GtRelay> = emptyList(),
 ) {
     companion object {
         private val HOST = Regex("^[a-z0-9-]{3,63}\\.trycloudflare\\.com$")
@@ -41,7 +43,14 @@ data class GtTransport(
             val slotReady = slot?.optBoolean("ready") == true
             if (slot != null) require(slotName in listOf("a", "b", "c")) { "bad slot" }
             require(hosts.all { HOST.matches(it) }) { "bad tunnel host" }
-            require(hosts.isNotEmpty() || (slotName != null && slotReady)) { "no tunnel host" }
+            // A relay outside the known suffixes is dropped, not fatal: a runner newer than this
+            // app may know a relay this app does not, and the others still carry the session.
+            val relaysArr = p.optJSONArray("relays") ?: JSONArray()
+            val relays = (0 until relaysArr.length()).mapNotNull { i ->
+                val o = relaysArr.optJSONObject(i) ?: return@mapNotNull null
+                GtRelay.of(o.optString("host"), o.optString("kind"))
+            }.distinctBy { it.host }
+            require(hosts.isNotEmpty() || (slotName != null && slotReady) || relays.isNotEmpty()) { "no tunnel host" }
             val wsPath = p.optString("wsPath")
             require(PATH.matches(wsPath)) { "bad path" }
             val u = p.optJSONObject("uuids") ?: JSONObject()
@@ -56,7 +65,39 @@ data class GtTransport(
                 rev = p.optInt("rev", 1), phase = p.optString("phase"),
                 errors = (0 until (errs?.length() ?: 0)).map { errs!!.optString(it) },
                 runnerIp = runner?.optString("ip").orEmpty().takeIf { IP_LITERAL.matches(it) }.orEmpty(),
+                relays = relays,
             )
+        }
+    }
+}
+
+/**
+ * One way in that is not Cloudflare: a free public relay the runner dialled out to (runner/relays.mjs),
+ * reached by its own HTTPS name — no Worker, no clean IP. `kind` says which service it is.
+ * Measured 2026-10-06 from an Iranian mobile line: these four answered, trycloudflare.com did not.
+ */
+data class GtRelay(val host: String, val kind: String) {
+    /** What the screen calls it. */
+    val label: String get() = when (kind) {
+        "lhr" -> "localhost.run"
+        "srv" -> "srv.us"
+        "serveo" -> "serveo"
+        "lt" -> "localtunnel"
+        else -> kind
+    }
+
+    companion object {
+        private val SUFFIX = mapOf(
+            "lhr" to Regex("^[a-z0-9-]{1,63}\\.lhr\\.(life|pro)$"),
+            "srv" to Regex("^[a-z0-9-]{1,63}\\.srv\\.us$"),
+            "serveo" to Regex("^[a-z0-9-]{1,63}\\.(serveo\\.net|serveousercontent\\.com)$"),
+            "lt" to Regex("^[a-z0-9-]{1,63}\\.loca\\.lt$"),
+        )
+
+        /** Null unless the name belongs to the service it claims to be. */
+        fun of(host: String, kind: String): GtRelay? {
+            val h = host.trim().lowercase()
+            return if (SUFFIX[kind]?.matches(h) == true) GtRelay(h, kind) else null
         }
     }
 }
@@ -68,9 +109,13 @@ data class GtTransport(
  *   phone ──TLS (SNI: the user's own Worker)──► clean Cloudflare IP ──► the Worker
  *     ──/p/<signed pass>──► <label>.trycloudflare.com ──► cloudflared on the runner ──► Xray
  *
+ * or, with no Worker (or none that this line reaches), straight to a relay (runner/relays.mjs):
+ *
+ *   phone ──TLS (SNI: the relay's own name)──► <name>.lhr.life / .srv.us / … ──► the runner ──► Xray
+ *
  * MyVpnService adds the tun inbound (and its probe port) to a whole config like this one, so this
  * builds only the proxy side: a SOCKS inbound on the app's local port, one outbound per tunnel ×
- * clean address, and a balancer that keeps traffic on whichever still answers.
+ * clean address and one per relay, and a balancer that keeps traffic on whichever still answers.
  */
 object GtXray {
     /** Quick tunnels refuse more than 200 in-flight requests each — so TCP is multiplexed. */
@@ -125,6 +170,30 @@ object GtXray {
     }
 
     /**
+     * The outbound for a relay: TLS and the WebSocket straight to the relay's own name. Same user,
+     * path and mux as [outbound] — the relay hands the WebSocket to the same Xray port.
+     */
+    fun relayOutbound(r: GtRelay, t: GtTransport, mux: Int = MUX, user: String = "direct"): JSONObject {
+        val id = t.uuids[user] ?: t.uuids.getValue("direct")
+        val ws = JSONObject().put("path", t.wsPath).put("host", r.host).put("heartbeatPeriod", 30)
+        // localtunnel shows a browser-like client a reminder page instead of the upgrade.
+        if (r.kind == "lt") ws.put("headers", JSONObject().put("bypass-tunnel-reminder", "1"))
+        return JSONObject()
+            .put("protocol", "vless")
+            .put("settings", JSONObject().put("vnext", JSONArray().put(JSONObject()
+                .put("address", r.host).put("port", 443)
+                .put("users", JSONArray().put(JSONObject().put("id", id).put("encryption", "none"))))))
+            .put("streamSettings", JSONObject()
+                .put("network", "ws")
+                .put("security", "tls")
+                .put("tlsSettings", JSONObject().put("serverName", r.host).put("fingerprint", "chrome")
+                    .put("alpn", JSONArray().put("http/1.1")))
+                .put("wsSettings", ws))
+            .put("mux", JSONObject().put("enabled", true).put("concurrency", mux)
+                .put("xudpConcurrency", 16).put("xudpProxyUDP443", "reject"))
+    }
+
+    /**
      * Which exit the connection leaves by (runner/exits.mjs): `use` — `direct` (the runner's own
      * address) or an exit slot `x1`…`x6`, a different VLESS user on the same tunnel; `rules` — sites
      * that leave by another slot. [normalize] drops anything this transport has no user for.
@@ -142,21 +211,26 @@ object GtXray {
     }
 
     /**
-     * Every tunnel host × every chosen clean address, behind one balancer — an address that gets
-     * filtered mid-session costs a retry, not the connection. Site rules (gt-core.js › buildConfig):
-     * per rule, the first quick tunnel × the clean addresses as ITS user, behind its own `gx-`
-     * balancer and a domain rule ahead of the default, so no `gt-` selector ever picks them up.
+     * Every tunnel host × every chosen clean address, and every relay that answered, behind one
+     * balancer — an address that gets filtered mid-session costs a retry, not the connection. With
+     * no Worker (`workerHost` null) or no clean address, the relays alone. Site rules
+     * (gt-core.js › buildConfig): per rule, the first quick tunnel × the clean addresses and the
+     * relays as ITS user, behind its own `gx-` balancer and a domain rule ahead of the default, so
+     * no `gt-` selector ever picks them up.
      */
-    fun config(session: GtSession, t: GtTransport, workerHost: String, secret: String, ips: List<String>, localPort: Int,
-               exitPlan: ExitPlan = ExitPlan()): String {
+    fun config(session: GtSession, t: GtTransport, workerHost: String?, secret: String, ips: List<String>, localPort: Int,
+               exitPlan: ExitPlan = ExitPlan(), relays: List<GtRelay> = emptyList()): String {
         val exp = session.expiresAt.takeIf { it > 0 } ?: (System.currentTimeMillis() + 6 * 3600_000L)
         val plan = exitPlan.normalize(t)
+        val worker = workerHost?.takeIf { it.isNotBlank() }
+        val cfIps = if (worker == null) emptyList() else ips
         val outs = JSONArray()
         var n = 0
-        for (h in t.hosts) {
+        if (worker != null) for (h in t.hosts) {
             val pass = GtCrypto.signPass(secret, label(h), session.id, exp)
-            for (ip in ips) outs.put(outbound(ip, workerHost, pass, t, user = plan.use).put("tag", "gt-${n++}"))
+            for (ip in cfIps) outs.put(outbound(ip, worker, pass, t, user = plan.use).put("tag", "gt-${n++}"))
         }
+        for (r in relays) outs.put(relayOutbound(r, t, user = plan.use).put("tag", "gt-${n++}"))
         val balancers = JSONArray().put(JSONObject().put("tag", "gt")
             .put("selector", JSONArray().put("gt-"))
             .put("strategy", JSONObject().put("type", "leastPing"))
@@ -166,12 +240,14 @@ object GtXray {
         // tun's original destination for them (routeOnly), without which no lookup can succeed.
         val siteRules = mutableListOf<JSONObject>()
         val appRules = mutableListOf<JSONObject>()
-        val first = t.hosts.firstOrNull()
-        if (first != null) {
-            val pass = GtCrypto.signPass(secret, label(first), session.id, exp)
+        val first = t.hosts.firstOrNull()?.takeIf { worker != null && cfIps.isNotEmpty() }
+        if (first != null || relays.isNotEmpty()) {
+            val pass = first?.let { GtCrypto.signPass(secret, label(it), session.id, exp) }
             plan.rules.forEachIndexed { i, r ->
                 val base = "gx-r$i-"
-                ips.forEachIndexed { k, ip -> outs.put(outbound(ip, workerHost, pass, t, user = r.id).put("tag", "$base$k")) }
+                var k = 0
+                if (pass != null) cfIps.forEach { ip -> outs.put(outbound(ip, worker!!, pass, t, user = r.id).put("tag", "$base${k++}")) }
+                relays.forEach { rl -> outs.put(relayOutbound(rl, t, user = r.id).put("tag", "$base${k++}")) }
                 balancers.put(JSONObject().put("tag", "gx-r$i").put("selector", JSONArray().put(base))
                     .put("strategy", JSONObject().put("type", "leastPing")).put("fallbackTag", "${base}0"))
                 if (r.domains.isNotEmpty()) siteRules.add(JSONObject().put("type", "field").put("balancerTag", "gx-r$i")

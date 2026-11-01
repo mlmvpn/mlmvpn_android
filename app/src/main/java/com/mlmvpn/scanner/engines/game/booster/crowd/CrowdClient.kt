@@ -39,10 +39,10 @@ import javax.crypto.spec.SecretKeySpec
 object CrowdClient {
 
     private const val TAG = "GameCrowd"
-    const val ENDPOINT = "https://gb-crowd-8f445d.ehsan44noven.workers.dev"
+    const val ENDPOINT = "https://crowd.redacted.invalid"
 
     /** Signs reports. Shipped in the app, so it raises the bar and no more; the service caps writes. */
-    private const val APP_KEY = "45492a027b163d93c661d03209dd2c7330642fced27748d503d78c3d16ff0156"
+    private const val APP_KEY = "0000000000000000000000000000000000000000000000000000000000000000"
 
     /** The service's Ed25519 public key: a snapshot that does not verify against it is ignored. */
     val PUBLIC_KEY: ByteArray = CrowdSnapshot.decodeBase64("P/1bzrQly13Bcb2eDa4pGERBbwQGc5UjBt/qeIIy9LI=")!!
@@ -71,7 +71,7 @@ object CrowdClient {
     }
 
     private val http by lazy {
-        OkHttpClient.Builder().protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
+        OkHttpClient.Builder().protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory())
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns(dohDns))

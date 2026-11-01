@@ -129,7 +129,7 @@ internal class PropertyPack : DataUnit {
 
         repeat(propertyNum) {
             val keySize = buffer.int - 1
-            assertAlways(keySize >= 0)
+            assertAlways(keySize in 0..buffer.remaining())
 
             val key = ByteArray(keySize).let {
                 buffer.get(it)
@@ -167,7 +167,7 @@ internal class PropertyPack : DataUnit {
                 in SOFTETHER_BYTES_PROPERTIES -> {
                     readHeader(SEP_BYTES_TYPE, 1, buffer)
                     val size = buffer.int
-                    assertAlways(size >= 0)
+                    assertAlways(size in 0..buffer.remaining()) // a hostile length must not allocate gigabytes (OOM, 1.2.39)
                     ByteArray(size).also {
                         buffer.get(it)
                         bytesProperties[key] = it
@@ -187,7 +187,7 @@ internal class PropertyPack : DataUnit {
                 in SOFTETHER_ASCII_PROPERTIES -> {
                     readHeader(SEP_ASCII_TYPE, 1, buffer)
                     val size = buffer.int
-                    assertAlways(size >= 0)
+                    assertAlways(size in 0..buffer.remaining()) // a hostile length must not allocate gigabytes (OOM, 1.2.39)
                     ByteArray(size).also {
                         buffer.get(it)
                         asciiProperties[key] = it.toString(Charsets.US_ASCII)
@@ -197,7 +197,7 @@ internal class PropertyPack : DataUnit {
                 in SOFTETHER_UTF8_PROPERTIES -> {
                     readHeader(SEP_UTF8_TYPE, 1, buffer)
                     val size = buffer.int
-                    assertAlways(size >= 0)
+                    assertAlways(size in 0..buffer.remaining()) // a hostile length must not allocate gigabytes (OOM, 1.2.39)
                     ByteArray(size).also {
                         buffer.get(it)
                         asciiProperties[key] = it.toString(Charsets.UTF_8)
@@ -219,7 +219,7 @@ internal class PropertyPack : DataUnit {
             SEP_BYTES_TYPE, SEP_ASCII_TYPE, SEP_UTF8_TYPE -> {
                 buffer.move(Int.SIZE_BYTES)
                 val size = buffer.int
-                assertAlways(size >= 0)
+                assertAlways(size in 0..buffer.remaining()) // a hostile length must not allocate gigabytes (OOM, 1.2.39)
                 buffer.move(size)
             }
             else -> throw NotImplementedError()

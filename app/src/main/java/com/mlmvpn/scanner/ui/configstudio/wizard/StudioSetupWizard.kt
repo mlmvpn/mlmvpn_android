@@ -98,9 +98,14 @@ fun StudioSetupWizard(
     // account the device counter, so the last step can say so instead of hedging.
     var deviceLimits by remember { mutableStateOf<Boolean?>(null) }
 
+    // The account's old engine, when it has one, was adopted in this run: a retry after the central
+    // Worker failed does not redeploy it a second time.
+    var engineAdopted by remember { mutableStateOf(false) }
+
     fun beginCheck(picked: CloudAccount) {
         account = picked
         failure = null
+        engineAdopted = false
         step = Step.CHECKING
         scope.launch {
             scan = StudioDiscovery(context).scan(picked)
@@ -108,26 +113,48 @@ fun StudioSetupWizard(
         }
     }
 
+    /**
+     * Two parts, in this order (the operator's choice, 2026-10-18 — new people live on the central
+     * Worker, everything on this phone):
+     *  1. an engine already on the account is ADOPTED as before (D8), so the people on it keep their
+     *     links and everything they had — an engine is never installed fresh any more;
+     *  2. the account's central Worker is installed, or adopted when it is already there (one Worker
+     *     for every panel), and the account joins the Studio on it: new people go there.
+     */
     fun beginInstall(force: Boolean = false) {
         val target = account ?: return
         failure = null
         downgrade = null
         step = Step.INSTALLING
         scope.launch {
-            when (val res = StudioDeployer(context).install(target, force) { _, message -> progress = message }) {
-                is StudioDeployer.Result.Ready -> {
-                    deviceLimits = res.deviceLimits
-                    step = Step.DONE
-                }
-                is StudioDeployer.Result.WouldDowngrade -> {
-                    downgrade = res
-                    step = Step.ENGINE
-                }
-                is StudioDeployer.Result.Failed -> {
-                    failure = res.message
-                    step = Step.ENGINE
+            if ((scan as? StudioDiscovery.Result.Adopted) != null && !engineAdopted) {
+                when (val res = StudioDeployer(context).install(target, force) { _, message -> progress = message }) {
+                    is StudioDeployer.Result.Ready -> {
+                        deviceLimits = res.deviceLimits
+                        engineAdopted = true
+                    }
+                    is StudioDeployer.Result.WouldDowngrade -> {
+                        downgrade = res
+                        step = Step.ENGINE
+                        return@launch
+                    }
+                    is StudioDeployer.Result.Failed -> {
+                        failure = res.message
+                        step = Step.ENGINE
+                        return@launch
+                    }
                 }
             }
+            com.mlmvpn.scanner.data.studio.central.CentralFleet.register(context, target)
+            com.mlmvpn.scanner.engines.gateway.EdgeGateway.deploy(context, target) { message -> progress = message }
+                .onSuccess {
+                    com.mlmvpn.scanner.data.studio.central.StudioCentralJob.ensure(context)
+                    step = Step.DONE
+                }
+                .onFailure {
+                    failure = com.mlmvpn.scanner.engines.gateway.EdgeGateway.localized(it)
+                    step = Step.ENGINE
+                }
         }
     }
 

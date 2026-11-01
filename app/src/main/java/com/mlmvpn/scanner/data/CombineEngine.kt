@@ -209,6 +209,14 @@ object CombineEngine {
         groupTitle: String,
         /** The port each IP answered on, when the scan discovered one. */
         portFor: (String) -> Int? = { null },
+        /**
+         * The link parameters that carry the handshake the scan proved for an address
+         * (`CfNetManager.handshakeParams`), written into each config built on it -- see [withParams].
+         * Without them a combined config was health-tested and connected with whatever the strategy
+         * store held for CONNECT, not with the handshake that found its address: on a line where
+         * Cloudflare IPv4 passes only with ECH or a fragmented hello, every combination read dead.
+         */
+        handshakeFor: (VpnNode, String) -> Map<String, String?> = { _, _ -> emptyMap() },
     ): List<VpnNode> =
         sourceNodes.flatMap { node ->
             ips.map { ip ->
@@ -216,11 +224,46 @@ object CombineEngine {
                 node.copy(
                     id = java.util.UUID.randomUUID().toString(),
                     name = newName,
-                    uri = rewrite(node.uri, ip, newName, portFor(ip)),
+                    uri = withParams(rewrite(node.uri, ip, newName, portFor(ip)), handshakeFor(node, ip)),
                     groupTitle = groupTitle,
                 )
             }
         }
+
+    /**
+     * [uri] with [params] set in its query (a null value removes the parameter), everything else --
+     * the order of the other parameters, their spelling, the remark -- exactly as it was. Values are
+     * percent-encoded: a raw `+` in `ech=cloudflare-ech.com+udp://1.1.1.1` would read back as a space.
+     * `vmess://` is edited as its JSON. Any other link comes back unchanged.
+     */
+    fun withParams(uri: String, params: Map<String, String?>): String {
+        if (params.isEmpty()) return uri
+        val trimmed = uri.trim()
+        if (trimmed.startsWith("vmess://", ignoreCase = true)) return withVmessParams(trimmed, params) ?: uri
+        if (!trimmed.startsWith("vless://", ignoreCase = true) && !trimmed.startsWith("trojan://", ignoreCase = true)) return uri
+        val hash = trimmed.indexOf('#').let { if (it == -1) trimmed.length else it }
+        val head = trimmed.substring(0, hash)
+        val remark = trimmed.substring(hash)
+        val q = head.indexOf('?')
+        val base = if (q == -1) head else head.substring(0, q)
+        val names = params.keys.map { it.lowercase() }.toSet()
+        val kept = (if (q == -1) emptyList() else head.substring(q + 1).split('&'))
+            .filter { it.isNotEmpty() && it.substringBefore('=').lowercase() !in names }
+        val added = params.mapNotNull { (k, v) -> v?.let { "$k=" + android.net.Uri.encode(it) } }
+        val query = (kept + added).joinToString("&")
+        return base + (if (query.isEmpty()) "" else "?$query") + remark
+    }
+
+    private fun withVmessParams(uri: String, params: Map<String, String?>): String? = try {
+        val body = uri.substringAfter("vmess://").substringBefore('#')
+        val json = org.json.JSONObject(decodeB64(body) ?: throw IllegalArgumentException())
+        params.forEach { (k, v) -> if (v == null) json.remove(k) else json.put(k, v) }
+        val remark = uri.substringAfter('#', "")
+        "vmess://" + android.util.Base64.encodeToString(json.toString().toByteArray(),
+            android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING) + (if (remark.isEmpty()) "" else "#$remark")
+    } catch (e: Exception) {
+        null
+    }
 
     /**
      * Which ports a group of configs uses.
@@ -260,11 +303,16 @@ object CombineEngine {
         val done = AtomicInteger(0)
         val total = nodes.size
 
+        val cfnet = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context)
         nodes.map { node ->
             async {
                 gate.acquire()
                 try {
                     val delayMs = measureUri(context, node.uri)
+                    // How each row was dialled, ids and numbers only: «written» = the handshake the
+                    // combine wrote into it, else the strategy the engine stamped, else none.
+                    val how = runCatching { VpnConfig.parseUri(node.uri)?.let { cfnet.describe(it, com.mlmvpn.scanner.engines.cfnet.CfStage.CONNECT) } }.getOrNull()
+                    android.util.Log.i("CfNet", "health: via=$how ${if (delayMs > 0) "ok ms=$delayMs" else "no answer"}")
                     if (delayMs > 0) node.copy().also { it.delay = "${delayMs}ms" } else null
                 } finally {
                     gate.release()
@@ -292,9 +340,10 @@ object CombineEngine {
         try {
             val parsed = VpnConfig.parseUri(uri)
             if (parsed == null || parsed.address.isEmpty()) return@withContext 0L
-            // With a fresh verdict that Cloudflare IPv4 carries nothing here, a Cloudflare-fronted
-            // config is measured on its IPv6 twin -- what the connect will actually use.
-            val config = CfEdgeHeal.heal(context, parsed, probe = false)
+            // Health is a verdict about THIS endpoint. Replacing it with an IPv6 twin or another
+            // cached edge mislabels every row and can discard IPv4 routes that need a TLS shape.
+            val config = parsed
+            com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context)
             ensureCoreEnv(context)
             val json = com.mlmvpn.scanner.utils.XrayJsonGenerator.generateSpeedtestConfig(config)
             measureDelay(json, timeoutMs = timeoutMs)
@@ -329,30 +378,71 @@ object CombineEngine {
      * thread costs one stuck core instance until its socket errors out; restarting whatever it was
      * measuring through (the SNI front, say) breaks its connection and collects it.
      */
+    private val delayThreads = kotlinx.coroutines.sync.Semaphore(com.mlmvpn.scanner.utils.ThreadBudget.parallel(64))
+
     suspend fun measureDelay(
         json: String,
         url: String = DELAY_TEST_URL,
         timeoutMs: Long = DELAY_TEST_TIMEOUT_MS,
     ): Long {
         val done = kotlinx.coroutines.CompletableDeferred<Long>()
+        // A thread of its own is held until the core returns, even after we walk away, so their
+        // number is capped: "test all" on hundreds of configs started one per config and an old
+        // phone ran out of threads (pthread_create failed, Android 8, 1.2.39). The permit goes back
+        // when the thread ends, not when the wait times out.
+        if (kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { delayThreads.acquire() } == null) return 0L
         // A bare daemon thread, not a dispatcher: the point is to be able to walk away, and a
         // coroutine on Dispatchers.IO would hold one of that pool's threads for as long as the core
         // holds this one. Daemon, so a stuck measurement can never keep the process alive.
-        Thread({
-            val v = try {
-                libv2ray.Libv2ray.measureOutboundDelay(json, url)
-            } catch (t: Throwable) {
-                // Throwable: this is JNI, so a device without the core raises UnsatisfiedLinkError,
-                // which is an Error and walks straight past `catch (Exception)`.
-                0L
-            }
-            done.complete(v)
-        }, "xray-delay").apply { isDaemon = true }.start()
+        try {
+            Thread({
+                val v = try {
+                    // In `:xmeasure` (XrayMeasureService) only: a public config that panics Xray ends
+                    // that process, not the app. It used to fall back to this process when that one
+                    // could not be reached -- and then the panic closed the app after all.
+                    isolated(json, url, timeoutMs)
+                } catch (t: Throwable) {
+                    // Throwable: this is JNI, so a device without the core raises UnsatisfiedLinkError,
+                    // which is an Error and walks straight past `catch (Exception)`.
+                    0L
+                } finally {
+                    delayThreads.release()
+                }
+                done.complete(v)
+            }, "xray-delay").apply { isDaemon = true }.start()
+        } catch (_: OutOfMemoryError) {
+            delayThreads.release()
+            return 0L
+        }
         return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { done.await() } ?: 0L
     }
 
+    @Volatile private var appContext: Context? = null
+    private val measureHost by lazy { com.mlmvpn.core.warp.AwgHostClient(com.mlmvpn.core.warp.XrayMeasureService::class.java, "XrayMeasureClient") }
+
+    /**
+     * One delay test in the `:xmeasure` process: the delay, or 0 when nothing came back -- a
+     * timeout, that process dying under it (a panicking config), or no process to reach.
+     */
+    private fun isolated(json: String, url: String, timeoutMs: Long): Long {
+        val ctx = appContext ?: return 0L
+        val reply = measureHost.call(ctx, com.mlmvpn.core.warp.XrayMeasureService.MSG_MEASURE, android.os.Bundle().apply {
+            putString(com.mlmvpn.core.warp.XrayMeasureService.KEY_CONFIG, json)
+            putString(com.mlmvpn.core.warp.XrayMeasureService.KEY_URL, url)
+        }, timeoutMs + 2_000)
+        return reply?.getLong(com.mlmvpn.core.warp.XrayMeasureService.KEY_DELAY) ?: 0L
+    }
+
+    /** From Application.onCreate, so every caller's tests go to `:xmeasure`, not only those that set up the core here. */
+    fun bind(context: Context) { if (appContext == null) appContext = context.applicationContext }
+
     /** Idempotent; the core ignores a second call, and the first is what the JNI layer needs. */
     fun ensureCoreEnv(context: Context) {
+        if (appContext == null) appContext = context.applicationContext
+        // No core runs in the main process any more (XrayHosts, `:xmeasure`), so it does not load
+        // the core at all: a Go runtime in the app process was one more thing that could abort it,
+        // and its library in every tombstone named it as the culprit of crashes it had no part in.
+        if (com.mlmvpn.core.warp.XrayHosts.inMainProcess(context)) return
         try {
             val keyBytes = ByteArray(32)
             java.security.SecureRandom().nextBytes(keyBytes)

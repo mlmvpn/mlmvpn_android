@@ -24,8 +24,12 @@ object LastEngine {
     private const val KEY_NODE_ID = "last_engine_node_id"
     private const val KEY_TRANSPORT = "last_engine_transport"
 
+    private const val KEY_OVPN_PROFILE = "last_engine_ovpn_profile"
+    private const val KEY_OVPN_ACCOUNT = "last_engine_ovpn_account"
+
     private const val KIND_XRAY = "xray"
     private const val KIND_TUNNEL = "tunnel"
+    private const val KIND_OPENVPN = "openvpn"
 
     /** What to bring back, and with which service. */
     sealed class Record {
@@ -42,6 +46,9 @@ object LastEngine {
 
         /** One of the five transports, by [com.mlmvpn.scanner.ui.tunnel.Transport.id]. */
         data class Tunnel(val transportId: String) : Record()
+
+        /** An OpenVPN profile (its own service, [com.mlmvpn.scanner.openvpn.OpenVpnService]), with its account. */
+        data class OpenVpn(val profileId: String, val accountId: String) : Record()
     }
 
     private fun prefs(context: Context) =
@@ -61,14 +68,49 @@ object LastEngine {
      */
     const val FLUX_MARKER = "flux"
 
-    private fun isMae(nodeId: String?) = nodeId == MAE_MARKER || nodeId == FLUX_MARKER
+    /** FENIX likewise: its config carries a short-lived pass, so the tile asks FENIX for a new one. */
+    const val FENIX_MARKER = "fenix"
+    /** The real config contains a private key. Reconnect through the encrypted provider repository. */
+    const val WINDSCRIBE_MARKER = "windscribe"
+
+    /**
+     * The Amnezia engine (Amnezia, Proton) and Outline likewise: the config carries a private key, and
+     * a Proton server's points at a relay port that exists only while that relay runs -- replayed raw
+     * it reached nothing. The tile asks the engine to connect its last server again.
+     */
+    const val AMNEZIA_MARKER = "amnezia"
+    const val OUTLINE_MARKER = "outline"
+
+    private fun isMae(nodeId: String?) = nodeId == MAE_MARKER || nodeId == FLUX_MARKER || nodeId == FENIX_MARKER ||
+        nodeId == WINDSCRIBE_MARKER || nodeId == AMNEZIA_MARKER || nodeId == OUTLINE_MARKER
+
+    /**
+     * An Amnezia server reached through Cloudflare, likewise by name: its config carries the app's
+     * own WARP key, and its way in (the endpoint, the key) is chosen per network -- the tile asks the
+     * Amnezia engine to connect that server again instead of replaying another network's carrier.
+     */
+    const val AMNEZIA_CF_MARKER = "amnezia-cf"
+
+    private fun isAmneziaCf(uri: String): Boolean =
+        uri.startsWith("{") && uri.contains(com.mlmvpn.scanner.engines.amnezia.AmzCarrier.REMARKS)
 
     fun recordXray(context: Context, uri: String?, nodeId: String?) {
         if (uri.isNullOrBlank()) return
         prefs(context).edit()
             .putString(KEY_KIND, KIND_XRAY)
-            .putString(KEY_URI, if (isMae(nodeId)) nodeId else uri)
+            .putString(KEY_URI, when { isMae(nodeId) -> nodeId; isAmneziaCf(uri) -> AMNEZIA_CF_MARKER; else -> uri })
             .putString(KEY_NODE_ID, nodeId)
+            .apply()
+    }
+
+    /** On OpenVPN's CONNECTED. Windscribe's own profiles are not recorded here: Windscribe records itself. */
+    fun recordOpenVpn(context: Context, profileId: String?, accountId: String?) {
+        if (profileId.isNullOrBlank() || accountId.isNullOrBlank()) return
+        if (profileId.startsWith(com.mlmvpn.scanner.engines.windscribe.WindscribeEngine.PROFILE_PREFIX)) return
+        prefs(context).edit()
+            .putString(KEY_KIND, KIND_OPENVPN)
+            .putString(KEY_OVPN_PROFILE, profileId)
+            .putString(KEY_OVPN_ACCOUNT, accountId)
             .apply()
     }
 
@@ -96,6 +138,12 @@ object LastEngine {
                 ?.takeIf { it.isNotBlank() }
                 ?.let { Record.Tunnel(it) }
 
+            KIND_OPENVPN -> {
+                val profile = p.getString(KEY_OVPN_PROFILE, null)
+                val account = p.getString(KEY_OVPN_ACCOUNT, null)
+                if (profile.isNullOrBlank() || account.isNullOrBlank()) null else Record.OpenVpn(profile, account)
+            }
+
             else -> null
         }
     }
@@ -106,6 +154,8 @@ object LastEngine {
             .remove(KEY_URI)
             .remove(KEY_NODE_ID)
             .remove(KEY_TRANSPORT)
+            .remove(KEY_OVPN_PROFILE)
+            .remove(KEY_OVPN_ACCOUNT)
             .apply()
     }
 }

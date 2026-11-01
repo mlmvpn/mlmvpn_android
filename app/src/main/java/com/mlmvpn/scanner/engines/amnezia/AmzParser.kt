@@ -14,9 +14,9 @@ import java.util.zip.ZipInputStream
  *
  * Hysteria2 goes through FLUX's strict reader, with two differences that suit a list the user
  * browses rather than one an engine races blind:
- *  - `insecure=1` is dropped rather than refused. The core verifies the certificate, so a server
- *    with a real one works and one with a self-signed one fails its delay test -- the test decides,
- *    and nothing ever connects with checks off.
+ *  - `insecure=1` is not refused: it marks the server [AmzServer.selfSigned]. The core never runs
+ *    with checks off; instead the server's own certificate is read ([QuicCertProbe]) and pinned
+ *    (`pinSHA256`), so exactly that certificate passes and nothing else does.
  *  - port hopping (`mport`) is dropped too; the server's main port still answers.
  */
 object AmzParser {
@@ -107,23 +107,50 @@ object AmzParser {
             id = "h" + node.id.take(19), kind = AmzKind.HY2, raw = clean,
             name = label.ifEmpty { node.server }, host = node.server, port = node.port,
             country = cc, countryFrom = from, sourceId = sourceId, addedAt = now,
+            selfSigned = insecure(link) && node.certPin.isEmpty(),
         )
     }
 
-    /** Drops `insecure`/`allowInsecure` (the core checks certificates) and port hopping. */
+    /**
+     * Drops `insecure`/`allowInsecure` (the core checks certificates) and port hopping; a usable
+     * `pinSHA256` is kept, in the one spelling the reader takes.
+     */
     fun sanitizeHy2(link: String): String {
         val hash = link.indexOf('#')
         val frag = if (hash >= 0) link.substring(hash) else ""
         val noFrag = if (hash >= 0) link.substring(0, hash) else link
         val qm = noFrag.indexOf('?')
         if (qm < 0) return link.trim()
-        val kept = noFrag.substring(qm + 1).replace("&amp;", "&").split('&').filter { kv ->
+        val kept = noFrag.substring(qm + 1).replace("&amp;", "&").split('&').mapNotNull { kv ->
             val k = kv.substringBefore('=').lowercase()
-            kv.isNotEmpty() && k != "insecure" && k != "allowinsecure" && k != "mport" && k != "pinsha256"
+            when {
+                kv.isEmpty() || k == "insecure" || k == "allowinsecure" || k == "mport" -> null
+                k == "pinsha256" -> FluxLinkParser.certPin(runCatching { java.net.URLDecoder.decode(kv.substringAfter('=', ""), "UTF-8") }.getOrDefault(""))
+                    .takeIf { it.isNotEmpty() }?.let { "pinSHA256=$it" }
+                else -> kv
+            }
         }
         val base = noFrag.substring(0, qm)
         return (if (kept.isEmpty()) base else base + "?" + kept.joinToString("&")) + frag
     }
+
+    /** [raw] pinned to [pin] (64 hex digits): a new pin replaces an old one. */
+    fun withPin(raw: String, pin: String): String {
+        val hash = raw.indexOf('#')
+        val frag = if (hash >= 0) raw.substring(hash) else ""
+        val noFrag = if (hash >= 0) raw.substring(0, hash) else raw
+        val base = noFrag.substringBefore('?')
+        val kept = noFrag.substringAfter('?', "").split('&').filter { it.isNotEmpty() && !it.substringBefore('=').equals("pinSHA256", true) }
+        return base + "?" + (kept + "pinSHA256=$pin").joinToString("&") + frag
+    }
+
+    /** The link asks for certificate checks off: a self-signed server. */
+    private fun insecure(link: String): Boolean =
+        link.substringBefore('#').substringAfter('?', "").replace("&amp;", "&").split('&').any { kv ->
+            val k = kv.substringBefore('=').lowercase()
+            val v = kv.substringAfter('=', "").lowercase()
+            (k == "insecure" || k == "allowinsecure") && (v == "1" || v == "true")
+        }
 
     /**
      * The country a server's name claims, or the list's own country. A list that is ABOUT one

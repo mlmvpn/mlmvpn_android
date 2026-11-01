@@ -1,5 +1,9 @@
 ﻿package com.mlmvpn.scanner.engines.rstaspoof
 
+import com.mlmvpn.scanner.utils.alive
+import com.mlmvpn.scanner.utils.killHard
+import com.mlmvpn.scanner.utils.waitUpTo
+
 import android.content.Context
 import android.util.Log
 import java.io.File
@@ -402,7 +406,7 @@ object RstaSpoofManager {
             // * and [restart] refused outright, reporting no owner for a front it was holding.
             //
             // The outright stop still zeroes the count -- in [stop], where it belongs.
-            process?.destroyForcibly()
+            process?.killHard()
             process = null
             isRunningFlow.value = false
             Log.d(TAG, ">>> Stopped rstaspoof process")

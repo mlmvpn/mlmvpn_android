@@ -370,8 +370,9 @@ fun StudioBulkActionScreen(
     // now, and a mis-tap on a list of two hundred is not a thing to discover from support messages.
     if (confirmDisable) {
         IosAlert(
-            title = S(R.string.studio_bulk_disable_title),
-            message = S(R.string.studio_bulk_disable_body).replace("%1\$s", faNum(targets.size)),
+            // The count is in the title; the body has none to fill.
+            title = S(R.string.studio_bulk_disable_title).replace("%1\$s", faNum(targets.size)),
+            message = S(R.string.studio_bulk_disable_body),
             actions = listOf(
                 IosAlertAction(S(R.string.studio_cancel), { confirmDisable = false }),
                 IosAlertAction(S(R.string.studio_bulk_disable), {
@@ -403,8 +404,9 @@ fun StudioBulkActionScreen(
 
     if (confirmDelete) {
         IosAlert(
-            title = S(R.string.studio_bulk_delete_title),
-            message = S(R.string.studio_bulk_delete_body).replace("%1\$s", faNum(targets.size)),
+            // The count is in the title; the body has none to fill.
+            title = S(R.string.studio_bulk_delete_title).replace("%1\$s", faNum(targets.size)),
+            message = S(R.string.studio_bulk_delete_body),
             actions = listOf(
                 IosAlertAction(S(R.string.studio_cancel), { confirmDelete = false }),
                 IosAlertAction(S(R.string.studio_bulk_delete), {

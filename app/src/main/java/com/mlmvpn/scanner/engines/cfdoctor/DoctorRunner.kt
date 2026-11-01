@@ -43,7 +43,9 @@ class DoctorRunner(val plan: DoctorPlan,private val probes: DoctorProbe,
     }
     fun record(row: Evidence) { update { p -> if(!p.running || p.rows.size>=plan.maxAttempts) p else p.copy(rows=p.rows+row.copy(atMs=now()-started),current=row.id) } }
     fun decision(value: String) { update { it.copy(decisions=it.decisions+value) } }
-    private fun available()=state.value.rows.size<plan.maxAttempts && now()-started<plan.maxMs && budget.used.get()<plan.maxBytes
+    /** The whole run's ceiling: the plan's, or longer when the v3 stages need it. */
+    private val totalMs=maxOf(plan.maxMs,STAGES_MS+240_000)
+    private fun available()=state.value.rows.size<plan.maxAttempts && now()-started<totalMs && budget.used.get()<plan.maxBytes
     private suspend fun attempt(id: String,key: String,fragment: Boolean=false,block: suspend (Int)->Evidence) {
         slots.withPermit { locks.getOrPut(key) { Semaphore(1) }.withPermit inner@{
             currentCoroutineContext().ensureActive()
@@ -59,7 +61,7 @@ class DoctorRunner(val plan: DoctorPlan,private val probes: DoctorProbe,
         check(!state.value.running)
         started=now(); update { DoctorProgress(running=true) }
         try {
-            val completed=withTimeoutOrNull(plan.maxMs) {
+            val completed=withTimeoutOrNull(totalMs) {
                 decision("tier0:triage")
                 withTimeoutOrNull(plan.tiersMs[0]) { coroutineScope {
                     listOf("www.google.com","www.wikipedia.org","www.msftconnecttest.com","www.aparat.com","www.digikala.com").forEachIndexed { i,h -> launch { probe(ProbeSpec("T6",h,route=if(i<3) "foreign" else "domestic",method="HEAD")) } }
@@ -78,7 +80,7 @@ class DoctorRunner(val plan: DoctorPlan,private val probes: DoctorProbe,
                     return@withTimeoutOrNull true
                 }
                 decision("tier1:baseline_stages")
-                withTimeoutOrNull(plan.tiersMs[1]) {
+                withTimeoutOrNull(maxOf(plan.tiersMs[1], STAGES_MS + 60_000)) {
                     // Discover anchors before scheduling anything that depends on them. Keep
                     // baseline stages bounded so they cannot starve the fixed comparison core.
                     runMethods(setOf("T1"),"core")
@@ -106,7 +108,7 @@ class DoctorRunner(val plan: DoctorPlan,private val probes: DoctorProbe,
             }
             if(completed==null) decision("stop:total_budget")
             // "Complete" means everything planned ran: no tier or stage hit its deadline.
-            val cut=state.value.decisions.any { it.endsWith(":deadline") || it.startsWith("stop:") || it.contains(":budget") }
+            val cut=state.value.decisions.any { (it.endsWith(":deadline") && !it.startsWith("tier2:")) || it.startsWith("stop:") || it.contains(":budget") }
             update { it.copy(complete=completed==true && available() && !cut) }
         } catch(e: CancellationException) { decision("stop:cancelled"); throw e }
         catch(e: Exception) { decision("stop:internal_error") }
@@ -189,7 +191,8 @@ class DoctorRunner(val plan: DoctorPlan,private val probes: DoctorProbe,
     }
     companion object {
         /** ST1..ST4 together. */
-        const val STAGES_MS = 200_000L
+        /** The four v3 stages together (account, panels, scan, connect): long, because they try every way. */
+        const val STAGES_MS = 1_500_000L
         /** Config variations after the core. */
         const val VARIANTS_MS = 150_000L
     }

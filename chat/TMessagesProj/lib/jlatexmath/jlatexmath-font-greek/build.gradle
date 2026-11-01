@@ -1,0 +1,16 @@
+apply plugin: 'com.android.library'
+
+android {
+
+    compileSdkVersion config['target-sdk']
+    buildToolsVersion config['build-tools']
+
+    defaultConfig {
+        minSdkVersion config['min-sdk']
+        targetSdkVersion config['target-sdk']
+        versionCode 1
+        versionName version
+    }
+}
+
+registerArtifact(this)

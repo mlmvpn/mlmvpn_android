@@ -142,7 +142,7 @@ object NetraPanel {
         repeat(4) { attempt ->
             try {
                 val req = Request.Builder().url("${inst.url}/${inst.subPath}/sub/raw?app=xray").get().build()
-                com.mlmvpn.scanner.update.UpdateNet.client(context, 15, 30).newCall(req).execute().use { r ->
+                com.mlmvpn.scanner.update.UpdateNet.client(context, 15, 30, directFirst = true).newCall(req).execute().use { r ->
                     if (!r.isSuccessful) error("HTTP ${r.code}")
                     val body = r.body?.string().orEmpty().trim()
                     val text = runCatching { String(android.util.Base64.decode(body, android.util.Base64.DEFAULT)) }.getOrDefault(body)

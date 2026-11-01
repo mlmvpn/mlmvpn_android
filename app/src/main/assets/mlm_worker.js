@@ -18,6 +18,12 @@ const DNS_CACHE = new Map();
  */
 const XHTTP_SESSIONS = new Map();
 const XHTTP_IDLE_MS = 60000;
+/**
+ * Set on a packet-up request the Worker has handed to the session's Durable Object (03-entry.js),
+ * so the object runs the request instead of forwarding it again. Internal: a client that sends it
+ * only gets the per-isolate behaviour every install had before build 23.
+ */
+const STUDIO_XHTTP_HOP = 'x-studio-xhttp-hop';
 /** Upload POSTs that arrived ahead of their turn, per session: bounded, or a client could grow it forever. */
 const XHTTP_MAX_EARLY_BYTES = 8 * 1024 * 1024;
 let xhttpSweptAt = 0;
@@ -243,6 +249,26 @@ async function handleRequest(request, env, ctx) {
     url.pathname === '/admin' || url.pathname === '/locations' ||
     url.pathname.startsWith('/s/') || url.pathname.startsWith('/p/') ||
     (studioPrefix !== null && url.pathname.startsWith(studioPrefix));
+
+  // XHTTP packet-up through the session's own Durable Object (build 23).
+  //
+  // A packet-up session is a download GET plus upload POSTs that must meet in ONE isolate, and on
+  // workers.dev they did not: the POSTs landed in other isolates and were lost (measured
+  // 2026-09-26), which is why XHTTP was taken out of every create flow. A Durable Object is the one
+  // place Cloudflare guarantees they meet -- every request named `x:{session}` reaches the same
+  // object, in the same isolate -- so each of them is handed to that object, which runs this very
+  // routing again (marked, so it is not forwarded twice) and finds the session it already holds.
+  // Without the SESSIONS binding (an install where Durable Objects were unavailable) nothing changes.
+  if (env.SESSIONS && !reserved && request.headers.get(STUDIO_XHTTP_HOP) !== '1') {
+    const m = url.pathname.match(/^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/(0|[1-9][0-9]*))?$/i);
+    if (m && ((request.method === 'GET' && m[2] === undefined) || (request.method === 'POST' && m[2] !== undefined))) {
+      dbg(env, ctx, 'ROUTE xhttp-do ' + request.method + ' ' + url.pathname);
+      const stub = env.SESSIONS.get(env.SESSIONS.idFromName('x:' + m[1].toLowerCase()));
+      const hop = new Request(request);
+      hop.headers.set(STUDIO_XHTTP_HOP, '1');
+      return await stub.fetch(hop);
+    }
+  }
 
   // XHTTP packet-up's download: the GET runs the whole connection (09-xhttp.js).
   if (request.method === 'GET' && !reserved) {
@@ -807,7 +833,7 @@ const LEGACY_EXPIRES_AT_SQL =
 // Without that binding -- every build-5 installation -- none of this is reachable, and the worker
 // behaves exactly as it did before.
 
-const STUDIO_API_VERSION = 22;
+const STUDIO_API_VERSION = 24;
 
 /** How recently someone must have moved traffic to count as online (see `studioDashboard`). */
 const STUDIO_ONLINE_WINDOW_MS = 180000;
@@ -9507,6 +9533,27 @@ function studioAdmissionVerdict(counts, policy) {
   return { allow: true, reason: null };
 }
 
+/**
+ * One XHTTP packet-up request, inside the session's Durable Object (build 23).
+ *
+ * The object is named after the session (`x:{session}`), so the download GET, the header POST and
+ * every upload POST of one connection arrive HERE, in one isolate -- and the per-isolate session
+ * table (01-globals.js), which was correct all along except that the requests did not meet, now
+ * holds the whole session. The request goes through the ordinary routing; the hop mark keeps it
+ * from being forwarded again. The download response streams back through the Worker untouched.
+ */
+async function studioXhttpInObject(object, request) {
+  const ctx = {
+    waitUntil(p) { try { object.ctx.waitUntil(p); } catch (e) { } },
+    passThroughOnException() { },
+  };
+  try {
+    return await handleRequest(request, object.env, ctx);
+  } catch (e) {
+    return denyTransport('xhttp-do: ' + (e && e.message || e));
+  }
+}
+
 export class SessionDO {
   constructor(ctx, env) {
     this.ctx = ctx;
@@ -9542,6 +9589,11 @@ export class SessionDO {
   }
 
   async fetch(request) {
+    // An XHTTP packet-up request handed over by the Worker (03-entry.js): this object is the
+    // session's meeting point, so the request runs here, through the ordinary routing, against the
+    // session state this isolate already holds. Before anything reads the body -- it is the tunnel.
+    if (request.headers.get(STUDIO_XHTTP_HOP) === '1') return studioXhttpInObject(this, request);
+
     this.ensure();
     const url = new URL(request.url);
     let body = {};

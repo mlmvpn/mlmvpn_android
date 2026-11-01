@@ -115,11 +115,21 @@ object StoreNet {
         )
     }
 
+    /** Thrown out of [download] when the user paused it; the part on disk is kept for later. */
+    class Paused : Exception("paused")
+
     /**
      * Download to [dest], checking size and digest before the file takes its real name.
      *
-     * Every URL is tried in turn — the channel lists a mirror beside the original for hosts that
-     * are blocked from Iran, and the digest is what decides either way.
+     * Resumable: the bytes already on disk (`dest.part`) are kept when the download is paused or the
+     * network drops, and the next attempt asks only for the rest (HTTP Range). A server that ignores
+     * the range and sends the whole file again (200 instead of 206) simply starts it over. A dropped
+     * connection is retried on the same URL, continuing each time; three drops in a row that brought
+     * nothing new move on to the next URL (the channel's mirror). A drop after the file grew does not
+     * count: a big file on a line that falls every few minutes still finishes, over several
+     * connections. The digest of the whole file decides, as before.
+     *
+     * [paused] ends it with [Paused] and keeps the part; [cancelled] ends it and deletes the part.
      */
     fun download(
         context: Context,
@@ -127,58 +137,144 @@ object StoreNet {
         dest: File,
         onProgress: (Long, Long) -> Unit,
         cancelled: () -> Boolean = { false },
+        paused: () -> Boolean = { false },
+    ): File = download(
+        // No ceiling on the whole call: a file takes as long as the line needs (see UpdateNet.client).
+        { UpdateNet.client(context, 15, 60, wholeCallTimeout = false) },
+        artifact, dest, onProgress, cancelled, paused,
+    )
+
+    /** [download] with the HTTP client and the pause between retries given, so a test can run it against a local server. */
+    internal fun download(
+        client: () -> okhttp3.OkHttpClient,
+        artifact: StoreArtifact,
+        dest: File,
+        onProgress: (Long, Long) -> Unit,
+        cancelled: () -> Boolean = { false },
+        paused: () -> Boolean = { false },
+        backoff: (Int) -> Unit = { attempt -> Thread.sleep(2_000L * attempt) },
     ): File {
         dest.parentFile?.mkdirs()
+        val part = File(dest.path + ".part")
+        // The part belongs to one file: a different digest or size means another version.
+        val tag = File(dest.path + ".part.id")
+        val id = "${artifact.sha256}|${artifact.size}|${artifact.name}"
+        if (!tag.exists() || tag.readText() != id) { part.delete(); tag.writeText(id) }
         var last: Exception? = null
         for (url in artifact.urls) {
-            val part = File(dest.path + ".part")
-            try {
-                part.delete()
-                val req = Request.Builder().url(url).header("User-Agent", "mlmvpn-android-store").build()
-                UpdateNet.client(context, 15, 60).newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) throw StoreError("HTTP ${resp.code}")
-                    val body = resp.body ?: throw StoreError("empty response")
-                    val total = body.contentLength().takeIf { it > 0 } ?: artifact.size
-                    val md = MessageDigest.getInstance("SHA-256")
-                    var got = 0L
-                    body.byteStream().use { input ->
-                        part.outputStream().use { out ->
-                            val buf = ByteArray(64 * 1024)
-                            while (true) {
-                                if (cancelled()) throw StoreError(tr("لغو شد", "Cancelled"))
-                                val n = input.read(buf)
-                                if (n < 0) break
-                                out.write(buf, 0, n)
-                                md.update(buf, 0, n)
-                                got += n
-                                onProgress(got, total)
-                            }
-                        }
-                    }
-                    if (artifact.size > 0 && got != artifact.size) {
-                        throw StoreError(tr("دانلود ناقص ماند", "The download was incomplete") + " ($got/${artifact.size})")
-                    }
-                    val digest = md.digest().joinToString("") { "%02x".format(it) }
-                    if (artifact.sha256 != null && digest != artifact.sha256) {
-                        throw StoreError(
-                            tr("هش فایل دانلودشده با نسخهٔ منتشرشده نمی‌خواند — فایل استفاده نشد.",
-                                "The downloaded file does not match the published digest — it was not used.")
-                        )
-                    }
+            var attempt = 0
+            while (true) {
+                val before = if (part.exists()) part.length() else 0L
+                try {
+                    fetchInto(client, url, part, artifact, onProgress, cancelled, paused)
+                    verify(part, artifact)
+                    dest.delete()
+                    if (!part.renameTo(dest)) throw StoreError("rename failed")
+                    tag.delete()
+                    return dest
+                } catch (e: Paused) {
+                    throw e
+                } catch (e: CancelledDownload) {
+                    part.delete(); tag.delete()
+                    throw StoreError(tr("لغو شد", "Cancelled"))
+                } catch (e: BadFile) {
+                    // The bytes are wrong, not late: nothing of them is worth keeping.
+                    part.delete()
+                    last = e
+                    break
+                } catch (e: java.io.IOException) {
+                    // The network dropped: the same URL again, continuing from what arrived. Only drops
+                    // that brought nothing new count towards giving the URL up.
+                    last = e
+                    if ((if (part.exists()) part.length() else 0L) > before) attempt = 0 else attempt++
+                    if (attempt >= 3 || cancelled() || paused()) break
+                    // The line may have changed under a long download (Wi-Fi to mobile, a tunnel coming
+                    // up): the next connection asks for the address again.
+                    if (attempt >= 2) UpdateNet.forgetResolved()
+                    backoff(attempt.coerceAtLeast(1))
+                } catch (e: Exception) {
+                    last = e
+                    break
                 }
-                dest.delete()
-                if (!part.renameTo(dest)) throw StoreError("rename failed")
-                return dest
-            } catch (e: Exception) {
-                part.delete()
-                last = e
-                if (cancelled()) break
             }
+            if (paused()) throw Paused()
+            if (cancelled()) { part.delete(); tag.delete(); throw StoreError(tr("لغو شد", "Cancelled")) }
         }
         throw last ?: StoreError("no URL")
     }
 
-    /** Pull the wanted entries out of a downloaded archive. Returns installed-name -> file. */
+    private class CancelledDownload : Exception()
+    private class BadFile(message: String) : Exception(message)
+
+    private fun fetchInto(
+        client: () -> okhttp3.OkHttpClient, url: String, part: File, artifact: StoreArtifact,
+        onProgress: (Long, Long) -> Unit, cancelled: () -> Boolean, paused: () -> Boolean,
+    ) {
+        val have = if (part.exists()) part.length() else 0L
+        if (artifact.size > 0 && have == artifact.size) return // already whole
+        val req = Request.Builder().url(url).header("User-Agent", "mlmvpn-android-store")
+            .apply { if (have > 0) header("Range", "bytes=$have-") }
+            .build()
+        // A client per connection: it sees the tunnel as it is now, not as it was when the file began.
+        client().newCall(req).execute().use { resp ->
+            val append = resp.code == 206 && have > 0
+            if (resp.code == 416 && have > 0) { part.delete(); throw java.io.IOException("range not satisfiable") }
+            // A busy or rate-limited server is a dropped connection, not a broken file: wait and try again.
+            if (resp.code >= 500 || resp.code == 429 || resp.code == 408) throw java.io.IOException("HTTP ${resp.code}")
+            if (!resp.isSuccessful) throw StoreError("HTTP ${resp.code}")
+            // A range that does not start where the part ends would splice two files together.
+            if (append) resp.header("Content-Range")?.let { cr ->
+                if (!cr.startsWith("bytes $have-")) { part.delete(); throw java.io.IOException("range starts elsewhere: $cr") }
+            }
+            val body = resp.body ?: throw StoreError("empty response")
+            val start = if (append) have else 0L
+            val total = artifact.size.takeIf { it > 0 } ?: body.contentLength().takeIf { it > 0 }?.plus(start) ?: 0L
+            var got = start
+            onProgress(got, total)
+            body.byteStream().use { input ->
+                java.io.FileOutputStream(part, append).use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        if (cancelled()) throw CancelledDownload()
+                        if (paused()) throw Paused()
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        got += n
+                        onProgress(got, total)
+                    }
+                }
+            }
+            if (artifact.size > 0 && got < artifact.size) throw java.io.IOException("short read ($got/${artifact.size})")
+        }
+    }
+
+    private fun verify(part: File, artifact: StoreArtifact) {
+        if (artifact.size > 0 && part.length() != artifact.size) {
+            throw BadFile(tr("دانلود ناقص ماند", "The download was incomplete") + " (${part.length()}/${artifact.size})")
+        }
+        if (artifact.sha256 != null && sha256(part) != artifact.sha256) {
+            throw BadFile(
+                tr("هش فایل دانلودشده با نسخهٔ منتشرشده نمی‌خواند — فایل استفاده نشد.",
+                    "The downloaded file does not match the published digest — it was not used.")
+            )
+        }
+    }
+
+    /**
+     * The developer's newest release, pre-releases included: XTLS publishes almost every Xray
+     * version as a pre-release, so "latest" alone would show one from months ago.
+     */
+    fun newestTag(context: Context, repo: String): String? {
+        val arr = JSONArray(getText(context, "$API/repos/$repo/releases?per_page=5"))
+        for (i in 0 until arr.length()) {
+            val r = arr.getJSONObject(i)
+            if (r.optBoolean("draft")) continue
+            return r.optString("tag_name").ifBlank { null }
+        }
+        return null
+    }
+
     fun extract(archive: File, format: String, wanted: Map<String, String>, outDir: File): Map<String, File> {
         outDir.mkdirs()
         val found = HashMap<String, File>()

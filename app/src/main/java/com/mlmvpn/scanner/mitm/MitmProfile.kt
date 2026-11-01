@@ -59,7 +59,17 @@ object MitmProfile {
             GstLog.e("MitmProfile", "placeholder substitution failed")
             null
         } else {
-            withPaths
+            // Upstream's two TLS terminators listen on every interface, which on a phone means
+            // anyone on the same Wi-Fi could hand them traffic to decrypt with this device's
+            // certificate. Only the config's own `redirect` outbounds use them, and those dial
+            // 127.0.0.1, so loopback is all they need.
+            val j = org.json.JSONObject(withPaths)
+            val inbounds = j.optJSONArray("inbounds")
+            for (i in 0 until (inbounds?.length() ?: 0)) {
+                val ib = inbounds!!.optJSONObject(i) ?: continue
+                if (ib.optString("protocol") == "tunnel") ib.put("listen", "127.0.0.1")
+            }
+            j.toString(2)
         }
     } catch (e: Exception) {
         GstLog.e("MitmProfile", "asset load failed: ${e.message}")
@@ -87,6 +97,11 @@ object MitmProfile {
             .edit().putString("local_port", REQUIRED_PORT).apply()
 
         val manager = NodeManager(context)
+        // Saving before the stored list is in would write this one node over all the others.
+        if (!manager.awaitLoaded()) {
+            GstLog.e("MitmProfile", "config list not loaded in time; nothing written")
+            return false
+        }
         synchronized(manager.nodes) {
             manager.nodes.removeAll { it.id == NODE_ID }
             manager.nodes.add(
@@ -109,6 +124,7 @@ object MitmProfile {
     /** Removes the node (and its folder, which disappears once empty). Certificate is kept. */
     fun remove(context: Context) {
         val manager = NodeManager(context)
+        if (!manager.awaitLoaded()) return
         synchronized(manager.nodes) { manager.nodes.removeAll { it.id == NODE_ID } }
         manager.saveNodes()
     }

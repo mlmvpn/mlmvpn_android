@@ -72,10 +72,22 @@ fun CloudTroubleshootScreen(
     credential: Pair<String, String>? = null,
     /** Fired whenever a lever or a fix changed the account, so the panel behind can catch up. */
     onAccountChanged: () -> Unit = {},
+    /** Opens the existing Scanner tab after Doctor hands off selected configs. */
+    onOpenScanner: () -> Unit = {},
 ) {
     var doctorOpen by remember { mutableStateOf(false) }
     if (doctorOpen) {
-        com.mlmvpn.scanner.ui.doctor.CfDoctorScreen(onBack = { doctorOpen = false }, credential = credential, account = account, visible = LocalTabVisible.current)
+        com.mlmvpn.scanner.ui.doctor.CloudDoctorScreen(
+            onBack = { doctorOpen = false },
+            account = account,
+            credential = credential,
+            onAccountAdded = {
+                doctorOpen = false
+                onAccountChanged()
+                onBack()
+            },
+            onOpenScanner = onOpenScanner,
+        )
         return
     }
     val context = LocalContext.current

@@ -1,0 +1,23 @@
+[package]
+name = "netprobe-native"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "JNI bridge between the netprobe Android app and probe-core"
+publish = false
+
+[lib]
+name = "netprobe"
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1"
+jni = { version = "0.21", default-features = false }
+probe-core = { path = "../../probe-core" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "unwind"
+strip = true

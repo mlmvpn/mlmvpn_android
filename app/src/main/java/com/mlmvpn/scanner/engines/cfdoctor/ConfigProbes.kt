@@ -94,7 +94,7 @@ class ConfigProbes(private val context: Context, private val env: NetEnv, privat
 
     private suspend fun nativeRow(c: VpnConfig, variant: String, id: String, tag: String, terminal: Boolean): Evidence {
         val json = runCatching {
-            val base = XrayJsonGenerator.generateSpeedtestConfig(c.copy())
+            val base = XrayJsonGenerator.generateSpeedtestConfig(c.copy(), strategyStage = null)
             if (variant == "baseline") base else ConfigVariants.apply(base, variant)
         }.getOrElse { return Evidence(if (terminal) "ST3" else id, "$tag:$variant", "config_invalid", numbers = terminalOf(terminal)) }
         val started = env.now()

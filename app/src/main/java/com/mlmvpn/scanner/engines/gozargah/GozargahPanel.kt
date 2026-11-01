@@ -91,7 +91,7 @@ object GozargahPanel {
         return "g" + (1 until n).map { abc[r.nextInt(abc.length)] }.joinToString("")
     }
 
-    private fun client(context: Context): OkHttpClient = com.mlmvpn.scanner.update.UpdateNet.client(context, 15, 30)
+    private fun client(context: Context): OkHttpClient = com.mlmvpn.scanner.update.UpdateNet.client(context, 15, 30, directFirst = true)
     private val JSON = "application/json".toMediaType()
 
     /** `POST /{panel}/api/login`; the session cookie (name=value) or an error. */

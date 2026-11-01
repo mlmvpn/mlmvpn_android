@@ -87,6 +87,8 @@ object RoutePolicy {
             RouteChoice.DIRECT -> route = RouteKind.DIRECT
             RouteChoice.WARP -> if (warpReachable) route = i.warp!!.route
             RouteChoice.AUTO -> Unit
+            // A tunnel pinned by name is decided by the tunnel race before the policy runs.
+            RouteChoice.WIREGUARD, RouteChoice.AMNEZIA, RouteChoice.FENIX -> Unit
         }
         if (i.choice == RouteChoice.AUTO && i.remembered?.isWarp() == true && i.warp == null && i.warpUp) {
             route = i.remembered

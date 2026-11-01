@@ -76,6 +76,15 @@ object CfEdgeHeal {
      */
     suspend fun heal(context: Context, c: VpnConfig, probe: Boolean = true): VpnConfig {
         if (!isCfFronted(c)) return c
+        // A clean-IP config that carries the handshake its scan proved (a combine wrote it in): its
+        // address is the config, and measuring another edge or the IPv6 twin would mislabel the row.
+        if (com.mlmvpn.scanner.engines.cfnet.CfNetManager.current()?.dialledAsWritten(c) == true) return c
+        // The address itself first (CfEdge). Reachability differs by address range and by region:
+        // the Doctor reports showed one edge dead and its neighbour alive on the same line, so
+        // "IPv4 works here" says nothing about THIS config's address. A config pointed at a dead
+        // edge, or at a name the resolver answers with a dead or bogus edge, goes to one that is
+        // proven on this network -- same Worker, its name kept as SNI and host.
+        edgeFor(context, c, probe)?.let { return it }
         val v = CfFamily.current(context)
         if (v?.v4 == true) return c
         // A name that is not a literal IPv4 is left to the phone's resolver unless IPv4 is dead,
@@ -98,6 +107,42 @@ object CfEdgeHeal {
             c
         }
     }
+
+    /**
+     * [c] moved onto a working IPv4 edge when its own address is known (or, with [probe], checked)
+     * not to answer here; null when it is fine as it is, or nothing better is known.
+     */
+    private suspend fun edgeFor(context: Context, c: VpnConfig, probe: Boolean): VpnConfig? =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val name = c.sni.ifBlank { c.wsHost.ifBlank { c.xhttpHost.ifBlank { c.address } } }
+                .takeIf { v4ToLong(it) == null && !CfFamily.isV6(it) } ?: CfEdge.DEFAULT_HOST
+            val addr = c.address
+            val healthy: Boolean? = when {
+                v4ToLong(addr) != null -> when {
+                    CfEdge.isGood(context, addr) -> true
+                    CfEdge.isBad(context, addr) -> false
+                    probe -> CfEdge.check(context, addr, name)
+                    else -> null
+                }
+                // A name: what the phone's resolver makes of it. Bogus or dead answers are the
+                // DNS half of the regional failures.
+                probe -> {
+                    val ips = runCatching { java.net.InetAddress.getAllByName(addr).mapNotNull { it.hostAddress } }.getOrDefault(emptyList())
+                        .filter { v4ToLong(it) != null }
+                    when {
+                        ips.isEmpty() -> null // IPv6-only or unresolved: the family logic below decides
+                        ips.all { com.mlmvpn.scanner.engines.cfdoctor.CfBogon.isBogon(it) } -> false
+                        else -> ips.take(2).any { CfEdge.check(context, it, name) }
+                    }
+                }
+                else -> null
+            }
+            if (healthy != false) return@withContext null
+            val edge = (if (probe) CfEdge.find(context, name, 2) else CfEdge.good(context, 2)).firstOrNull { it != addr }
+                ?: return@withContext null
+            Log.i(TAG, "edge: $addr does not answer here -> $edge")
+            onto(c, edge)
+        }
 
     /** The same, for a link: returns a rewritten link only when it changed. */
     suspend fun healUri(context: Context, uri: String, probe: Boolean = true): String {

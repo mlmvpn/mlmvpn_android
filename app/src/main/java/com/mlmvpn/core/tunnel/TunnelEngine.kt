@@ -55,9 +55,11 @@ object TunnelEngine {
         // Iran filters the WARP registration API. When the user has set up the identity relay,
         // the identity is made through their own Worker and saved where the core loads it, so
         // the core never has to reach the filtered host. See WarpIdRelay.
-        com.mlmvpn.core.warp.WarpIdRelay.ensure(config)
+        // Marked before the identity is made: a seal of the previous session's files, still
+        // running on its own thread, must not remove what this one is about to load.
         preparing = true
         try {
+            com.mlmvpn.core.warp.WarpIdRelay.ensure(config)
             check(nativePrepare(config) == 0) { nativeLastError() }
         } finally {
             preparing = false
@@ -72,9 +74,54 @@ object TunnelEngine {
         )
     }
 
-    fun start(config: String, tunFd: Int): Int = nativeStart(config, tunFd)
+    fun start(config: String, tunFd: Int): Int { coreEnv(config); return nativeStart(config, tunFd) }
 
-    fun startProxy(config: String): Int = nativeStartProxy(config)
+    fun startProxy(config: String): Int { coreEnv(config); return nativeStartProxy(config) }
+
+    /** Dedicated Scout process only: identity provisioning and file ownership belong to its caller. */
+    fun prepareForProbe(config: String) {
+        probeEnv(config)
+        check(nativePrepare(config) == 0) { "probe_prepare_failed" }
+    }
+
+    fun startProxyForProbe(config: String): Int { probeEnv(config); return nativeStartProxy(config) }
+
+    /** Never calls the normal stop hook, which seals the live VPN's identity directory. */
+    fun stopForProbe(): Int = nativeStop()
+
+    private fun probeEnv(config: String) {
+        coreEnv(config)
+        android.system.Os.setenv("AETHER_QUICK_RECONNECT", "0", true)
+    }
+
+    /**
+     * Environment the core reads at run time and the JSON cannot carry.
+     *
+     * AETHER_WG_STALE_SECS: the core declares a WireGuard tunnel dead after 10 s without a
+     * decryptable packet. On WARP-in-WARP the inner hop's replies ride the outer tunnel, and a
+     * gap of 11 s was enough (device log 2026-10-04 19:40): «وارپ در وارپ» carried traffic, the
+     * watchdog fired, and the teardown that followed crashed the old core -- so the user saw it
+     * connect and then drop. The Aether screen's engine already runs with 120 s for the same
+     * reason (AetherOptions.staleSecs); the in-process core gets the same. Set before every start
+     * because the core reads it when the tunnel comes up.
+     */
+    private fun coreEnv(config: String) {
+        runCatching { android.system.Os.setenv("AETHER_WG_STALE_SECS", "120", true) }
+        // WireGuard's scan reads its mode and address family from AETHER_SCAN / AETHER_IP, not from
+        // the JSON (the core's run_wireguard; MASQUE and WARP-in-WARP do take the JSON). Unset, they
+        // fell to "balanced" over IPv4 alone: on a line whose WARP IPv4 is closed -- the phone,
+        // 2026-10-07: 0 of 2540 IPv4 endpoints, IPv6 within seconds -- «وایرگارد» made its identity
+        // and then never connected. The JSON's own values, for whichever transport starts.
+        val cfg = runCatching { JSONObject(config) }.getOrNull() ?: return
+        cfg.optString("scan_mode").ifBlank { null }?.let { mode -> runCatching { android.system.Os.setenv("AETHER_SCAN", mode, true) } }
+        cfg.optString("ip_scan").ifBlank { null }?.let { ip -> runCatching { android.system.Os.setenv("AETHER_IP", ip, true) } }
+        // A remembered WireGuard endpoint that verifies sends the core down a branch that rescans
+        // over IPv4 alone once that endpoint dies mid-session. Its turbo scan finds a fresh endpoint
+        // in seconds, so WireGuard always scans; the other transports keep their quick reconnect.
+        runCatching {
+            android.system.Os.setenv("AETHER_QUICK_RECONNECT", if (cfg.optString("protocol").equals("wireguard", true)) "0" else "1", true)
+        }
+    }
 
     /** True while [prepare] is inside the core, which may be waiting on a filtered API. */
     @Volatile var preparing: Boolean = false
@@ -90,10 +137,10 @@ object TunnelEngine {
      */
     fun stop(): Int {
         if (preparing) {
-            Thread({ runCatching { nativeStop() } }, "core-stop").start()
+            Thread({ try { nativeStop() } finally { com.mlmvpn.core.warp.WarpIdRelay.onCoreStop() } }, "core-stop").start()
             return 0
         }
-        return nativeStop()
+        return try { nativeStop() } finally { com.mlmvpn.core.warp.WarpIdRelay.onCoreStop() }
     }
 
     /** True while the core itself is carrying traffic. See [TunnelStatus]. */

@@ -43,7 +43,7 @@ object VpnGateController {
             // SoftEther's native SSL-VPN rather than OpenVPN — see SoftEtherEngine for why.
             // It dials the server's own address, not the OpenVPN `remote` from the profile,
             // because the two are separate listeners.
-            ctx.startService(
+            com.mlmvpn.scanner.utils.SafeStart.service(ctx, 
                 Intent(ctx, MyVpnService::class.java).apply {
                     putExtra("NODE_URI", SoftEtherEngine.uriFor(server.ip))
                     putExtra("NODE_ID", server.id)
@@ -55,7 +55,7 @@ object VpnGateController {
     /** Same STOP path every other engine uses. */
     fun disconnect(context: Context) {
         val ctx = context.applicationContext
-        ctx.startService(
+        com.mlmvpn.scanner.utils.SafeStart.service(ctx, 
             Intent(ctx, MyVpnService::class.java).apply { action = "STOP" }
         )
     }

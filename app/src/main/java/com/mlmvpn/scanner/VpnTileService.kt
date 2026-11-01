@@ -7,25 +7,14 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.widget.Toast
-import androidx.preference.PreferenceManager
-import com.mlmvpn.core.tunnel.CoreConfig
 import com.mlmvpn.core.tunnel.TunnelStatus
 import com.mlmvpn.core.tunnel.TunnelVpnService
 import com.mlmvpn.scanner.data.EngineLadder
-import com.mlmvpn.scanner.data.LastEngine
+import com.mlmvpn.scanner.data.LastEngineReplay
 import com.mlmvpn.scanner.data.NodeManager
-import com.mlmvpn.scanner.engines.rstaspoof.SniSession
-import com.mlmvpn.scanner.ui.httpDelay
-import com.mlmvpn.scanner.ui.tunnel.Transport
-import com.mlmvpn.scanner.ui.tunnel.TunnelExclusion
-import com.mlmvpn.scanner.utils.LocalPort
-import com.mlmvpn.scanner.utils.NetworkSettings
-import com.mlmvpn.scanner.utils.VpnConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.mlmvpn.scanner.R
@@ -43,8 +32,9 @@ import com.mlmvpn.scanner.utils.S
  *
  * One tile, and it works out the answer itself:
  *
- *  - **Something is up** -> stop it, whichever service holds it.
- *  - **A transport was last used** -> bring that transport back.
+ *  - **Something is up** -> stop it, whichever service or engine holds it ([com.mlmvpn.scanner.data.VpnSwitch]).
+ *  - **A transport was last used** -> bring that transport back. Likewise an OpenVPN profile, and the
+ *    engines that pick their own route (Amnezia/Proton, Outline, FLUX, FENIX, MAE, Windscribe).
  *  - **A special engine was last used** (Aether, VPN Gate, the anti-sanction relay, the game
  *    booster, a Quick Connect server) -> replay exactly that, because the engine's identity is
  *    in the URI and re-racing a list would connect to something else entirely.
@@ -82,18 +72,10 @@ class VpnTileService : TileService() {
             setTile(Tile.STATE_INACTIVE)
             return
         }
-        if (TunnelStatus.isActive()) {
-            startService(
-                Intent(this, TunnelVpnService::class.java)
-                    .setAction(TunnelVpnService.ACTION_DISCONNECT)
-            )
-            setTile(Tile.STATE_INACTIVE)
-            return
-        }
-        if (MyVpnService.isRunning) {
-            startService(Intent(this, MyVpnService::class.java).apply { action = "STOP" })
-            MyVpnService.isRunning = false
-            MyVpnService.connectedNodeId = null
+        // Every service and engine, not just the two VPN services this tile used to know: OpenVPN
+        // (and Windscribe's OpenVPN family) read as "off" and a tap connected something else on top.
+        if (com.mlmvpn.scanner.data.VpnSwitch.isUp(this) || com.mlmvpn.scanner.data.VpnSwitch.engineBusy()) {
+            com.mlmvpn.scanner.data.VpnSwitch.stopAll(this)
             setTile(Tile.STATE_INACTIVE)
             return
         }
@@ -108,6 +90,13 @@ class VpnTileService : TileService() {
             return
         }
 
+        // MLM Scout is measuring the line itself: a tunnel now would make every number about the
+        // tunnel instead. The tile has no screen to ask on, so it says why and does nothing.
+        if (com.mlmvpn.scanner.engines.scout.ScoutEngine.isRunning()) {
+            toast(com.mlmvpn.scanner.store.tr("MLM Scout در حال بررسی است؛ اول آن را متوقف کنید", "MLM Scout is running; stop it first"))
+            return
+        }
+
         reconnectLast()
     }
 
@@ -117,37 +106,15 @@ class VpnTileService : TileService() {
         setTile(Tile.STATE_UNAVAILABLE, S(R.string.tile_connecting))
         scope.launch {
             try {
-                when (val last = LastEngine.read(applicationContext)) {
-                    is LastEngine.Record.Tunnel -> connectTransport(last.transportId)
-
-                    is LastEngine.Record.Xray -> if (last.nodeId == LastEngine.MAE_MARKER) {
-                        // MAE decides per network: a fresh config for this one, never the last one.
-                        startMae()
-                    } else if (last.nodeId == LastEngine.FLUX_MARKER) {
-                        // FLUX connects itself: this network's known route at once, or a race.
-                        withContext(Dispatchers.IO) { TunnelExclusion.releaseForXray(applicationContext) }
-                        com.mlmvpn.scanner.engines.flux.FluxEngine.connectAsync(applicationContext)
-                    } else {
-                        // An SNI config is in the user's list too, but racing the list would
-                        // connect to something else entirely -- and the SNI configs all point at
-                        // the same local port, so a race between them measures one socket eight
-                        // times. It is replayed exactly; MyVpnService brings the SNI front up
-                        // itself when it sees where the config points.
-                        val fromUserList = !SniSession.isSniUri(last.uri) &&
-                            last.nodeId != null &&
-                            withContext(Dispatchers.IO) {
-                                NodeManager(applicationContext).nodes.any { it.id == last.nodeId }
-                            }
-                        if (fromUserList) raceUserConfigs() else replayXray(last.uri, last.nodeId)
-                    }
-
+                // Shared with MLM Scout's «وصل کردن دوباره»: see LastEngineReplay.
+                if (!LastEngineReplay.replay(applicationContext)) {
                     // Nothing has ever connected on this device. Rather than opening the app and
                     // giving up -- which is what this used to do and what read as a dead button --
                     // walk the transports until one is actually carrying traffic. See EngineLadder.
-                    null -> if (withContext(Dispatchers.IO) { NodeManager(applicationContext).nodes.isEmpty() }) {
+                    if (withContext(Dispatchers.IO) { NodeManager(applicationContext).nodes.isEmpty() }) {
                         EngineLadder.start(applicationContext)
-                    } else {
-                        raceUserConfigs()
+                    } else if (!LastEngineReplay.raceUserConfigs(applicationContext)) {
+                        toast(S(R.string.no_server_available_add_a_config_first))
                     }
                 }
             } catch (e: Exception) {
@@ -156,99 +123,6 @@ class VpnTileService : TileService() {
                 busy = false
                 refreshTile()
             }
-        }
-    }
-
-    /** One of the five transports, by id. */
-    private suspend fun connectTransport(transportId: String) {
-        val transport = Transport.entries.firstOrNull { it.id == transportId }
-        if (transport == null) {
-            // The id no longer maps to a transport -- a build that dropped one. Fall back to the
-            // configs rather than doing nothing, which is what the user would see otherwise.
-            raceUserConfigs()
-            return
-        }
-        withContext(Dispatchers.IO) {
-            // Only one VpnService may hold the device tun; the second establish() takes it from
-            // the first rather than failing. See TunnelExclusion.
-            TunnelExclusion.releaseForTunnelStack(applicationContext)
-            val config = CoreConfig.json(applicationContext, transport.value)
-            startForegroundService(
-                Intent(this@VpnTileService, TunnelVpnService::class.java)
-                    .setAction(TunnelVpnService.ACTION_CONNECT)
-                    .putExtra(TunnelVpnService.EXTRA_CONFIG, config)
-            )
-        }
-    }
-
-    /** MAE, compiled now for this network (its engine then follows the session by itself). */
-    private suspend fun startMae() {
-        withContext(Dispatchers.IO) { TunnelExclusion.releaseForXray(applicationContext) }
-        val config = withContext(Dispatchers.IO) { com.mlmvpn.scanner.engines.mae.MaeEngine.freshConfig(applicationContext) }
-        startXray(config, com.mlmvpn.scanner.engines.mae.MaeEngine.NODE_ID)
-    }
-
-    /** Replay one specific engine, exactly as it was. */
-    private suspend fun replayXray(uri: String, nodeId: String?) {
-        withContext(Dispatchers.IO) { TunnelExclusion.releaseForXray(applicationContext) }
-        startXray(uri, nodeId)
-    }
-
-    /**
-     * Test the most recent N configs and connect to the fastest.
-     *
-     * N is the Quick-connect server count from Advanced VPN settings. All N are probed at once,
-     * because the point of a tile is that it finishes while the shade is still open -- a serial
-     * walk of twenty servers would not.
-     */
-    private suspend fun raceUserConfigs() {
-        val count = PreferenceManager.getDefaultSharedPreferences(this)
-            .getInt("quick_tile_count", 20)
-            .coerceIn(1, 200)
-        val nodes = withContext(Dispatchers.IO) {
-            NodeManager(applicationContext).nodes
-                .sortedByDescending { it.addedAt }
-                .take(count)
-        }
-        if (nodes.isEmpty()) {
-            toast(S(R.string.no_server_available_add_a_config_first))
-            return
-        }
-
-        val scored = nodes.map { node ->
-            scope.async(Dispatchers.IO) {
-                val cfg = VpnConfig.parseUri(node.uri)
-                val ms = if (cfg != null && cfg.address.isNotBlank()) {
-                    try { httpDelay(cfg.address, cfg.port) } catch (e: Exception) { -1 }
-                } else {
-                    -1
-                }
-                node to ms
-            }
-        }.awaitAll()
-
-        // If nothing answered, the newest is still a better guess than refusing to act: the probe
-        // is a plain reachability check and a blocked network fails all of them equally.
-        val chosen = scored.filter { it.second in 1..8000 }.minByOrNull { it.second }?.first
-            ?: nodes.first()
-        startXray(chosen.uri, chosen.id)
-    }
-
-    private suspend fun startXray(uri: String, nodeId: String?) {
-        val intent = Intent(this, MyVpnService::class.java).apply {
-            putExtra("NODE_URI", uri)
-            putExtra("NODE_ID", nodeId)
-            // The app-wide settings, the same ones every other start path reads.
-            putExtra("PROXY_MODE", NetworkSettings.proxyMode(this@VpnTileService))
-            putExtra("LOCAL_PORT", LocalPort.getString(this@VpnTileService))
-        }
-        withContext(Dispatchers.Main) {
-            // MyVpnService is a plain VpnService started via startService() (it never calls
-            // startForeground); startForegroundService() would ANR with "did not then call
-            // startForeground()".
-            startService(intent)
-            MyVpnService.isRunning = true
-            MyVpnService.connectedNodeId = nodeId
         }
     }
 
@@ -272,7 +146,7 @@ class VpnTileService : TileService() {
             setTile(Tile.STATE_UNAVAILABLE, S(R.string.tile_connecting))
             return
         }
-        val up = MyVpnService.isRunning || TunnelStatus.isActive()
+        val up = com.mlmvpn.scanner.data.VpnSwitch.isUp(this)
         setTile(if (up) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE)
     }
 

@@ -160,7 +160,11 @@ fun WizardField(
                         fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default,
                     ),
                     cursorBrush = SolidColor(Ios.Blue),
-                    modifier = Modifier.fillMaxWidth(),
+                    // The field fills the whole box. A box of several lines is taller than that many
+                    // lines of text, and a tap on its lower part used to land outside the field and
+                    // do nothing -- the note box on a person's page looked open and was not.
+                    modifier = Modifier.fillMaxWidth()
+                        .then(if (lines > 1) Modifier.heightIn(min = 46.dp * lines - 16.dp) else Modifier),
                     decorationBox = { inner ->
                         Box {
                             if (value.isEmpty()) {

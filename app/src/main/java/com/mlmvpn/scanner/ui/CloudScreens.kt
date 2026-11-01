@@ -230,6 +230,7 @@ fun ColumnScope.CloudAddAccountForm(
                 value = apiKey,
                 onValueChange = { apiKey = it },
                 placeholder = S(R.string.global_key),
+                secret = true,
             )
         }
         SettingsFooter(
@@ -445,6 +446,9 @@ fun CloudPanelHeaderRow(
     stale: Boolean = false,
     /** Which panel, for its mark; worked out from [title] when not given. */
     engine: String = engineOfTitle(title),
+    /** The pill's words when the row is on / off, for a row that is not «installed» (the central Worker's panels are «connected»). */
+    onLabel: String? = null,
+    offLabel: String? = null,
     onClick: () -> Unit,
 ) {
     val deployed = state == "done"
@@ -495,8 +499,8 @@ fun CloudPanelHeaderRow(
         when {
             busy -> CircularProgressIndicator(modifier = Modifier.size(15.dp), color = Ios.Blue, strokeWidth = 2.dp)
             stale -> PanelStatePill(com.mlmvpn.scanner.store.tr("به‌روزرسانی", "Update"), Ios.Orange)
-            deployed -> PanelStatePill(com.mlmvpn.scanner.store.tr("نصب شده", "Installed"), Ios.Green)
-            else -> PanelStatePill(com.mlmvpn.scanner.store.tr("نصب نشده", "Not installed"), Ios.SecondaryLabel)
+            deployed -> PanelStatePill(onLabel ?: com.mlmvpn.scanner.store.tr("نصب شده", "Installed"), Ios.Green)
+            else -> PanelStatePill(offLabel ?: com.mlmvpn.scanner.store.tr("نصب نشده", "Not installed"), Ios.SecondaryLabel)
         }
         Spacer(Modifier.width(6.dp))
         Icon(
@@ -525,6 +529,7 @@ private fun PanelStatePill(text: String, tint: Color) {
 /** One or two letters for a panel's mark. */
 fun panelMonogram(engine: String): String = when (engine) {
     "EDG" -> "E"
+    "ZEU" -> "Z"
     "NHN" -> "N"
     "MLM" -> "M"
     "SPD" -> "S"
@@ -537,6 +542,7 @@ fun panelMonogram(engine: String): String = when (engine) {
 /** The engine key behind a panel row's title, for rows that only pass the title. */
 fun engineOfTitle(title: String): String = when (title.trim().lowercase()) {
     "edg", "edge" -> "EDG"
+    "zeus" -> "ZEU"
     "nahan" -> "NHN"
     "mlm" -> "MLM"
     "spider" -> "SPD"
@@ -549,6 +555,7 @@ fun engineOfTitle(title: String): String = when (title.trim().lowercase()) {
 /** The four panels' colours, fixed so a badge and a header agree wherever they appear. */
 fun panelTint(engine: String): Color = when (engine) {
     "EDG" -> Color(0xFF30D158)
+    "ZEU" -> Color(0xFFFFB340)
     "NHN" -> Color(0xFFBF5AF2)
     "MLM" -> Color(0xFFFF9F0A)
     "SPD" -> Color(0xFFFF375F)
@@ -560,6 +567,7 @@ fun panelTint(engine: String): Color = when (engine) {
 
 fun panelName(engine: String): String = when (engine) {
     "EDG" -> "EDG"
+    "ZEU" -> "Zeus"
     "NHN" -> "Nahan"
     "MLM" -> "MLM"
     "SPD" -> "Spider"

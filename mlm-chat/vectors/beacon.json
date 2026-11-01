@@ -1,0 +1,8 @@
+{
+  "about": "SPEC 8 and 14.8: tag = HMAC-SHA256(loc, \"mlmchat/lan/1\" || epoch u32 BE)[..16]; beacon = epoch u32 BE || port u16 BE || tag",
+  "beacon": "002dc6c0ba734f43ccfb3dbdeec891b441a14adb47ec",
+  "epoch": 3000000,
+  "loc": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+  "port": 47731,
+  "tag": "4f43ccfb3dbdeec891b441a14adb47ec"
+}

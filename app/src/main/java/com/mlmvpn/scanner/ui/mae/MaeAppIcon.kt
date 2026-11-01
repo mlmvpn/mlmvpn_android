@@ -38,7 +38,7 @@ fun MaeAppIcon(def: ServiceDef, label: String, size: Dp = 36.dp) {
     val key = "${def.id}@$px"
     val icon by produceState<ImageBitmap?>(initialValue = cache[key], key) {
         if (value != null) return@produceState
-        value = withContext(Dispatchers.IO) {
+        value = withContext(iconLoader) {
             val pm = context.packageManager
             def.packages.firstNotNullOfOrNull { pkg ->
                 runCatching { pm.getApplicationIcon(pkg).toBitmap(px, px).asImageBitmap() }.getOrNull()
@@ -59,7 +59,15 @@ fun MaeAppIcon(def: ServiceDef, label: String, size: Dp = 36.dp) {
     }
 }
 
-private val cache = HashMap<String, ImageBitmap>()
+private val cache = java.util.concurrent.ConcurrentHashMap<String, ImageBitmap>()
+
+/**
+ * Two icons at a time. A long list asked for every icon at once, and each request on the plain IO
+ * dispatcher could make it start a new thread -- from the main thread, which then spent long
+ * enough starting threads for Android to call the app frozen (1.2.42 #2021).
+ */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+private val iconLoader = Dispatchers.IO.limitedParallelism(2)
 
 private val PALETTE = listOf(
     Color(0xFF0A84FF), Color(0xFF30D158), Color(0xFFFF9F0A), Color(0xFFFF375F),

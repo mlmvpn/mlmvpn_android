@@ -90,6 +90,20 @@ class FluxRacerTest {
         assertEquals(3, out.reach.size)
     }
 
+    /** FLUX's own race: a long grace so standbys are found, ended as soon as there are enough. */
+    @Test fun `standbys slower than the old grace are kept, and enough of them ends the race`() = runBlocking {
+        val d = cand(reality(ip = "1.1.1.40"))
+        val p = Script(listOf(a, b, c, d).associate { it.id to (5L to true) }, mapOf(
+            a.id to Triple(100L, true, null), b.id to Triple(700L, true, null),
+            c.id to Triple(900L, true, null), d.id to Triple(2_500L, true, null),
+        ))
+        val t0 = System.currentTimeMillis()
+        val out = FluxRacer(p, cfg.copy(graceMs = 1_500, enough = 3)).race(listOf(a, b, c, d), any, byRtt)
+        assertEquals(listOf(a.id, b.id, c.id), out.ranked.map { it.first.id })
+        // Ended by the third answer (~900 ms), not by the grace or the slowest one.
+        assertTrue(System.currentTimeMillis() - t0 < 1_500)
+    }
+
     @Test fun `stage two only gets the survivors, capped at the batch`() = runBlocking {
         val many = (1..20).map { cand(reality(ip = "2.2.2.$it")) }
         val p = Script(many.associate { it.id to (5L to true) }, many.associate { it.id to Triple(20L, true, null) })

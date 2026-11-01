@@ -3,13 +3,16 @@ package com.mlmvpn.scanner.ui.home
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Lan
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LocationOn
@@ -25,6 +28,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.filled.VpnLock
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.mlmvpn.scanner.R
@@ -109,6 +113,19 @@ object HomeDestinations {
     )
 
     /**
+     * Destinations still being built (docs/URNETWORK-NPV-PLAN.md). They are on the board of a debug
+     * build, where the owner tests them, and in no release until each one really connects -- a tile
+     * that can only say «not yet» has no place on a user's phone. Remove an id here the day its
+     * engine works. «URnetwork» and «NPV» left on 2026-10-20: both connect, and a release carries them.
+     */
+    val IN_PROGRESS: Set<String> = setOf(
+        // «گره» left on 2026-10-22: one-to-one chat works on its core (two phones, one Wi-Fi),
+        // so a release carries it.
+    )
+
+    private val showInProgress = com.mlmvpn.scanner.BuildConfig.DEBUG
+
+    /**
      * Everything else, in its factory order. This replaces the hamburger drawer outright: every
      * entry that used to be hidden behind it is here, plus the tabs that lost their slot in the
      * old bottom bar.
@@ -125,7 +142,6 @@ object HomeDestinations {
      * [BOARD_DEFAULT] and [DEFAULT_FOLDERS].
      */
     val GRID_DEFAULT: List<HomeApp> = listOf(
-        HomeApp("cfdoctor", R.string.cf_doctor_title, Icons.Default.Cloud, Blue, imageRes = R.drawable.ic_app_doctor),
         // The other four transports of the tunnel stack, first and in one unbroken row of four.
         // Together with MASQUE in the dock they are five separate products, not five modes of
         // one: MASQUE and WireGuard reach Cloudflare's edge with entirely different handshakes,
@@ -133,6 +149,12 @@ object HomeDestinations {
         // with their own servers and their own countries. An icon each is what says so -- and
         // the row break is what says they belong together, which is why they lead rather than
         // starting mid-row where the fourth would wrap away from the other three.
+        // «MLM Scout»: which of everything below really works on this line, and which is best. First,
+        // because it is the answer to "where do I start" -- for a new user most of all.
+        HomeApp("scout",             R.string.scout_title,        Icons.Default.Radar,         Blue, imageRes = R.drawable.ic_app_scout),
+        // «MLM CHAT»: phone-to-phone chat with no server, on the Telegram Android fork (mlm-chat/docs,
+        // T4/T23). It is not a page here: the tile opens the chat's own screen in its :chat process.
+        HomeApp(com.mlmvpn.scanner.chat.MlmChat.TILE_ID, R.string.home_mlmchat, Icons.Default.Forum, Blue, imageRes = R.drawable.gereh_logo),
         HomeApp("masque",            R.string.home_masque,        Icons.Default.Bolt,          Blue, imageRes = R.drawable.ic_app_masque),
         HomeApp("wireguard",         R.string.home_wireguard,     Icons.Default.VpnKey,        Green, imageRes = R.drawable.ic_app_wireguard),
         HomeApp("warp_on_warp",      R.string.home_warp_on_warp,  Icons.Default.Layers,        Orange, glyphRes = R.drawable.ic_glyph_layers),
@@ -143,6 +165,12 @@ object HomeDestinations {
         // circle in a square hole. Hub/Indigo stay as the fallback glyph; see HomeApp.imageRes.
         HomeApp("psiphon", R.string.home_psiphon, Icons.Default.Hub, Indigo, imageRes = R.drawable.ic_app_psiphon),
         HomeApp("tor",               R.string.home_tor,           Icons.Default.Shield,        Purple, imageRes = R.drawable.ic_app_tor),
+        // «لنترن»: Lantern 10's own core, with the Windows desktop's artwork (g-lantern-art), in the
+        // desktop's place between Tor and Geph.
+        HomeApp("lantern",           R.string.home_lantern,       Icons.Default.Lightbulb,     Teal,   imageRes = R.drawable.ic_app_lantern),
+        // «URnetwork»: URnetwork's own network of provider devices on its own SDK, beside the other
+        // networks with servers of their own. The owner's logo file (docs/URNETWORK-NPV-PLAN.md 15.7).
+        HomeApp("urnetwork",         R.string.home_urnetwork,     Icons.Default.Hub,           Indigo, imageRes = R.drawable.ic_app_urnetwork),
         // «گف»: Geph's own network and engine, with the Windows desktop's artwork.
         HomeApp("geph",              R.string.home_geph,          Icons.Default.Public,        Blue,   imageRes = R.drawable.ic_app_geph),
         HomeApp("quick",             R.string.home_quick,         Icons.Default.RocketLaunch,  Blue),
@@ -150,9 +178,25 @@ object HomeDestinations {
         // «FLUX»: country, IP version, connect -- the rest is the engine's job. Beside MAE, which
         // can use FLUX's routes as exits of its own.
         HomeApp("flux",              R.string.flux_title_short,   Icons.Default.Bolt,          Indigo, imageRes = R.drawable.ic_app_flux),
+        // «FENIX»: the user's own Firefox account's free VPN (Mozilla's servers in 33 countries).
+        HomeApp("fenix",             R.string.fenix_title,        Icons.Default.LocalFireDepartment, Orange, imageRes = R.drawable.ic_app_fenix),
         // «آمنزیا»: free WireGuard (hidden behind AmneziaWG junk packets) and Hysteria2 servers,
         // plus the user's own .conf files, by country and by real delay.
         HomeApp("amnezia",           R.string.amz_title,          Icons.Default.VpnKey,        Orange, imageRes = R.drawable.ic_app_amnezia),
+        // «Proton VPN»: the user's own Proton account's free WireGuard servers -- signed in on
+        // Proton's own page inside the app, connected through the Amnezia engine.
+        HomeApp("proton",            R.string.proton_title,       Icons.Default.VpnKey,        Purple, imageRes = R.drawable.ic_app_proton),
+        HomeApp("windscribe",        R.string.windscribe_title,   Icons.Default.VpnKey,        Blue, imageRes = R.drawable.ic_app_windscribe),
+        // «Outline»: Outline VPN keys -- free public Shadowsocks servers and the user's own
+        // ss:// / ssconf:// keys -- tested on this line, fastest first, connected in one tap.
+        HomeApp("outline",           R.string.outline_title,      Icons.Default.VpnKey,        Green, imageRes = R.drawable.ic_app_outline),
+        // «NPV»: the user's NPV Tunnel files and configs, and free ones -- beside Outline, the other
+        // collection of other people's servers. The owner's logo file (docs/URNETWORK-NPV-PLAN.md 15.7).
+        HomeApp("npv",               R.string.home_npv,           Icons.Default.VpnKey,        Green, imageRes = R.drawable.ic_app_npv),
+        // «پروکسی تلگرام»: Telegram's official WEB proxy on the user's own Cloudflare account
+        // (Workers or Pages), built, tested and added to Telegram in a tap. A tool, not a way to
+        // connect the phone, so Scout leaves it out (see ScoutRegistry.EXCLUDED).
+        HomeApp("tgproxy",           R.string.tgproxy_title,      Icons.Default.Cloud,         Blue, imageRes = R.drawable.ic_app_telegram),
         // A cloud server on the user's own GitHub allowance, reached through a Worker on their own
         // Cloudflare -- the Windows app's «گیت‌هاب تانل», whole. Beside Quick Connect: both are
         // "get me online", and this one is the fast one when the free networks are slow.
@@ -177,6 +221,10 @@ object HomeDestinations {
         // that happens to run on that plumbing, and listing it under the engine it extends is
         // exactly the association the naming rule exists to avoid.
         HomeApp("configstudio",      R.string.studio_home_tile,   Icons.Default.Tune,          Indigo),
+        // «ویجت استدیو»: widgets for the phone's own home screen -- one per connection method, and
+        // designs of the user's own -- plus the switch of the connection widget on this board. Pink
+        // is free on the board (only the fixed-IP tool, inside its folder, wears it).
+        HomeApp("widgetstudio",      R.string.home_widgetstudio,  Icons.Default.Widgets,       Pink),
         // Sharing the tunnel with a second device was a switch in Settings called "Allow LAN"
         // and nothing else -- no address to type, no way to see whether anyone had connected,
         // and no hint that the engine currently running might publish no listener at all. It is
@@ -222,7 +270,7 @@ object HomeDestinations {
         // shared proxy answered 402 and could not be revived from Iran.
         HomeApp("emergency_2", R.string.home_emergency_2, Icons.Default.FlashOn, Red, opensAsModal = true, imageRes = R.drawable.ic_app_gscript),
         HomeApp("emergency_3",       R.string.home_emergency_3,   Icons.Default.VpnLock,       Red,    opensAsModal = true),
-    )
+    ).filter { showInProgress || it.id !in IN_PROGRESS }
 
     /**
      * The folders a fresh board starts with, by key; members are destination ids, in order.
@@ -233,7 +281,7 @@ object HomeDestinations {
      * is only the folder a board starts with: it can be renamed, emptied and taken apart.
      */
     val DEFAULT_FOLDERS: Map<String, List<String>> = mapOf(
-        "tools" to listOf("cfdoctor", "fixed_ip", "sublink", "lan", "usage", "tutorial"),
+        "tools" to listOf("fixed_ip", "sublink", "lan", "usage", "tutorial"),
     )
 
     /**
@@ -244,10 +292,11 @@ object HomeDestinations {
      * appends it -- so forgetting to list a new one costs its position, never its icon.
      */
     val BOARD_DEFAULT: List<String> = listOf(
+        "scout", "mlmchat",
         "masque", "wireguard", "warp_on_warp", "warp",
-        "psiphon", "tor", "geph", "quick", "mae", "flux",
-        "amnezia", "github", "freeconfig",
-        "game", "vpngate", "openvpn", "configstudio",
+        "psiphon", "tor", "geph", "lantern", "urnetwork", "quick", "mae", "flux", "fenix",
+        "amnezia", "proton", "windscribe", "outline", "npv", "github", "freeconfig", "tgproxy",
+        "game", "vpngate", "openvpn", "configstudio", "widgetstudio",
         "store", "antisanction", "iran", "fronting",
         "@tools", "emergency_2", "emergency_3",
     )
@@ -267,10 +316,10 @@ object HomeDestinations {
     }
 
     fun categoryOf(id: String): Category? = when (id) {
-        "masque", "wireguard", "warp_on_warp", "warp", "psiphon", "tor", "geph", "quick", "mae", "flux",
-        "amnezia", "github", "vpngate", "openvpn", "nodes" -> Category.CONNECT
+        "masque", "wireguard", "warp_on_warp", "warp", "psiphon", "tor", "geph", "lantern", "urnetwork", "quick", "mae", "flux", "fenix",
+        "amnezia", "proton", "windscribe", "outline", "npv", "github", "vpngate", "openvpn", "nodes" -> Category.CONNECT
         "freeconfig", "iran", "fronting", "sublink", "configstudio", "cloud" -> Category.CONFIGS
-        "cfdoctor", "fixed_ip", "lan", "usage", "tutorial", "store", "scanner", "settings" -> Category.TOOLS
+        "fixed_ip", "lan", "usage", "tutorial", "store", "scanner", "settings", "scout", "tgproxy", "widgetstudio", "mlmchat" -> Category.TOOLS
         "game" -> Category.GAMES
         "emergency_2", "emergency_3", "antisanction" -> Category.EMERGENCY
         else -> null

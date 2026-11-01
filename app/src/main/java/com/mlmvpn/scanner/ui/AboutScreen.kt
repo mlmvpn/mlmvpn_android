@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.NewReleases
@@ -25,6 +26,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.clickable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,6 +82,7 @@ fun AboutScreen(
     onOpenChangelog: () -> Unit,
 ) {
     val context = LocalContext.current
+    var versionTaps by remember { mutableIntStateOf(0) }
 
     val versionName = remember {
         try {
@@ -157,6 +163,22 @@ fun AboutScreen(
             // bug report, not a measurement.
             Text(
                 stringResource(R.string.about_version, versionName),
+                // Seven taps toggle the hidden developer mode (Cloudflare Doctor's strategy details):
+                // ids, latencies and counts only, never a credential.
+                modifier = Modifier.clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                ) {
+                    versionTaps++
+                    if (versionTaps >= 7) {
+                        val prefs = context.getSharedPreferences("cfnet_ui", android.content.Context.MODE_PRIVATE)
+                        val on = !prefs.getBoolean("developer", false)
+                        prefs.edit().putBoolean("developer", on).apply()
+                        android.widget.Toast.makeText(context, com.mlmvpn.scanner.utils.S(if (on) R.string.cfnet_dev_on else R.string.cfnet_dev_off),
+                            android.widget.Toast.LENGTH_SHORT).show()
+                        versionTaps = 0
+                    }
+                },
                 color = Ios.SecondaryLabel,
                 fontSize = 15.sp,
             )
@@ -198,6 +220,18 @@ fun AboutScreen(
                 fontSize = 14.sp,
                 lineHeight = 25.sp,
                 textAlign = TextAlign.Justify,
+            )
+        }
+
+        // Right under the description: supporting the app, in the phone's own browser.
+        Spacer(Modifier.height(12.dp))
+        SettingsGroup {
+            SettingsRow(
+                title = if (isFa) "حمایت از ما" else "Support us",
+                subtitle = "donito.me/ehsan2noven",
+                icon = Icons.Default.Favorite,
+                tint = androidx.compose.ui.graphics.Color(0xFFFF2D55),
+                onClick = { com.mlmvpn.scanner.utils.Donate.open(context) },
             )
         }
 

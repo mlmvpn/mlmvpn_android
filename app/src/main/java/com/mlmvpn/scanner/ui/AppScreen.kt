@@ -43,7 +43,8 @@ private val FEATURE_BAR_HEIGHT = 56.dp
 
 private val SELF_HEADED = setOf(
     "settings", "vpn_settings", "usage", "tutorial", "nodes", "cloud", "scanner", "quick", "game", "sublink", "fixed_ip", "vpngate", "freeconfig", "lan",
-    "configstudio", "github", "store", "openvpn", "mae", "flux", "cfdoctor", "amnezia",
+    "configstudio", "github", "store", "openvpn", "mae", "flux", "fenix", "cfdoctor", "amnezia", "proton", "windscribe", "outline", "scout", "tgproxy",
+    "npv", "widgetstudio",
     // The five transports. Each draws an iOS navigation bar of its own, and pushes pages under
     // it that carry their own back chevron -- the app chrome on top would be a second one.
 ) + com.mlmvpn.scanner.ui.tunnel.Transport.IDS
@@ -107,6 +108,40 @@ fun AppScreen() {
     // than beside the tab hosts because the update notice, which lives at the root of this
     // composable, is one of the things that asks for one.
     var settingsRoute by remember { mutableStateOf<String?>(null) }
+
+    // A home-screen widget asked for one tile's page (WidgetOpen): land on it with the board beneath
+    // it, so back returns to the icons the way it does after opening the tile by hand.
+    val externalOpen by com.mlmvpn.scanner.widget.WidgetOpen.pending.collectAsState()
+    LaunchedEffect(externalOpen) {
+        val tile = externalOpen ?: return@LaunchedEffect
+        com.mlmvpn.scanner.widget.WidgetOpen.pending.value = null
+        val app = HomeDestinations.gridById(tile) ?: HomeDestinations.DOCK.firstOrNull { it.id == tile }
+            ?: return@LaunchedEffect
+        if (app.opensAsModal) {
+            activeModal = tile
+        } else {
+            activeModal = null
+            if (activeTab != tile) {
+                com.mlmvpn.scanner.CrashReporter.note("widget open $activeTab -> $tile")
+                navStack.clear()
+                navStack.add(homeTab)
+                activeTab = tile
+            }
+        }
+    }
+
+    // A chat's card named a row of Settings (WidgetOpen.openSetting, q12): Settings on its page,
+    // the row lit, as when the home search finds it.
+    val externalSetting by com.mlmvpn.scanner.widget.WidgetOpen.pendingSetting.collectAsState()
+    val linkContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(externalSetting) {
+        val key = externalSetting ?: return@LaunchedEffect
+        com.mlmvpn.scanner.widget.WidgetOpen.pendingSetting.value = null
+        val entry = com.mlmvpn.scanner.data.GerehAppLinks.entryOf(linkContext, key) ?: return@LaunchedEffect
+        activeModal = null
+        settingsRoute = com.mlmvpn.scanner.ui.settings.SettingsIndex.prepare(linkContext, entry)
+        openTab("settings")
+    }
 
     // The update check still runs, and it no longer says anything.
     //
@@ -435,6 +470,13 @@ fun AppScreen() {
                             }
                         }
                     }
+                    if (visitedTabs.contains("widgetstudio")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "widgetstudio") 0.dp else 10000.dp)) {
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "widgetstudio")) {
+                                com.mlmvpn.scanner.ui.widgetstudio.WidgetStudioScreen(onBack = { goBack() })
+                            }
+                        }
+                    }
                     if (visitedTabs.contains("github")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "github") 0.dp else 10000.dp)) {
                             CompositionLocalProvider(LocalTabVisible provides (activeTab == "github")) {
@@ -448,7 +490,12 @@ fun AppScreen() {
                     }
                     if (visitedTabs.contains("cfdoctor")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "cfdoctor") 0.dp else 10000.dp)) {
-                            com.mlmvpn.scanner.ui.doctor.CfDoctorScreen(onBack = { goBack() }, visible = activeTab == "cfdoctor")
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "cfdoctor")) {
+                                com.mlmvpn.scanner.ui.doctor.CloudDoctorScreen(
+                                    onBack = { goBack() },
+                                    onOpenScanner = { openTab("scanner") },
+                                )
+                            }
                         }
                     }
                     if (visitedTabs.contains("lan")) {
@@ -486,7 +533,7 @@ fun AppScreen() {
                     if (visitedTabs.contains("mae")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "mae") 0.dp else 10000.dp)) {
                             CompositionLocalProvider(LocalTabVisible provides (activeTab == "mae")) {
-                                com.mlmvpn.scanner.ui.mae.MaeScreen(onBack = { goBack() })
+                                com.mlmvpn.scanner.ui.mae.MaeScreen(onBack = { goBack() }, onOpenTile = { openTab(it) })
                             }
                         }
                     }
@@ -497,10 +544,68 @@ fun AppScreen() {
                             }
                         }
                     }
+                    if (visitedTabs.contains("fenix")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "fenix") 0.dp else 10000.dp)) {
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "fenix")) {
+                                com.mlmvpn.scanner.ui.fenix.FenixScreen(onBack = { goBack() })
+                            }
+                        }
+                    }
                     if (visitedTabs.contains("amnezia")) {
                         Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "amnezia") 0.dp else 10000.dp)) {
                             CompositionLocalProvider(LocalTabVisible provides (activeTab == "amnezia")) {
                                 com.mlmvpn.scanner.ui.amnezia.AmneziaScreen(onBack = { goBack() })
+                            }
+                        }
+                    }
+                    if (visitedTabs.contains("windscribe")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "windscribe") 0.dp else 10000.dp)) {
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "windscribe")) {
+                                com.mlmvpn.scanner.ui.windscribe.WindscribeScreen(onBack = { goBack() })
+                            }
+                        }
+                    }
+                    if (visitedTabs.contains("outline")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "outline") 0.dp else 10000.dp)) {
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "outline")) {
+                                com.mlmvpn.scanner.ui.outline.OutlineScreen(onBack = { goBack() })
+                            }
+                        }
+                    }
+                    if (visitedTabs.contains("npv")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "npv") 0.dp else 10000.dp)) {
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "npv")) {
+                                com.mlmvpn.scanner.ui.npv.NpvScreen(onBack = { goBack() })
+                            }
+                        }
+                    }
+                    if (visitedTabs.contains("tgproxy")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "tgproxy") 0.dp else 10000.dp)) {
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "tgproxy")) {
+                                com.mlmvpn.scanner.ui.tgproxy.TgProxyScreen(onBack = { goBack() })
+                            }
+                        }
+                    }
+                    if (visitedTabs.contains("proton")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "proton") 0.dp else 10000.dp)) {
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "proton")) {
+                                com.mlmvpn.scanner.ui.proton.ProtonScreen(onBack = { goBack() })
+                            }
+                        }
+                    }
+                    if (visitedTabs.contains("scout")) {
+                        Box(modifier = Modifier.fillMaxSize().offset(x = if (activeTab == "scout") 0.dp else 10000.dp)) {
+                            CompositionLocalProvider(LocalTabVisible provides (activeTab == "scout")) {
+                                com.mlmvpn.scanner.ui.scout.ScoutScreen(
+                                    onBack = { goBack() },
+                                    // «رفتن به این روش»: the method's own page, the way its icon opens
+                                    // it -- a tab or one of the full-screen modals. Scout never connects.
+                                    onOpen = { id ->
+                                        val app = com.mlmvpn.scanner.engines.scout.ScoutRegistry.homeApp(id)
+                                        if (app?.opensAsModal == true) activeModal = id else openTab(id)
+                                    },
+                                    visible = activeTab == "scout",
+                                )
                             }
                         }
                     }
@@ -565,10 +670,20 @@ fun AppScreen() {
                 trafficDown = trafficDown,
                 trafficUp = trafficUp,
                 onOpen = { app ->
-                    if (app.opensAsModal) activeModal = app.id else openTab(app.id)
+                    when {
+                        // «MLM CHAT» is the Telegram fork's own screen in the :chat process, not a tab.
+                        app.id == com.mlmvpn.scanner.chat.MlmChat.TILE_ID -> com.mlmvpn.scanner.chat.MlmChat.open(context)
+                        app.opensAsModal -> activeModal = app.id
+                        else -> openTab(app.id)
+                    }
                 },
                 onOpenUpdate = {
                     settingsRoute = com.mlmvpn.scanner.ui.settings.ROUTE_UPDATE_DOWNLOAD
+                    openTab("settings")
+                },
+                // A row the home screen's search found: Settings on its page, where the row shows itself.
+                onOpenSetting = { route ->
+                    settingsRoute = route
                     openTab("settings")
                 },
             )

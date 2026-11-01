@@ -7,6 +7,7 @@ import com.mlmvpn.scanner.models.CloudSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.*
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
@@ -48,16 +49,26 @@ class CloudManager private constructor(private val context: Context) {
         }
     }
 
-    private val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
+    private val cfnetInterceptor = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context).controlInterceptor()
+    private val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory())
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(60, TimeUnit.SECONDS)
+        .addInterceptor(cfnetInterceptor)
         .build()
 
     private val prefs = context.getSharedPreferences("cloud_accounts_prefs", Context.MODE_PRIVATE)
+    @Volatile private var storageReadable = true
 
     /** Same settings as the app path; callers isolate calls and never mutate this client. */
-    internal fun diagnosticClientBuilder(): OkHttpClient.Builder = client.newBuilder()
+    internal fun diagnosticClientBuilder(): OkHttpClient.Builder = client.newBuilder().apply { interceptors().remove(cfnetInterceptor) }
+
+    private fun stageClient(stage: com.mlmvpn.scanner.engines.cfnet.CfStage): OkHttpClient = client.newBuilder().apply {
+        interceptors().add(0, Interceptor { chain ->
+            chain.proceed(chain.request().newBuilder().tag(com.mlmvpn.scanner.engines.cfnet.CfStage::class.java, stage).build())
+        })
+    }.build()
 
     // Temporary lists for memory, later persist to SharedPreferences or Room
     val accounts = mutableListOf<CloudAccount>()
@@ -65,11 +76,13 @@ class CloudManager private constructor(private val context: Context) {
 
     private val _accountsFlow = kotlinx.coroutines.flow.MutableStateFlow<List<CloudAccount>>(emptyList())
     val accountsFlow: kotlinx.coroutines.flow.StateFlow<List<CloudAccount>> = _accountsFlow
+    private val loaded = kotlinx.coroutines.CompletableDeferred<Unit>()
+    suspend fun awaitLoaded() { loaded.await() }
 
     init {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            loadAccounts()
-            _accountsFlow.value = accounts.toList()
+            try { loadAccounts(); _accountsFlow.value = accounts.toList() }
+            finally { loaded.complete(Unit) }
         }
     }
 
@@ -81,18 +94,25 @@ class CloudManager private constructor(private val context: Context) {
     private fun readAccountsJson(): String {
         prefs.getString(KEY_SEALED, null)?.let { sealed ->
             SecureStore.open(sealed)?.let { return it }
-            Log.w("CloudManager", "sealed account list unreadable; falling back")
+            storageReadable = false
+            Log.w("CloudManager", "sealed account list unreadable; preserving ciphertext")
+            return "[]"
         }
-        return prefs.getString(KEY_PLAIN, "[]") ?: "[]"
+        val legacy = prefs.getString(KEY_PLAIN, null) ?: return "[]"
+        val sealed = SecureStore.seal(legacy)
+        if (sealed == null) { storageReadable = false; return "[]" }
+        check(prefs.edit().putString(KEY_SEALED, sealed).remove(KEY_PLAIN).commit())
+        return legacy
     }
 
     private fun writeAccountsJson(json: String) {
+        check(storageReadable) { "secure_storage_unavailable" }
         val sealed = SecureStore.seal(json)
         if (sealed != null) {
             prefs.edit().putString(KEY_SEALED, sealed).remove(KEY_PLAIN).apply()
         } else {
-            // Keystore unusable on this device: keep the old behaviour rather than drop accounts.
-            prefs.edit().putString(KEY_PLAIN, json).remove(KEY_SEALED).apply()
+            // Preserve the previous sealed record; new credentials remain in memory until sealing works.
+            Log.w("CloudManager", "account persistence unavailable: Keystore could not seal")
         }
     }
 
@@ -288,6 +308,9 @@ class CloudManager private constructor(private val context: Context) {
     }
 
     suspend fun addAccount(rawToken: String, rawEmail: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        // Doctor may hand us a freshly typed credential before CloudTab's initial account load
+        // has completed. Wait so duplicate checks and the sealed write use one complete snapshot.
+        awaitLoaded()
         val token = rawToken.replace(Regex("[^a-zA-Z0-9_-]"), "").trim()
         val email = rawEmail.trim()
         
@@ -1014,7 +1037,7 @@ class CloudManager private constructor(private val context: Context) {
         // Logged in full as well as summarised. Every one of these failures used to reach the
         // user as a toast and nothing else, so a report of "it says error 10037" could not be
         // traced any further -- the response body that would have explained it was gone.
-        Log.e("CloudflareApi", "cloudflare HTTP $httpCode code=$code: ${body.take(500)}")
+        Log.e("CloudflareApi", "cloudflare HTTP $httpCode code=$code: <response omitted>")
         return when {
             // The API token was made from a template that does not include Workers KV. This is by
             // far the most common cause, and the raw message ("Authentication error") does not
@@ -1074,6 +1097,13 @@ class CloudManager private constructor(private val context: Context) {
     }
 
     suspend fun deployWorker(account: CloudAccount, onProgress: (Int, String) -> Unit): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val client = stageClient(com.mlmvpn.scanner.engines.cfnet.CfStage.DEPLOY)
+        val connectivity = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context)
+        // The DEPLOY route proven on this network in the last six hours is used as it is (the
+        // requests below go over it, falling back route by route on a transport error); only a
+        // cold or stale network pays for a bounded search first.
+        connectivity.ensure(com.mlmvpn.scanner.engines.cfnet.CfStage.DEPLOY, accountOverride = account, freshMs = 6 * 3600_000L,
+            budget = com.mlmvpn.scanner.engines.cfnet.StrategyEngine.StageBudget(parallel = 2, deadlineMs = 90_000))
         try {
             val isCfat = com.mlmvpn.scanner.data.CloudAuth.useBearer(account)
             val authHeaders = Headers.Builder().apply {
@@ -1375,11 +1405,11 @@ class CloudManager private constructor(private val context: Context) {
         }
     }
 
-    suspend fun fetchCloudConfigs(account: CloudAccount, probeClient: OkHttpClient = client): Pair<Boolean, List<String>> = withContext(Dispatchers.IO) {
+    suspend fun fetchCloudConfigs(account: CloudAccount, probeClient: OkHttpClient = stageClient(com.mlmvpn.scanner.engines.cfnet.CfStage.CONFIG)): Pair<Boolean, List<String>> = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
         val client = probeClient
         try {
             if (account.workerUrl.isNullOrEmpty() || account.subPath.isNullOrEmpty() || account.trPass.isNullOrEmpty()) {
-                return@withContext Pair(false, emptyList())
+                return@runInterruptible Pair(false, emptyList())
             }
 
             // Fetch subscription data using the stored workerUrl, subPath, and trPass.
@@ -1392,13 +1422,13 @@ class CloudManager private constructor(private val context: Context) {
 
             val configs = mutableListOf<String>()
             client.newCall(fetchReq).execute().use { res ->
-                if (!res.isSuccessful) return@withContext Pair(false, emptyList())
+                if (!res.isSuccessful) return@runInterruptible Pair(false, emptyList())
                 val base64Data = res.body?.string() ?: ""
                 try {
                     val decoded = String(android.util.Base64.decode(base64Data.trim(), android.util.Base64.DEFAULT))
                     configs.addAll(decoded.split("\n").map { it.trim().replace("💦", "mlmvpn") }.filter { it.isNotEmpty() }.map { com.mlmvpn.scanner.utils.AntiDpi.applySniCamouflage(it) })
                 } catch (e: Exception) {
-                    return@withContext Pair(false, emptyList())
+                    return@runInterruptible Pair(false, emptyList())
                 }
             }
 
@@ -1460,7 +1490,7 @@ class CloudManager private constructor(private val context: Context) {
 
         // Try login one last time with Admin123! Retry for up to 30 seconds to allow KV edge propagation
         for (i in 1..10) {
-            Log.d("CloudManager", "ensureLogin retry $i: Attempting login with password: Admin123!")
+            Log.d("CloudManager", "ensureLogin retry $i: Attempting login")
             val finalLoginReq = Request.Builder()
                 .url(loginUrl)
                 .post(loginBody(username, "Admin123!"))
@@ -1528,7 +1558,7 @@ class CloudManager private constructor(private val context: Context) {
                     .put("Admin123!".toRequestBody("text/plain".toMediaTypeOrNull()))
                     .build()
                 client.newCall(setPassReq).execute().use {
-                    Log.d("CloudManager", "forceReset KV pwd result: ${it.code} - ${it.body?.string()}")
+                    Log.d("CloudManager", "forceReset KV pwd result: ${it.code} - <response omitted>")
                 }
                 Thread.sleep(2000) // Wait for Cloudflare KV edge propagation
             }
@@ -1610,6 +1640,13 @@ class CloudManager private constructor(private val context: Context) {
     }
 
     suspend fun deployEdgWorker(account: CloudAccount, onProgress: (Int, String) -> Unit): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val client = stageClient(com.mlmvpn.scanner.engines.cfnet.CfStage.DEPLOY)
+        val connectivity = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context)
+        // The DEPLOY route proven on this network in the last six hours is used as it is (the
+        // requests below go over it, falling back route by route on a transport error); only a
+        // cold or stale network pays for a bounded search first.
+        connectivity.ensure(com.mlmvpn.scanner.engines.cfnet.CfStage.DEPLOY, accountOverride = account, freshMs = 6 * 3600_000L,
+            budget = com.mlmvpn.scanner.engines.cfnet.StrategyEngine.StageBudget(parallel = 2, deadlineMs = 90_000))
         try {
             val isCfat = com.mlmvpn.scanner.data.CloudAuth.useBearer(account)
             val authHeaders = Headers.Builder().apply {
@@ -1878,7 +1915,7 @@ class CloudManager private constructor(private val context: Context) {
 
             client.newCall(subReq).execute().use { response ->
                 val body = response.body?.string() ?: ""
-                Log.d(TAG, "GET subdomain -> HTTP ${response.code}: ${body.take(300)}")
+                Log.d(TAG, "GET subdomain -> HTTP ${response.code}: <response omitted>")
                 if (response.isSuccessful) {
                     val json = JSONObject(body)
                     if (json.optBoolean("success")) {
@@ -1904,7 +1941,7 @@ class CloudManager private constructor(private val context: Context) {
                         .build()
                     client.newCall(createReq).execute().use { response ->
                         val body = response.body?.string() ?: ""
-                        Log.d(TAG, "PUT create-subdomain (attempt ${attempts + 1}) -> HTTP ${response.code}: ${body.take(300)}")
+                        Log.d(TAG, "PUT create-subdomain (attempt ${attempts + 1}) -> HTTP ${response.code}: <response omitted>")
                         if (response.isSuccessful) {
                             subdomain = randomSub
                             created = true
@@ -1975,7 +2012,7 @@ class CloudManager private constructor(private val context: Context) {
                 val kvRes = client.newCall(createKvReq).execute()
                 val kvBody = kvRes.body?.string() ?: ""
                 kvErrorBody = kvBody
-                Log.d(TAG, "POST kv/namespaces -> HTTP ${kvRes.code}: ${kvBody.take(300)}")
+                Log.d(TAG, "POST kv/namespaces -> HTTP ${kvRes.code}: <response omitted>")
                 if (kvRes.isSuccessful) {
                     val kvJson = org.json.JSONObject(kvBody)
                     if (kvJson.optBoolean("success", false)) {
@@ -1987,7 +2024,7 @@ class CloudManager private constructor(private val context: Context) {
             }
 
             if (kvId.isEmpty()) {
-                Log.e(TAG, "KV namespace id empty. Response was: ${kvErrorBody.take(500)}")
+                Log.e(TAG, "KV namespace id empty. Response was: <response omitted>")
                 return@withContext Pair(false, S(R.string.could_not_create_kv_for_dns, cfError(kvErrorBody, 0)))
             }
             Log.d(TAG, "KV namespace created: $kvId")
@@ -2043,10 +2080,10 @@ class CloudManager private constructor(private val context: Context) {
 
             client.newCall(uploadReq).execute().use { response ->
                 val body = response.body?.string()
-                Log.d(TAG, "PUT workers/scripts/$workerName -> HTTP ${response.code}: ${body?.take(500)}")
+                Log.d(TAG, "PUT workers/scripts/$workerName -> HTTP ${response.code}: <response omitted>")
                 if (!response.isSuccessful) {
                     Log.e(TAG, "Worker upload failed: HTTP ${response.code}")
-                    return@withContext Pair(false, "Failed to upload DNS worker (HTTP ${response.code}): ${body?.take(300)}")
+                    return@withContext Pair(false, "Failed to upload DNS worker (HTTP ${response.code}): <response omitted>")
                 }
             }
 
@@ -2060,10 +2097,10 @@ class CloudManager private constructor(private val context: Context) {
 
             client.newCall(enableReq).execute().use { response ->
                 val body = response.body?.string()
-                Log.d(TAG, "POST enable subdomain -> HTTP ${response.code}: ${body?.take(300)}")
+                Log.d(TAG, "POST enable subdomain -> HTTP ${response.code}: <response omitted>")
                 if (!response.isSuccessful) {
                     Log.e(TAG, "Enable subdomain failed: HTTP ${response.code}")
-                    return@withContext Pair(false, "Failed to enable subdomain (HTTP ${response.code}): ${body?.take(300)}")
+                    return@withContext Pair(false, "Failed to enable subdomain (HTTP ${response.code}): <response omitted>")
                 }
             }
 
@@ -2086,7 +2123,28 @@ class CloudManager private constructor(private val context: Context) {
         }
     }
 
-    suspend fun fetchEdgConfigs(account: CloudAccount, probeClient: OkHttpClient = client): Pair<Boolean, List<String>> = withContext(Dispatchers.IO) {
+    /** Authenticated subscription from our bundled EDG worker; local links are not network evidence. */
+    suspend fun fetchEdgRemoteConfigs(account: CloudAccount, probeClient: OkHttpClient = stageClient(com.mlmvpn.scanner.engines.cfnet.CfStage.CONFIG)): Pair<Boolean, List<String>> = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
+        val base = account.edgWorkerUrl?.trimEnd('/') ?: return@runInterruptible false to emptyList()
+        val uuid = account.edgUuid?.lowercase() ?: return@runInterruptible false to emptyList()
+        try {
+            val host = base.toHttpUrl().host
+            fun md5(value: String) = java.security.MessageDigest.getInstance("MD5").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+            val token = md5(md5(host + uuid).substring(7, 27))
+            probeClient.newCall(Request.Builder().url("$base/sub?target=mixed&token=$token").get().build()).execute().use { r ->
+                if (!r.isSuccessful) return@runInterruptible false to emptyList()
+                val text = r.body?.string().orEmpty()
+                val decoded = runCatching { String(android.util.Base64.decode(text.trim(), android.util.Base64.DEFAULT), Charsets.UTF_8) }.getOrDefault(text)
+                val links = decoded.lineSequence().map(String::trim).filter { com.mlmvpn.scanner.utils.VpnConfig.parseUri(it) != null }.toList()
+                links.isNotEmpty() to links
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            false to emptyList()
+        }
+    }
+
+    suspend fun fetchEdgConfigs(account: CloudAccount, probeClient: OkHttpClient = stageClient(com.mlmvpn.scanner.engines.cfnet.CfStage.CONFIG)): Pair<Boolean, List<String>> = withContext(Dispatchers.IO) {
         val client = probeClient
         try {
             if (account.edgWorkerUrl.isNullOrEmpty() || account.edgUuid.isNullOrEmpty()) {
@@ -2758,7 +2816,7 @@ class CloudManager private constructor(private val context: Context) {
                 .get().build()
             client.newCall(subReq).execute().use { response ->
                 val body = response.body?.string() ?: ""
-                Log.d(TAG, "GET subdomain -> HTTP ${response.code}: ${body.take(200)}")
+                Log.d(TAG, "GET subdomain -> HTTP ${response.code}: <response omitted>")
                 if (response.isSuccessful) {
                     val json = JSONObject(body)
                     if (json.optBoolean("success")) {
@@ -2804,7 +2862,7 @@ class CloudManager private constructor(private val context: Context) {
                 .build()
             client.newCall(uploadReq).execute().use { response ->
                 val body = response.body?.string()
-                Log.d(TAG, "PUT scripts/$workerName -> HTTP ${response.code}: ${body?.take(300)}")
+                Log.d(TAG, "PUT scripts/$workerName -> HTTP ${response.code}: <response omitted>")
                 if (!response.isSuccessful) {
                     return@withContext Pair(false, S(R.string.uploading_the_relay_failed_http, response.code))
                 }
@@ -2819,7 +2877,7 @@ class CloudManager private constructor(private val context: Context) {
             client.newCall(enableReq).execute().use { response ->
                 if (!response.isSuccessful) {
                     val body = response.body?.string()
-                    Log.e(TAG, "enable subdomain -> HTTP ${response.code}: ${body?.take(300)}")
+                    Log.e(TAG, "enable subdomain -> HTTP ${response.code}: <response omitted>")
                     return@withContext Pair(false, S(R.string.enabling_the_address_failed_http, response.code))
                 }
             }
@@ -2960,7 +3018,7 @@ class CloudManager private constructor(private val context: Context) {
                     .build()
             ).execute().use { response ->
                 if (!response.isSuccessful) {
-                    Log.e(TAG, "enable subdomain -> HTTP ${response.code}: ${response.body?.string()?.take(300)}")
+                    Log.e(TAG, "enable subdomain -> HTTP ${response.code}: <response omitted>")
                     return@withContext Pair(false, S(R.string.enabling_the_address_failed_http, response.code))
                 }
             }
@@ -3201,7 +3259,7 @@ class CloudManager private constructor(private val context: Context) {
                     .headers(authHeaders).put(multipart).build()
             ).execute().use { response ->
                 val body = response.body?.string()
-                Log.d(TAG, "PUT scripts/$workerName -> HTTP ${response.code}: ${body?.take(300)}")
+                Log.d(TAG, "PUT scripts/$workerName -> HTTP ${response.code}: <response omitted>")
                 if (!response.isSuccessful) {
                     return@withContext Pair(false, S(R.string.uploading_the_worker_failed_http, response.code))
                 }

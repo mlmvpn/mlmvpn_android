@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
@@ -288,6 +289,24 @@ fun GameBoostScreen(onBack: () -> Unit, onOpenClassic: () -> Unit) {
                     if (!GameBoostController.isActive) page = Page.PICK_REGION
                 }
             }
+            if (selected != null) {
+                Separator()
+                // The player knows what the measurement cannot: that this game is filtered or
+                // sanctioned here, or never loads. Then the direct line is never chosen for it --
+                // the fastest of Amnezia, WireGuard, WARP and FENIX to the game's region is.
+                com.mlmvpn.scanner.ui.settings.SettingsToggle(
+                    title = stringResource(R.string.gb_blocked),
+                    checked = selected.prefs.blocked,
+                    onCheckedChange = { on ->
+                        if (!GameBoostController.isActive) {
+                            store.setPrefs(selected.id, selected.prefs.copy(blocked = on)); version++
+                        }
+                    },
+                    icon = Icons.Default.Block,
+                    tint = Ios.Red,
+                    subtitle = stringResource(R.string.gb_blocked_sub),
+                )
+            }
             Separator()
             ValueRow(stringResource(R.string.gb_help_row), "", icon = Icons.Default.Bolt) {
                 if (!GameBoostController.isActive || ui.phase == BoostPhase.ACTIVE) page = Page.HELP
@@ -327,6 +346,7 @@ fun GameBoostScreen(onBack: () -> Unit, onOpenClassic: () -> Unit) {
                 onClick = onDial,
             )
         }
+        com.mlmvpn.scanner.ui.RouteChips()
         if (!installed && selected != null && ui.phase == BoostPhase.IDLE) {
             SettingsFooter(stringResource(R.string.gb_measure_only_hint, selected.name))
         }
@@ -563,12 +583,23 @@ private fun ResultCard(o: BoostOutcome) {
                 Text(stringResource(it), color = Ios.SecondaryLabel, fontSize = 12.sp, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
             }
         }
-        StatsRow(stringResource(R.string.gb_row_direct), o.direct, chosen = !o.route.isWarp())
-        o.warp?.let { StatsRow(stringResource(R.string.gb_row_warp), it, chosen = o.route.isWarp()) }
+        val tunnelled = o.route.isWarp() || o.route == RouteKind.AMNEZIA || o.route == RouteKind.FENIX
+        if (o.method != ProbeMethod.TLS_HANDSHAKE) {
+            StatsRow(stringResource(R.string.gb_row_direct), o.direct, chosen = !tunnelled)
+        }
+        val tunnelLabel = when (o.route) {
+            RouteKind.AMNEZIA -> R.string.gb_route_amnezia
+            RouteKind.FENIX -> R.string.gb_route_fenix
+            else -> R.string.gb_row_warp
+        }
+        o.warp?.let { StatsRow(stringResource(tunnelLabel), it, chosen = tunnelled) }
         Spacer(Modifier.height(8.dp))
         val anchor = if (fa) o.anchorLabelFa else o.anchorLabelEn
         Text(
             when {
+                o.method == ProbeMethod.TLS_HANDSHAKE -> if (fa)
+                    "زمان برقراری اتصال امن تا $anchor از داخل تونل؛ این عدد پینگ داخل بازی نیست."
+                    else "Secure connection setup to $anchor through the tunnel; this is not in-game ping."
                 o.method == ProbeMethod.ECHO -> stringResource(R.string.gb_target_echo, anchor)
                 o.echoAvailable -> stringResource(R.string.gb_target_tcp, anchor)
                 else -> stringResource(R.string.gb_target_tcp_no_echo, anchor)
@@ -589,6 +620,13 @@ private fun ResultCard(o: BoostOutcome) {
         Spacer(Modifier.height(10.dp))
         val notes = buildList {
             if (o.measureOnly) add(stringResource(R.string.gb_measure_only_note))
+            else if (o.route == RouteKind.AMNEZIA || o.route == RouteKind.FENIX || o.route == RouteKind.WARP_WG) add(
+                stringResource(R.string.gb_applied_route_tunnel, stringResource(when (o.route) {
+                    RouteKind.AMNEZIA -> R.string.gb_route_amnezia
+                    RouteKind.FENIX -> R.string.gb_route_fenix
+                    else -> R.string.gb_route_wireguard
+                }))
+            )
             else add(stringResource(when {
                 o.route.isWarp() -> R.string.gb_applied_route_warp
                 o.route == RouteKind.DIRECT_DNS -> R.string.gb_applied_route_dns
@@ -1058,6 +1096,9 @@ private fun AdvancedPage(
                 RouteChoice.AUTO to R.string.gb_adv_route_auto,
                 RouteChoice.DIRECT to R.string.gb_adv_route_direct,
                 RouteChoice.WARP to R.string.gb_adv_route_warp,
+                RouteChoice.WIREGUARD to R.string.gb_adv_route_wireguard,
+                RouteChoice.AMNEZIA to R.string.gb_adv_route_amnezia,
+                RouteChoice.FENIX to R.string.gb_adv_route_fenix,
             ).forEachIndexed { i, (choice, label) ->
                 if (i > 0) Separator()
                 CheckRow(stringResource(label), p.route == choice) { set(p.copy(route = choice)) }

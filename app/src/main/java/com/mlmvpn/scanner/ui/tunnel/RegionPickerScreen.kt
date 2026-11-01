@@ -223,7 +223,7 @@ fun RegionPickerScreen(
                             if (bench.running) {
                                 bench.cancel()
                             } else {
-                                context.startService(
+                                com.mlmvpn.scanner.utils.SafeStart.service(context, 
                                     android.content.Intent(
                                         context,
                                         com.mlmvpn.core.tunnel.TunnelVpnService::class.java

@@ -22,6 +22,9 @@ class DataBudget(val limit: Long) {
     fun count(n: Int) { if(n>0 && used.addAndGet(n.toLong())>limit) throw IOException("data_budget") }
 }
 
+/** The probe never left: every slot for this address was busy. Not a network result. */
+class ProbeBusy: IOException("probe_busy")
+
 /** One attempt owns every socket; cancellation/deadline closes them, including TLS writes. */
 class ProbeSession(val env: NetEnv, private val budget: DataBudget, val timeoutMs: Int): Closeable {
     private val owned=mutableListOf<Closeable>()
@@ -31,8 +34,11 @@ class ProbeSession(val env: NetEnv, private val budget: DataBudget, val timeoutM
     fun dial(ip: String,port: Int): Socket {
         // Resolve BEFORE taking the lease. Host aliases must not bypass the one-IP limit.
         val address=InetAddress.getByName(ip)
-        val lease=ipLocks.computeIfAbsent(address.hostAddress!!) { Semaphore(1,true) }
-        if(!lease.tryAcquire(timeoutMs.toLong(),TimeUnit.MILLISECONDS)) throw SocketTimeoutException()
+        // A few at once per address, and a wait that is reported as such. One-at-a-time made a
+        // stage test sit behind the network sweep's 20 s fragment probes on the same edge and
+        // then be recorded as a TCP timeout (v2 reports, 2026-10-03: "tcp" on edges T1 had just reached).
+        val lease=ipLocks.computeIfAbsent(address.hostAddress!!) { Semaphore(4,true) }
+        if(!lease.tryAcquire(minOf(timeoutMs.toLong(),5_000L),TimeUnit.MILLISECONDS)) throw ProbeBusy()
         var released=false
         val release=Closeable { synchronized(lease) { if(!released) { released=true; lease.release() } } }
         val socket=try { env.socket() } catch(e: Exception) { release.close(); throw e }

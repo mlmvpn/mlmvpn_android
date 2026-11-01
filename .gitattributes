@@ -6,3 +6,9 @@
 
 # Signed test fixtures: byte-exact, or their signatures stop verifying.
 app/src/test/resources/geph/* -text
+
+# The Config Studio worker and its fragments: LF on every machine, or the build's byte check
+# (checkWorkerAsset) sees CRs that only Windows checkouts add (drnet, issue #2).
+worker-src/** text eol=lf
+app/src/main/assets/mlm_worker.js text eol=lf
+mlm-chat/relay/nostr/*.sh text eol=lf

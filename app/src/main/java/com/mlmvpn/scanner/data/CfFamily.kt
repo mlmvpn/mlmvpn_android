@@ -56,24 +56,41 @@ object CfFamily {
 
     fun networkKey(context: Context): String = com.mlmvpn.scanner.engines.github.GtCleanIp.networkKey(context)
 
+    /** Debug labs only: behave as on a line without IPv6. */
+    @Volatile var testNoV6 = false
+
     /** Does this phone have a global IPv6 address, and does it reach Cloudflare over it? */
     fun hasIpv6Route(): Boolean {
+        if (testNoV6) return false
         val global = runCatching {
             NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback }.flatMap { it.inetAddresses.toList() }
                 .any { it is Inet6Address && !it.isLinkLocalAddress && !it.isSiteLocalAddress && !it.isLoopbackAddress &&
                     (it.address[0].toInt() and 0xfe) != 0xfc }
         }.getOrDefault(false)
         if (!global) return false
+        // Android refuses a socket on the main thread, and that refusal is not "no IPv6": there the
+        // address is all that can be known (the cached form never keeps such an answer).
+        if (onMainThread()) return true
         return runCatching { Socket().use { it.connect(InetSocketAddress("2606:4700:4700::1111", 443), 2_500); true } }.getOrDefault(false)
     }
+
+    private fun onMainThread(): Boolean =
+        runCatching { android.os.Looper.myLooper() == android.os.Looper.getMainLooper() }.getOrDefault(false)
 
     @Volatile private var v6RouteAt = 0L
     @Volatile private var v6Route = false
 
-    /** [hasIpv6Route], remembered for a minute: cheap enough for every lookup. */
+    /**
+     * [hasIpv6Route], remembered for a minute: cheap enough for every lookup. Only a real
+     * measurement is remembered -- one taken on the main thread used to read "no IPv6" (the socket
+     * was refused) and every connect for the next minute then scanned IPv4 alone.
+     */
     fun hasIpv6RouteCached(): Boolean {
+        if (testNoV6) return false
         val now = System.currentTimeMillis()
-        if (now - v6RouteAt > 60_000L) { v6Route = hasIpv6Route(); v6RouteAt = now }
+        if (now - v6RouteAt <= 60_000L) return v6Route
+        if (onMainThread()) return hasIpv6Route()
+        v6Route = hasIpv6Route(); v6RouteAt = now
         return v6Route
     }
 

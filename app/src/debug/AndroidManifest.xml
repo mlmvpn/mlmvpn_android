@@ -5,10 +5,29 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <receiver android:name=".ipv4lab.Ipv4LabReceiver"
+            android:exported="true" android:permission="android.permission.DUMP" />
         <receiver android:name=".openvpn.OpenVpnSmokeReceiver"
+            android:exported="true" android:permission="android.permission.DUMP" />
+        <receiver android:name=".amzlab.AmzLabReceiver"
+            android:exported="true" android:permission="android.permission.DUMP" />
+        <receiver android:name=".iranlab.IranLabReceiver"
+            android:exported="true" android:permission="android.permission.DUMP" />
+        <receiver android:name=".frontlab.FrontLabReceiver"
+            android:exported="true" android:permission="android.permission.DUMP" />
+        <receiver android:name=".wslab.WsLabReceiver"
+            android:exported="true" android:permission="android.permission.DUMP" />
+        <receiver android:name=".tilelab.TileLabReceiver"
             android:exported="true" android:permission="android.permission.DUMP" />
         <receiver
             android:name=".gblab.GameLabReceiver"
             android:exported="true" />
+
+        <!-- A method still being built (HomeDestinations.IN_PROGRESS) declares its widget here, only
+             where its tile is, so a release lists no widget for a method it does not have. None now. -->
+
+        <!-- Widget lab: renders every widget design to PNG files for review, from adb. -->
+        <receiver android:name=".widgetlab.WidgetLabReceiver"
+            android:exported="true" android:permission="android.permission.DUMP" />
     </application>
 </manifest>

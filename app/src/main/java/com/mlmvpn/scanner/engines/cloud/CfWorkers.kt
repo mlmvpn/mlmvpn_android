@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
  */
 object CfWorkers {
 
-    private val http = OkHttpClient.Builder().dns(WorkerRoute.dns()).protocols(WorkerRoute.HTTP1).connectTimeout(15, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
+    private val http = OkHttpClient.Builder().dns(WorkerRoute.dns()).protocols(WorkerRoute.HTTP1).socketFactory(WorkerRoute.cfSocketFactory()).proxySelector(com.mlmvpn.scanner.engines.cloud.CfTunnel.selector()).connectTimeout(15, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
     private val JSON = "application/json".toMediaType()
 
     private fun api(account: CloudAccount) = "https://api.cloudflare.com/client/v4/accounts/${account.accountId}"
@@ -36,6 +36,26 @@ object CfWorkers {
             .execute().use { r -> runCatching { JSONObject(r.body?.string().orEmpty()).optJSONObject("result")?.optString("subdomain") }.getOrNull().orEmpty() }
         if (sub.isBlank()) error(tr("این حساب هنوز زیردامنهٔ workers.dev ندارد.", "This account has no workers.dev subdomain yet."))
         return sub
+    }
+
+    /**
+     * The account's `<sub>.workers.dev` name, made with a neutral one when the account has none yet
+     * (what the BPB and Edge deploys do). A refusal because the account already has one — the other
+     * device made it a moment ago — reads it instead.
+     */
+    fun ensureSubdomain(account: CloudAccount): String {
+        runCatching { return subdomain(account) }
+        val headers = CloudAuth.headers(account)
+        repeat(3) {
+            val name = com.mlmvpn.scanner.utils.AntiDpi.generateSafeSubdomain()
+            http.newCall(Request.Builder().url("${api(account)}/workers/subdomain").headers(headers)
+                .put(JSONObject().put("subdomain", name).toString().toRequestBody(JSON)).build()).execute().use { r ->
+                val text = r.body?.string().orEmpty()
+                if (r.isSuccessful) return name
+                if (text.contains("10007")) return subdomain(account)
+            }
+        }
+        error(tr("ساخت زیردامنهٔ workers.dev نشد. یکی را در داشبورد کلادفلر بسازید.", "Could not create a workers.dev subdomain. Create one in the Cloudflare dashboard."))
     }
 
     /** A KV namespace titled [title]: made, or found when a namespace of that title exists. */
@@ -84,6 +104,25 @@ object CfWorkers {
             .addFormDataPart("metadata", "metadata.json", meta.toString().toRequestBody(JSON))
             .addFormDataPart("worker.js", "worker.js", code.toRequestBody("application/javascript+module".toMediaType()))
             .build()
+        http.newCall(Request.Builder().url("${api(account)}/workers/scripts/$script").headers(CloudAuth.headers(account)).put(body).build()).execute().use { r ->
+            if (!r.isSuccessful) error(tr("بارگذاری ورکر رد شد", "Uploading the Worker failed") + " (HTTP ${r.code}): " + cfMessage(r.body?.string()))
+        }
+    }
+
+    /**
+     * Upload several ES modules as one Worker: each part is named by its module path, as `wrangler`
+     * does, and [mainModule] is the one the Worker starts from. The central Worker (assets/edge_gateway/)
+     * is seven modules.
+     */
+    fun uploadModules(
+        account: CloudAccount, script: String, mainModule: String, files: List<Pair<String, String>>,
+        bindings: List<JSONObject>, compatibilityDate: String = "2024-09-23",
+    ) {
+        val meta = JSONObject().put("main_module", mainModule).put("compatibility_date", compatibilityDate).put("bindings", JSONArray(bindings))
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("metadata", "metadata.json", meta.toString().toRequestBody(JSON)).apply {
+                for ((name, content) in files) addFormDataPart(name, name, content.toRequestBody("application/javascript+module".toMediaType()))
+            }.build()
         http.newCall(Request.Builder().url("${api(account)}/workers/scripts/$script").headers(CloudAuth.headers(account)).put(body).build()).execute().use { r ->
             if (!r.isSuccessful) error(tr("بارگذاری ورکر رد شد", "Uploading the Worker failed") + " (HTTP ${r.code}): " + cfMessage(r.body?.string()))
         }

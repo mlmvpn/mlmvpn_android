@@ -58,7 +58,7 @@ object ClientHelloSplit {
 /** TLS over arbitrary streams, also used for TLS inside a WebSocket proxy. */
 class TlsChannel(private val source: InputStream, private val sink: OutputStream, host: String, port: Int,
                  sni: String = host, recipe: SplitRecipe = SplitRecipe(), protocol: String? = null,
-                 context: SSLContext = SSLContext.getDefault()) {
+                 context: SSLContext = SSLContext.getDefault(), cipherSuites: List<String>? = null) {
     private val engine=context.createSSLEngine(host,port).apply {
         useClientMode=true
         sslParameters=sslParameters.apply {
@@ -66,6 +66,11 @@ class TlsChannel(private val source: InputStream, private val sink: OutputStream
             serverNames=if(sni.isEmpty()) emptyList() else listOf(SNIHostName(sni))
         }
         if(protocol!=null) enabledProtocols=arrayOf(protocol)
+        if(cipherSuites!=null) {
+            // TLS 1.3 suites are separate from PattNG's TLS 1.2 list; keep them enabled.
+            val supported = supportedCipherSuites.toSet()
+            enabledCipherSuites = (enabledCipherSuites.filter { !it.contains("_WITH_") } + cipherSuites.filter { it in supported }).distinct().toTypedArray()
+        }
     }
     private val incoming=ByteBuffer.allocate(65536).apply { limit(0) }
     private val clear=ByteBuffer.allocate(65536)
@@ -85,7 +90,7 @@ class TlsChannel(private val source: InputStream, private val sink: OutputStream
         }
     }
     private fun tasks() { while(true) (engine.delegatedTask ?: break).run() }
-    private fun wrap(buf: ByteBuffer, recipe: SplitRecipe = SplitRecipe(), sni: String = "") {
+    @Synchronized private fun wrap(buf: ByteBuffer, recipe: SplitRecipe = SplitRecipe(), sni: String = "") {
         val packet=ByteBuffer.allocate(65536)
         val r=engine.wrap(buf,packet)
         if(r.status==SSLEngineResult.Status.CLOSED) throw EOFException()

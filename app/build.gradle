@@ -1,26 +1,42 @@
 plugins {
     id 'com.android.application'
     id 'kotlin-android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+    // MLM CHAT: the Telegram fork's application-side build step (chat/build-logic): its strings as a
+    // hash-keyed asset table with stable ids, the string-id asset and lottie_meta.bin, which the
+    // fork's screens read at run time. It also takes this app's own strings into that table.
+    id 'org.telegram.build-app-plugin'
 }
 
 android {
     namespace 'com.mlmvpn.scanner'
-    compileSdk 34
+    // 36 for the Telegram fork's libraries (androidx.core 1.16+). targetSdk stays 34: it, not
+    // compileSdk, decides how Android treats the VPN services at run time.
+    compileSdk 36
     buildToolsVersion "35.0.0"
 
     defaultConfig {
         applicationId "com.mlmvpn.scanner"
         minSdk 24
         targetSdk 34
-        versionCode 74
-        versionName "1.2.39"
+        versionCode 81
+        versionName "1.2.45"
+        // When this APK was built, in minutes since 2026-01-01: the crash collector counts a build
+        // as newer by it, so a new APK with the same versionCode still reopens a closed issue it
+        // hits (crash/CrashClient.appVersion).
+        buildConfigField "long", "BUILD_STAMP", "${System.currentTimeMillis().intdiv(60000L) - 29453760L}L"
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner project.findProperty('scoutDeviceRunner') ?: "androidx.test.runner.AndroidJUnitRunner"
 
         // Force extraction of native libraries so standalone .so binaries
         // (like libgst-core.so) are accessible via nativeLibraryDir
         ndk {
-            abiFilters 'arm64-v8a', 'armeabi-v7a'
+            // -PmlmQuick (MLM CHAT test builds): arm64 only; the splits below are off then
+            if (project.hasProperty('mlmQuick')) {
+                abiFilters 'arm64-v8a'
+            } else {
+                abiFilters 'arm64-v8a', 'armeabi-v7a'
+            }
         }
     }
 
@@ -28,6 +44,13 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+    }
+
+    // MLM CHAT: the Telegram fork opens assets/emoji.pack with openFd(), which works only on an
+    // uncompressed asset; Telegram's own app module says the same. Without it the chat's process
+    // dies on the first screen that draws an emoji (New Contact, the QR code).
+    androidResources {
+        noCompress += "pack"
     }
 
     // No externalNativeBuild block, deliberately.
@@ -61,7 +84,9 @@ android {
     // Android 7 through the current release from a single file.
     splits {
         abi {
-            enable true
+            // MLM CHAT test builds: -PmlmQuick turns the splits off and keeps arm64 only (ndk block
+            // above): one APK instead of three, two thirds less packaging. Releases build all three.
+            enable !project.hasProperty('mlmQuick')
             reset()
             include 'arm64-v8a', 'armeabi-v7a'
             universalApk true
@@ -74,12 +99,21 @@ android {
             // shrinkResources left off — res is tiny and dynamic lookups exist.
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // MLM CHAT tests: -PmlmTestSign signs a release (R8 and all) with the debug key, so it
+            // installs over the test phones' debug builds and keeps their Gereh identities.
+            // Real releases are signed in Android Studio as before.
+            if (project.hasProperty('mlmTestSign')) {
+                signingConfig signingConfigs.debug
+            }
         }
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+        // java.time on Android 7 (API 24-25): the AmneziaWG library uses Instant, and every
+        // WARP / Amnezia start crashed there without it (crash #479).
+        coreLibraryDesugaringEnabled true
     }
 
     kotlinOptions {
@@ -92,10 +126,7 @@ android {
     buildFeatures {
         viewBinding true
         compose true
-    }
-
-    composeOptions {
-        kotlinCompilerExtensionVersion '1.5.10'
+        buildConfig true
     }
 }
 
@@ -112,7 +143,9 @@ android.applicationVariants.all { variant ->
     def base = variant.versionCode
     variant.outputs.each { output ->
         def abi = output.getFilter(com.android.build.OutputFile.ABI)
-        def offset = ['armeabi-v7a': 1000000, 'arm64-v8a': 2000000][abi]
+        // MLM CHAT quick builds have no split but are arm64 only: they take arm64's code, so they
+        // install over a full build's arm64 APK (and it over them) without a downgrade refusal.
+        def offset = ['armeabi-v7a': 1000000, 'arm64-v8a': 2000000][abi ?: (project.hasProperty('mlmQuick') ? 'arm64-v8a' : null)]
         if (offset != null) {
             output.versionCodeOverride = base + offset
         }
@@ -120,18 +153,28 @@ android.applicationVariants.all { variant ->
     }
 }
 
+// MLM CHAT: the Telegram fork carries its own modified androidx.recyclerview (chat/TMessagesProj,
+// self-contained, no resources). The library would be the same classes twice, and nothing in this
+// app's own code uses RecyclerView, so the library is left out everywhere.
+configurations.configureEach {
+    exclude group: 'androidx.recyclerview', module: 'recyclerview'
+}
+
 dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
 
     implementation 'com.google.code.gson:gson:2.10.1'
     
     constraints {
+        // androidx.core moves from 1.13.1 to 1.16.0: the version the Telegram fork is built with
+        // (it needs compileSdk 35+). Still pinned, so amneziawg cannot pull 1.17.0 in.
         implementation("androidx.core:core-ktx") {
-            version { strictly("1.13.1") }
-            because("prevent amneziawg from pulling 1.17.0 which requires compileSdk 36")
+            version { strictly("1.16.0") }
+            because("the Telegram fork's version; keeps amneziawg's 1.17.0 out")
         }
         implementation("androidx.core:core") {
-            version { strictly("1.13.1") }
-            because("prevent amneziawg from pulling 1.17.0 which requires compileSdk 36")
+            version { strictly("1.16.0") }
+            because("the Telegram fork's version; keeps amneziawg's 1.17.0 out")
         }
         // The lifecycle group stays pinned. It was pinned because io.github.tim06:openvpn
         // asked for 2.8.2, and that one bump cascades across the whole app: lifecycle
@@ -153,14 +196,15 @@ dependencies {
                         "compose-runtime/appcompat/material")
             }
         }
+        // The standard library follows the compiler (Kotlin 2.1.0).
         implementation("org.jetbrains.kotlin:kotlin-stdlib") {
-            version { strictly("1.9.22") }
+            version { strictly("2.1.0") }
         }
         implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8") {
-            version { strictly("1.9.22") }
+            version { strictly("2.1.0") }
         }
         implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7") {
-            version { strictly("1.9.22") }
+            version { strictly("2.1.0") }
         }
     }
     
@@ -169,7 +213,6 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    implementation 'androidx.recyclerview:recyclerview:1.3.2'
     implementation 'androidx.cardview:cardview:1.0.0'
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
 
@@ -189,6 +232,10 @@ dependencies {
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.activity:activity-compose:1.8.2'
     implementation 'androidx.compose.material:material-icons-extended'
+    // WebView proxy override (lets Proton's sign-in page ride another engine's local listener) is
+    // androidx.webkit 1.8.0, shipped as libs/webkit-1.8.0.aar (picked up by the libs fileTree below)
+    // and NOT as a Maven dependency: Google's Maven answers 404 from Iranian addresses, so the build
+    // could not fetch it there. Its two dependencies (annotation, core) are already on the classpath.
     debugImplementation 'androidx.compose.ui:ui-tooling'
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
 
@@ -225,7 +272,15 @@ dependencies {
     // a duplicate native library. The `-ns` copy has that runtime moved into `pg` and its
     // native library renamed; see third_party/README.md and scripts/repackage-psiphon-aar.py.
     // The pristine upstream AAR is kept in third_party/ and deliberately NOT in this folder.
-    implementation fileTree(dir: 'libs', include: ['*.aar'])
+    //
+    // webkit-1.8.0.aar is left out while MLM CHAT is in the build: the Telegram fork brings
+    // androidx.webkit 1.14.0 (a superset, ProxyController included), and two copies would be
+    // duplicate classes.
+    implementation fileTree(dir: 'libs', include: ['*.aar'], exclude: ['webkit-1.8.0.aar'])
+    implementation 'androidx.webkit:webkit:1.14.0' // Proton's sign-in (ProxyController), same as the fork's
+
+    // MLM CHAT (PLAN 13, T4/T23): the Telegram Android fork, run in the :chat process.
+    implementation project(':TMessagesProj')
     
     // Unit tests. There were none before Config Studio; these two exist so that
     // ConfigBuilder's golden fixtures can run as a plain JVM test rather than needing an

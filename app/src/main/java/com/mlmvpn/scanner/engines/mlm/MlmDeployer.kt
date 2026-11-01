@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
 
 class MlmDeployer(private val context: Context) {
 
-    private val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
+    private val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory()).proxySelector(com.mlmvpn.scanner.engines.cloud.CfTunnel.selector())
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
@@ -199,7 +199,16 @@ class MlmDeployer(private val context: Context) {
                 return@withContext Pair(false, "Failed to read mlm_worker.js from assets: ${e.message}")
             }
 
-            val metadata = JSONObject().apply {
+            // Build 23's XHTTP needs the SESSIONS Durable Object: on workers.dev a packet-up
+            // session's POSTs and its GET land in different isolates, and only the session's own
+            // object can bring them together. This deployer never sent that binding (only Config
+            // Studio's did), so on a panel installed from here the worker fell back to the
+            // in-isolate path and «دریافت کانفیگ xhttp» found nothing that carried data
+            // (device, 2026-10-04: 10 ways tried, all DATA_TRANSFER_FAILURE). Same binding, same
+            // migration tag and the same fallbacks as StudioDeployer: create the class, else
+            // the binding alone (class already there), else replay the tag, else no object --
+            // a panel that deploys without XHTTP still beats a panel that does not deploy.
+            fun metadataFor(withDo: Boolean, migration: String) = JSONObject().apply {
                 put("main_module", "worker.js")
                 // Fixed past date, matching every other deployer in this app (Nahan/SubGen/EDG/DNS/GST).
                 // This used to be computed from the device's local date/timezone -- Cloudflare rejects a
@@ -223,28 +232,49 @@ class MlmDeployer(private val context: Context) {
                     // request, forever and never pruned -- the free plan's 100k daily writes spent
                     // on logs nobody reads, and nothing left for recording usage. Config Studio's
                     // installer stopped sending it for the same reason.
+                    if (withDo) put(JSONObject().apply {
+                        put("type", "durable_object_namespace")
+                        put("name", "SESSIONS")
+                        put("class_name", "SessionDO")
+                    })
                 }
                 put("bindings", bindings)
+                if (withDo && migration != "none") put("migrations", JSONObject().apply {
+                    val tag = "v1"   // StudioDeployer.DO_TAG: the same class, so the same tag
+                    if (migration == "replay") { put("old_tag", tag); put("new_tag", tag) }
+                    else { put("new_tag", tag); put("new_sqlite_classes", org.json.JSONArray().put("SessionDO")) }
+                })
             }
 
-            val multipartBody = MultipartBody.Builder()
+            fun bodyFor(meta: JSONObject) = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-                .addFormDataPart("metadata", "metadata.json", metadata.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+                .addFormDataPart("metadata", "metadata.json", meta.toString().toRequestBody("application/json".toMediaTypeOrNull()))
                 .addFormDataPart("worker.js", "worker.js", workerScript.toRequestBody("application/javascript+module".toMediaTypeOrNull()))
                 .build()
 
             val workerName = com.mlmvpn.scanner.data.PanelBuild.scriptName(account, "MLM")
                 ?: (AntiDpi.generateSafeWorkerName() + "-mlm")
-            val uploadReq = Request.Builder()
+            fun upload(meta: JSONObject): Pair<Boolean, String> = client.newCall(Request.Builder()
                 .url("https://api.cloudflare.com/client/v4/accounts/${account.accountId}/workers/scripts/$workerName")
                 .headers(authHeaders)
-                .put(multipartBody)
-                .build()
+                .put(bodyFor(meta))
+                .build()).execute().use { response -> response.isSuccessful to (response.body?.string().orEmpty().take(400)) }
 
-            client.newCall(uploadReq).execute().use { response ->
-                val body = response.body?.string()
-                if (!response.isSuccessful) return@withContext Pair(false, "Failed to upload MLM worker: $body")
+            var uploaded = false
+            var detail = ""
+            for (migration in listOf("create", "none", "replay")) {
+                val r = upload(metadataFor(true, migration))
+                if (r.first) { uploaded = true; break }
+                detail = r.second
+                android.util.Log.w("MlmDeployer", "deploy with SESSIONS ($migration) failed: ${detail.take(200)}")
             }
+            if (!uploaded) {
+                val r = upload(metadataFor(false, "none"))
+                uploaded = r.first
+                detail = r.second
+                if (uploaded) android.util.Log.w("MlmDeployer", "deployed without SESSIONS: XHTTP will not work on workers.dev")
+            }
+            if (!uploaded) return@withContext Pair(false, "Failed to upload MLM worker: $detail")
 
             // 4. Enable Subdomain
             onProgress(80, "Enabling subdomain routing...")

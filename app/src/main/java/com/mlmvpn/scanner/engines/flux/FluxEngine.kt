@@ -83,6 +83,8 @@ object FluxEngine {
     @Volatile private var wantConnected = false
     @Volatile private var connectJob: Job? = null
     @Volatile private var watchJob: Job? = null
+    /** Searches a failover has run without finding a route; back to 0 on every good connect. */
+    @Volatile private var failoverRetries = 0
     /** The routes in the running tunnel, primary first, and the network they were chosen for. */
     @Volatile private var inTunnel: List<FluxCandidate> = emptyList()
     @Volatile private var tunnelNet: String = ""
@@ -195,7 +197,7 @@ object FluxEngine {
         connectJob?.cancel(); watchJob?.cancel()
         inTunnel = emptyList()
         _ui.value = FluxUiState.Idle
-        context.applicationContext.startService(Intent(context.applicationContext, MyVpnService::class.java).apply { action = "STOP" })
+        com.mlmvpn.scanner.utils.SafeStart.service(context.applicationContext, Intent(context.applicationContext, MyVpnService::class.java).apply { action = "STOP" })
     }
 
     /**
@@ -213,8 +215,15 @@ object FluxEngine {
         return compile(warm, p.ipMode, here.cellular)
     }
 
-    private suspend fun connect() {
-        _ui.value = FluxUiState.Searching
+    /**
+     * [failover]: the route in use stopped answering while connected. The tunnel and the
+     * "connected" state are kept while a replacement is raced (make before break): the tunnel is
+     * replaced only by a route that has answered, not if the old one answers again meanwhile,
+     * and a search that finds nothing does not take the VPN down at once.
+     */
+    private suspend fun connect(failover: Boolean = false) {
+        val before = _ui.value as? FluxUiState.Connected
+        if (!failover) _ui.value = FluxUiState.Searching
         val now0 = System.currentTimeMillis()
         val here = FluxNet.current(app)
         val p = prefs()
@@ -222,6 +231,7 @@ object FluxEngine {
         if (!FluxNet.online(app)) { fail(FluxUiState.Failed(FailureKind.OFFLINE), "no underlying network"); return }
         store.update { FluxMemory.markSeen(it, here.key, now0) }
 
+        withContext(Dispatchers.IO) { runCatching { sources.refreshOwn() } }
         var nodes = nodes()
         if (nodes.isEmpty()) {
             // A fresh install: nothing cached yet. The one time a connect waits for the lists.
@@ -239,7 +249,11 @@ object FluxEngine {
         // ---- warm: a known route on this network, no race.
         val storedVerdict = verdictFor(here.key)
         val warm = FluxPlanner.warm(input(here, p.country, p.ipMode, nodes, storedVerdict, resolvedFor(here.key)))
-        if (warm.isNotEmpty()) {
+        if (warm.any { it.fragment == com.mlmvpn.scanner.engines.flux.core.model.FragmentProfile.ECH }) {
+            com.mlmvpn.scanner.engines.flux.core.outbound.FluxOutbounds.echKey = withContext(Dispatchers.IO) { FluxNet.echKey(here.network, here.key) }
+        }
+        if (failover) FluxLog.i("failover: racing for a replacement while the current tunnel stays up")
+        else if (warm.isNotEmpty()) {
             FluxLog.i("warm start: ${warm.size} known route(s) on this network: ${warm.joinToString(" | ")}")
             if (startAndVerify(warm, p.ipMode, here)) { afterConnected(here, p); return }
             FluxLog.i("warm route failed; benching it and racing")
@@ -257,6 +271,9 @@ object FluxEngine {
                 } else storedVerdict
             }
             val rJob = async { resolve(here, nodes) }
+            // The ECH key, for the ECH candidates this race will hold.
+            val eJob = async(Dispatchers.IO) { FluxNet.echKey(here.network, here.key) }
+            com.mlmvpn.scanner.engines.flux.core.outbound.FluxOutbounds.echKey = eJob.await()
             vJob.await() to rJob.await()
         }
         val v = verdictFor(here.key).takeIf { !it.stale(now0) } ?: verdict
@@ -278,20 +295,57 @@ object FluxEngine {
             tried += cands.map { it.id }
             val routes = race(here, p, cands) ?: continue
             if (!wantConnected) return
+            if (failover && _ui.value is FluxUiState.Connected) {
+                // The route in use may have come back while the race ran: then nothing is replaced.
+                canary(attempts = 1, timeoutMs = HEALTH_TIMEOUT_MS)?.let {
+                    FluxLog.i("failover: the current route answers again (${it} ms); keeping it")
+                    rearmWatch(); return
+                }
+                // From here the tunnel is replaced: "connected" would be untrue for the moment it takes.
+                _ui.value = FluxUiState.Searching
+            }
             if (startAndVerify(routes, p.ipMode, here)) { afterConnected(here, p); return }
             FluxLog.i("round $round: winner did not carry traffic in the tunnel; benching it")
             sitOut(here.key, routes.first().id)
         }
         if (!wantConnected) return
+        if (failover) {
+            // Nothing better found. If what is up still answers, it stays; if not, the search runs
+            // again with the tunnel kept, a couple of times, before the VPN is given up on.
+            val rtt = canary(attempts = 2, timeoutMs = HEALTH_TIMEOUT_MS)
+            if (rtt != null) {
+                FluxLog.i("failover: nothing better after ${tried.size} candidates, but the tunnel answers (${rtt} ms); keeping it")
+                if (_ui.value !is FluxUiState.Connected) {
+                    _ui.value = before?.copy(latencyMs = rtt) ?: FluxUiState.Connected(null, inTunnel.firstOrNull()?.family ?: Family.V4, rtt)
+                }
+                rearmWatch(); return
+            }
+            if (failoverRetries < FAILOVER_RETRIES) {
+                failoverRetries++
+                FluxLog.w("failover: no route after ${tried.size} candidates; searching again in ${FAILOVER_PAUSE_MS / 1000} s ($failoverRetries/$FAILOVER_RETRIES)")
+                delay(FAILOVER_PAUSE_MS)
+                if (wantConnected && isOurs()) connect(failover = true)
+                return
+            }
+        }
         fail(failureFor(p, here), "no route after ${tried.size} candidates")
         stopService()
+    }
+
+    /** Goes back to watching the tunnel that is up (after a failover that kept it). */
+    private fun rearmWatch() {
+        watchJob?.cancel()
+        watchJob = scope.launch { watch() }
     }
 
     /** Races [cands]; returns primary + standbys, or null when nothing passed. */
     private suspend fun race(here: FluxNet.Here, p: FluxPrefs, cands: List<FluxCandidate>): List<FluxCandidate>? {
         val probe = FluxAndroidProbe(app, here.network, mobile = here.cellular)
         val conc = FluxNet.concurrency(app, here)
-        val racer = FluxRacer(probe, FluxRacer.Config(reachConcurrency = conc, realBatch = minOf(10, conc)))
+        // Standbys, not only a winner: the tunnel's balancer moves to a standby on its own when the
+        // primary dies, but a race that stopped 250 ms after the first answer almost never had one
+        // on a slow line -- so every dead primary meant a new search and a tunnel restart.
+        val racer = FluxRacer(probe, FluxRacer.Config(reachConcurrency = conc, realBatch = minOf(10, conc), graceMs = STANDBY_GRACE_MS, enough = STANDBYS))
         val t0 = System.currentTimeMillis()
         val out = try {
             racer.race(cands,
@@ -361,8 +415,9 @@ object FluxEngine {
     private suspend fun launch(cfg: String): Boolean {
         FluxLog.i("tunnel: starting config (${cfg.length} chars, ${JSONObject(cfg).optString("remarks")})")
         val wasUp = MyVpnService.connectionPhaseFlow.value == MyVpnService.Phase.CONNECTED
-        app.startService(Intent(app, MyVpnService::class.java).apply {
+        com.mlmvpn.scanner.utils.SafeStart.service(app, Intent(app, MyVpnService::class.java).apply {
             putExtra("NODE_URI", cfg)
+            putExtra("MTU_PROFILE", com.mlmvpn.scanner.utils.NetworkSettings.Method.FLUX.id)
             putExtra("NODE_ID", NODE_ID)
             putExtra("PROXY_MODE", false)
             putExtra("LOCAL_PORT", LocalPort.getString(app))
@@ -391,7 +446,7 @@ object FluxEngine {
 
     private fun stopService() {
         if (MyVpnService.connectedNodeIdFlow.value == NODE_ID) {
-            app.startService(Intent(app, MyVpnService::class.java).apply { action = "STOP" })
+            com.mlmvpn.scanner.utils.SafeStart.service(app, Intent(app, MyVpnService::class.java).apply { action = "STOP" })
         }
     }
 
@@ -401,13 +456,13 @@ object FluxEngine {
      * One real request through the running tunnel's own HTTP inbound -- the same path an app's
      * traffic takes (the balancer, the primary or a standby). The time to the status line, or null.
      */
-    private suspend fun canary(attempts: Int): Long? = withContext(Dispatchers.IO) {
+    private suspend fun canary(attempts: Int, timeoutMs: Int = 6_000): Long? = withContext(Dispatchers.IO) {
         val port = LocalPort.get(app) + 10000
         repeat(attempts) { i ->
             val ms = runCatching {
                 val start = System.nanoTime()
                 Socket(Proxy.NO_PROXY).use { s ->
-                    s.soTimeout = 6_000
+                    s.soTimeout = timeoutMs
                     s.connect(InetSocketAddress("127.0.0.1", port), 2_000)
                     s.getOutputStream().write("GET http://www.gstatic.com/generate_204 HTTP/1.0\r\nHost: www.gstatic.com\r\nConnection: close\r\n\r\n".toByteArray())
                     val line = s.getInputStream().bufferedReader().readLine().orEmpty()
@@ -424,6 +479,7 @@ object FluxEngine {
     // ---------------------------------------------------------------- after connecting
 
     private fun afterConnected(here: FluxNet.Here, p: FluxPrefs) {
+        failoverRetries = 0
         watchJob?.cancel()
         watchJob = scope.launch {
             launch { background(here, p) }
@@ -443,7 +499,9 @@ object FluxEngine {
             delay(interval)
             if (!isOurs()) return
             if (!screenOn()) continue
-            val rtt = canary(attempts = 1)
+            // Two tries with a longer wait: one slow answer on a busy line is not a dead route (a
+            // check failed and the next request went through in 267 ms, on a phone).
+            val rtt = canary(attempts = 2, timeoutMs = HEALTH_TIMEOUT_MS)
             FluxLog.i("health: ${rtt?.let { "OK ${it}ms" } ?: "FAIL"} (next check in ${if (rtt != null) minOf(interval * 2, 5 * 60_000L) / 1000 else 20}s)")
             val primary = inTunnel.firstOrNull() ?: return
             if (rtt != null) {
@@ -463,7 +521,7 @@ object FluxEngine {
                 // The failed primary sits out, so the plan picks a standby or races anew.
                 sitOut(tunnelNet, primary.id)
                 connectJob?.cancel()
-                connectJob = scope.launch { runCatching { connect() } }
+                connectJob = scope.launch { runCatching { connect(failover = true) } }
                 return
             }
         }
@@ -640,6 +698,8 @@ object FluxEngine {
     private fun input(here: FluxNet.Here, country: String?, mode: IpMode, nodes: List<FluxNode>, v: NetVerdict, resolved: Map<String, Map<Family, String>>) =
         FluxPlanner.Input(nodes, store.current, here.key, System.currentTimeMillis(), country, mode, v, resolved)
 
+    private val resolveGate = Semaphore(16)
+
     private fun resolvedFor(net: String): Map<String, Map<Family, String>> =
         resolvedCache?.takeIf { it.first == net }?.second.orEmpty()
 
@@ -648,11 +708,15 @@ object FluxEngine {
         resolvedCache?.takeIf { it.first == here.key }?.let { return it.second }
         val named = nodes.filter { Family.ofLiteral(it.server) == null }
         if (named.isEmpty()) return emptyMap()
-        val gate = Semaphore(16)
         val out = java.util.concurrent.ConcurrentHashMap<String, Map<Family, String>>()
-        withTimeoutOrNull(4_500) {
-            named.map { n -> scope.async { gate.withPermit { FluxNet.resolve(app, here.network, n.server).takeIf { it.isNotEmpty() }?.let { out[n.id] = it } } } }.awaitAll()
-        }
+        // One gate for every call, and what is still waiting for it is cancelled at the timeout. A
+        // lookup blocks its thread until the resolver gives up; with a gate per call, repeated
+        // attempts on a dead network piled up blocked threads until the phone could not start
+        // another (out-of-memory and coroutine crashes on Android 11, 1.2.39). Lookups already
+        // running are left to finish on their own, so the timeout still returns on time.
+        val jobs = named.map { n -> scope.async { resolveGate.withPermit { FluxNet.resolve(app, here.network, n.server).takeIf { it.isNotEmpty() }?.let { out[n.id] = it } } } }
+        withTimeoutOrNull(4_500) { jobs.awaitAll() }
+        jobs.forEach { it.cancel() }
         return out.toMap().also { resolvedCache = here.key to it }
     }
 
@@ -691,7 +755,14 @@ object FluxEngine {
         _ui.value = state
     }
 
-    private const val ROUNDS = 3
+    /** Every round holds every method, so a fourth costs ~8 s and reaches untried servers of each. */
+    private const val ROUNDS = 4
+    /** Racing on after the first answer, for standbys; ends sooner once [STANDBYS] have answered. */
+    private const val STANDBY_GRACE_MS = 1_500L
+    private const val STANDBYS = 3
+    private const val HEALTH_TIMEOUT_MS = 10_000
+    private const val FAILOVER_RETRIES = 2
+    private const val FAILOVER_PAUSE_MS = 30_000L
     private const val DISCOVERY_EVERY_MS = 6 * 3600_000L
     private const val DISCOVERY_MAX = 24
 
@@ -711,6 +782,46 @@ object FluxEngine {
     }
 
     /** Read by MAE: FLUX's proven routes on [net], best first, at most [max]. No probing. */
+    /** What MLM Scout runs for FLUX on one IP family: a one-route probe config and where it comes out. */
+    data class ScoutRoute(val config: String, val country: String?)
+
+    /**
+     * MLM Scout's question, "does FLUX work on this line over [family]?": this network's known
+     * route for the family, else a race -- the same planner, racer and learning a connect uses
+     * (so what Scout proves here is remembered for the next connect), but no tunnel and nothing
+     * written to the user's choices. The config is FLUX's probe shape: the caller gives it a SOCKS
+     * inbound of its own. Null when no route was found.
+     */
+    suspend fun scoutRoute(context: Context, family: Family): ScoutRoute? {
+        init(context)
+        val here = FluxNet.current(app)
+        if (!FluxNet.online(app)) return null
+        val mode = if (family == Family.V6) IpMode.V6 else IpMode.V4
+        var nodes = nodes()
+        if (nodes.isEmpty()) {
+            withContext(Dispatchers.IO) { sources.refreshDue(here.wifi, null, force = true) }
+            nodes = nodes()
+            if (nodes.isEmpty()) return null
+        }
+        val now = System.currentTimeMillis()
+        val stored = verdictFor(here.key)
+        val primary = FluxPlanner.warm(input(here, null, mode, nodes, stored, resolvedFor(here.key))).firstOrNull()
+            ?: run {
+                val v = if (stored.stale(now)) FluxNet.measureVerdict(app, here, now).also { v ->
+                    store.update { s -> FluxMemory.setVerdict(s, here.key, mergeVerdict(s.nets[here.key]?.verdict, v)) }
+                } else stored
+                if (FluxPlanner.families(mode, v).isEmpty()) return null
+                val resolved = resolve(here, nodes)
+                val inp = input(here, null, mode, nodes, v, resolved).copy(budget = if (here.wifi) 40 else 28)
+                val cands = FluxPlanner.candidates(inp)
+                if (cands.isEmpty()) return null
+                race(here, prefs().copy(country = null, ipMode = mode), cands)?.firstOrNull()
+            }
+            ?: return null
+        FluxLog.i("scout: route for ${family.name}: $primary")
+        return ScoutRoute(FluxConfigCompiler.probe(mapOf(primary to 10808)), store.current.egress[primary.egressKey]?.countryCode)
+    }
+
     fun provenRoutes(net: String, max: Int): List<FluxCandidate> {
         if (!initialized) return emptyList()
         val s: FluxState = store.current

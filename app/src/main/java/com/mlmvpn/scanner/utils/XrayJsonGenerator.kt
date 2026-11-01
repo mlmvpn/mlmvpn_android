@@ -8,7 +8,8 @@ import com.mlmvpn.scanner.data.studio.config.toConfigSpec
 object XrayJsonGenerator {
 
     /**
-     * Whether to send the TLS handshake in its "unfiltered" shape. See [buildStream].
+     * Whether to send Cloudflare-fronted TLS in its "unfiltered" shape (fragment + the unsafe
+     * fingerprint). See [CfUnfilter].
      *
      * Held here rather than passed in, because it has to reach ELEVEN call sites and most of them
      * are measurement paths. A config must be measured exactly the way it will be connected, or
@@ -120,14 +121,11 @@ object XrayJsonGenerator {
             put("security", "tls")
             put("tlsSettings", JSONObject().apply {
                 put("serverName", AntiDpi.generateMixedCaseSNI(exit.host))
-                val fingerprint = theirTls?.optString("fingerprint").orEmpty()
-                if (theirTls != null && theirTls.has("cipherSuites")) {
-                    // The unfiltering swap: no fingerprint, the hand-picked ciphers instead.
-                    put("cipherSuites", theirTls.optString("cipherSuites"))
-                    theirTls.optString("maxVersion").takeIf { it.isNotBlank() }?.let { put("maxVersion", it) }
-                } else {
-                    put("fingerprint", fingerprint.ifBlank { "chrome" })
-                }
+                // The tunnel's own handshake, whatever it is: its fingerprint (`unsafe` included) and the
+                // cipher list that only counts with it.
+                put("fingerprint", theirTls?.optString("fingerprint").orEmpty().ifBlank { "chrome" })
+                theirTls?.optString("cipherSuites")?.takeIf { it.isNotBlank() }?.let { put("cipherSuites", it) }
+                theirTls?.optString("maxVersion")?.takeIf { it.isNotBlank() }?.let { put("maxVersion", it) }
                 put("alpn", JSONArray().put("http/1.1"))
             })
             put("wsSettings", JSONObject().apply {
@@ -136,6 +134,8 @@ object XrayJsonGenerator {
                 theirs.optJSONObject("wsSettings")?.optJSONObject("headers")?.let { put("headers", JSONObject(it.toString())) }
             })
             theirs.optJSONObject("sockopt")?.let { put("sockopt", JSONObject(it.toString())) }
+            // The fragment masks too: the exit is reached the way the tunnel is, handshake included.
+            theirs.optJSONObject("finalmask")?.let { put("finalmask", JSONObject(it.toString())) }
         }
         return JSONObject().apply {
             put("tag", GEMINI_EXIT_TAG)
@@ -415,20 +415,6 @@ object XrayJsonGenerator {
     }
 
     /**
-     * A TLS 1.2 cipher list, and the ceiling that makes it mean anything.
-     *
-     * `cipherSuites` is Go's `tls.Config.CipherSuites`, and Go ignores it for TLS 1.3 -- the 1.3
-     * suites are not configurable. Setting a cipher list without also capping the version is
-     * therefore a setting that does nothing at all on any modern server, which is the failure
-     * mode this constant exists to avoid.
-     */
-    private const val UNFILTER_CIPHERS =
-        "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:" +
-            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:" +
-            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305:" +
-            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
-
-    /**
      * `streamSettings` for an outbound, from the one shared builder.
      *
      * This file used to construct `streamSettings` in **three** places -- `generateConfig`,
@@ -449,21 +435,15 @@ object XrayJsonGenerator {
      * config given to someone else: the unfiltering cipher swap below, and the `sockopt` pinning in
      * `generateConfig`.
      */
-    private fun buildStream(config: VpnConfig): JSONObject {
+    private fun buildStream(config: VpnConfig, stage: com.mlmvpn.scanner.engines.cfnet.CfStage? = com.mlmvpn.scanner.engines.cfnet.CfStage.CONNECT): JSONObject {
         val stream = ConfigBuilder.buildStreamSettings(config.toConfigSpec())
 
-        // Unfiltering swaps uTLS for a hand-picked cipher list, and the fingerprint has to GO for
-        // that to mean anything: a fingerprint switches Xray to uTLS, which builds the ClientHello
-        // from a stored browser profile and ignores `cipherSuites` entirely -- so leaving it in
-        // place would make the whole switch inert. (PattNG solves the same problem the other way,
-        // with a patched core offering an `unsafe` fingerprint value; ours does not have one.)
-        if (tlsUnfilter) {
-            stream.optJSONObject("tlsSettings")?.apply {
-                remove("fingerprint")
-                put("cipherSuites", UNFILTER_CIPHERS)
-                put("maxVersion", "1.2")
-            }
-        }
+        // «رفع فیلتر»: the fragment + fingerprint handshake, for Cloudflare-fronted TLS outbounds -- and
+        // the link's own `cs` / `fm`, always. See [CfUnfilter] for what it sets and why the earlier
+        // version of this switch (remove the fingerprint, set a cipher list) did nothing.
+        CfUnfilter.shape(stream, config, tlsUnfilter)
+        if (tlsUnfilter) com.mlmvpn.scanner.engines.cfnet.CfNetManager.current()?.apply(stream, config, stage)
+        if (CfUnfilter.isLocalFront(config)) CfUnfilter.shapeForLocalFront(stream)
         return stream
     }
 
@@ -512,7 +492,10 @@ object XrayJsonGenerator {
          * refused client and an allowed one arrive the same way.
          */
         lanBlocked: Set<String> = emptySet(),
+        strategyStage: com.mlmvpn.scanner.engines.cfnet.CfStage? = com.mlmvpn.scanner.engines.cfnet.CfStage.CONNECT,
+        preserveEndpoint: Boolean = false,
     ): String {
+        val config = if (tlsUnfilter && !preserveEndpoint) com.mlmvpn.scanner.engines.cfnet.CfNetManager.current()?.configure(config, strategyStage) ?: config else config
         val json = JSONObject()
 
         // Log
@@ -638,7 +621,7 @@ object XrayJsonGenerator {
         }
 
         // Stream Settings -- built by the shared ConfigBuilder (see buildStream).
-        val streamSettings = buildStream(config)
+        val streamSettings = buildStream(config, strategyStage)
 
         // The server address was already resolved by DomainPreResolver and its IPs are pinned
         // into dns.hosts below, so tell the outbound to dial by IP ("ForceIP" resolves through
@@ -1468,10 +1451,14 @@ object XrayJsonGenerator {
      * "listening TCP" line for a test instance at all -- those inbounds were never even started.
      * Log level drops to warning too: a bulk run of hundreds of configs at "info" is a lot of
      * log for numbers nobody reads per-connection.
+     *
+     * [strategyStage] is which proven Cloudflare strategy the measurement dials with. CONNECT by
+     * default: a delay shown next to a config must describe the connection that config will get.
+     * The scanner passes SCAN; the Doctor's own probes pass null to measure the bare config.
      */
-    fun generateSpeedtestConfig(config: VpnConfig): String {
+    fun generateSpeedtestConfig(config: VpnConfig, strategyStage: com.mlmvpn.scanner.engines.cfnet.CfStage? = com.mlmvpn.scanner.engines.cfnet.CfStage.CONNECT): String {
         val port = nextTestPort()
-        val full = generateConfig(config, localPort = port, includeTun = false)
+        val full = generateConfig(config, localPort = port, includeTun = false, strategyStage = strategyStage, preserveEndpoint = true)
         return try {
             val json = JSONObject(full)
             json.put("log", JSONObject().put("loglevel", "warning"))
@@ -1580,4 +1567,3 @@ object XrayJsonGenerator {
         return json.toString()
     }
 }
-

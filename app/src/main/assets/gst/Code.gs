@@ -127,19 +127,27 @@ function _decoyOrError(jsonBody) {
 }
 
 function doPost(e) {
+  var req;
   try {
-    var req = JSON.parse(e.postData.contents);
-    if (req.k !== AUTH_KEY) return _decoyOrError({ e: "unauthorized" });
+    req = JSON.parse(e.postData.contents);
+  } catch (err) {
+    // Parse failures of the request body are also probe-shaped — a real
+    // mhrv-rs client never sends invalid JSON. Decoy for the same reason.
+    return _decoyOrError({ e: String(err) });
+  }
+  if (!req || req.k !== AUTH_KEY) return _decoyOrError({ e: "unauthorized" });
 
+  // Past the key check the caller is ours, so a failure here (quota used up,
+  // a fetch that throws) is reported as JSON. Serving the decoy for it made the
+  // app say "wrong password" for what was really a Google-side error.
+  try {
     // Batch mode: { k, q: [...] }
     if (Array.isArray(req.q)) return _doBatch(req.q);
 
     // Single mode
     return _doSingle(req);
   } catch (err) {
-    // Parse failures of the request body are also probe-shaped — a real
-    // mhrv-rs client never sends invalid JSON. Decoy for the same reason.
-    return _decoyOrError({ e: String(err) });
+    return _json({ e: "relay error: " + String(err) });
   }
 }
 

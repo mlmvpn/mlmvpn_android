@@ -30,10 +30,12 @@ import com.mlmvpn.scanner.engines.game.booster.model.RouteKind
 import com.mlmvpn.scanner.engines.game.booster.probe.EchoProtocol
 import com.mlmvpn.scanner.engines.game.booster.probe.PathStats
 import com.mlmvpn.scanner.engines.game.booster.probe.ProbeStats
-import com.mlmvpn.scanner.engines.game.booster.probe.RttSample
 import com.mlmvpn.scanner.engines.game.booster.probe.SocksUdpSession
 import com.mlmvpn.scanner.engines.game.booster.probe.UdpVia
 import com.mlmvpn.scanner.engines.game.booster.probe.tcpTrain
+import com.mlmvpn.scanner.engines.game.booster.probe.tlsTrain
+import com.mlmvpn.scanner.engines.game.booster.probe.TrainResult
+import com.mlmvpn.scanner.engines.game.booster.probe.SliceAccumulator
 import com.mlmvpn.scanner.engines.game.booster.probe.udpTrainFlows
 import com.mlmvpn.scanner.utils.S
 import kotlinx.coroutines.CancellationException
@@ -43,6 +45,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.net.InetSocketAddress
@@ -105,8 +109,8 @@ class GameBoostService : Service() {
         symptom: com.mlmvpn.scanner.engines.game.booster.model.Symptom? = null,
     ) {
         // A boost replacing a running one ends that session first, so it is learned from too.
-        finishSession(userStopped = true)
-        job?.cancel()
+        val previous = job
+        previous?.cancel()
         orchestrator?.abort()
         val store = GameProfileStore(this)
         val profile = store.get(gameId) ?: run { stopSelf(); return }
@@ -115,6 +119,9 @@ class GameBoostService : Service() {
         orchestrator = orch
         job = scope.launch {
             try {
+                previous?.join()
+                finishSession(userStopped = true)
+                overlay.hide()
                 val session = orch.run(BoostOrchestrator.Plan(
                     profile = profile,
                     regionKey = regionKey ?: profile.defaultRegion,
@@ -123,6 +130,7 @@ class GameBoostService : Service() {
                     forceWarp = forceWarp,
                     symptom = symptom,
                 ))
+                currentCoroutineContext().ensureActive()
                 if (session == null) {
                     failBoost("internal")
                     return@launch
@@ -145,8 +153,11 @@ class GameBoostService : Service() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                currentCoroutineContext().ensureActive()
                 Log.e(TAG, "boost failed", e)
                 failBoost(e.javaClass.simpleName)
+            } finally {
+                orch.abort()
             }
         }
     }
@@ -160,20 +171,9 @@ class GameBoostService : Service() {
         orchestrator?.abort()
         orchestrator = null
         tuner.release()
-        stopOwnGameVpn()
         GameBoostController.update { it.copy(phase = BoostPhase.FAILED, error = error, live = null) }
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
-    }
-
-    /** Only our own game session; a tunnel the user started elsewhere is not ours to stop. */
-    private fun stopOwnGameVpn() {
-        if (ownGameVpnUp()) com.mlmvpn.scanner.ui.stopVpnSafely(this)
-    }
-
-    private fun ownGameVpnUp(): Boolean {
-        val node = MyVpnService.connectedNodeId
-        return MyVpnService.isRunning && (node == BoostOrchestrator.NODE_DNS || node == BoostOrchestrator.NODE_WARP)
     }
 
     /**
@@ -187,9 +187,7 @@ class GameBoostService : Service() {
     private suspend fun monitor(session: BoostOrchestrator.Session, gameName: String) {
         val viaWarp = session.route == RouteKind.WARP_MASQUE_H3 || session.route == RouteKind.WARP_MASQUE_H2 ||
             session.route == RouteKind.WARP_WG
-        val socks = InetSocketAddress("127.0.0.1", AetherEngine.AETHER_SOCKS_PORT)
-        val window = ArrayDeque<Pair<Long, List<RttSample>>>()
-        val sentWindow = ArrayDeque<Pair<Long, Int>>()
+        val window = ArrayDeque<Pair<Long, TrainResult>>()
         val series = ArrayDeque<Int?>()
         // One association per flow of the burst, kept for the whole session (see udpTrainFlows).
         var udpSessions: List<SocksUdpSession> = emptyList()
@@ -202,14 +200,17 @@ class GameBoostService : Service() {
         val phone = PhoneSampler(this)
         var lastCause: SpikeWatch.Cause? = null
         var lastCauseAt = 0L
+        var lastTickAt = android.os.SystemClock.elapsedRealtime()
         try {
-            while (scope.isActive) {
+            while (currentCoroutineContext().isActive) {
                 if (System.currentTimeMillis() - startedAt > MAX_SESSION_MS) break
                 // A route through our VPN that someone switched off, or replaced with another
                 // connection, is over: a live reading of a path the game is no longer on would be
                 // a lie. A few seconds of grace ride out the service's own reconnects.
                 if (session.route != RouteKind.DIRECT) {
-                    routeMissing = if (ownGameVpnUp()) 0 else routeMissing + 1
+                    val up = GameRoute.isUp(session.route, MyVpnService.isRunning, MyVpnService.connectedNodeId) &&
+                        MyVpnService.activeGameSessionId == session.owner
+                    routeMissing = if (up) 0 else routeMissing + 1
                     if (routeMissing >= ROUTE_GONE_CHECKS) {
                         Log.i(TAG, "the game route is gone (VPN stopped or replaced) -- ending the boost")
                         routeLost = true
@@ -218,12 +219,30 @@ class GameBoostService : Service() {
                 }
                 // The phone may have moved between Wi-Fi and mobile data since the boost; probe the
                 // network the game is on now, not the one it was on then.
-                val network = if (viaWarp) null else (GameNetwork.pick(this)?.network ?: session.network)
+                val path = GameRoute.probePath(session.route, nativeAmnezia = MyVpnService.runtimeSocksPort == 0)
+                val proxyPort = if (viaWarp) AetherEngine.AETHER_SOCKS_PORT else MyVpnService.runtimeSocksPort
+                val socks = if (path == GameRoute.ProbePath.SOCKS && proxyPort > 0)
+                    InetSocketAddress("127.0.0.1", proxyPort) else null
+                val network = when (path) {
+                    GameRoute.ProbePath.PHYSICAL -> GameNetwork.pick(this)?.network
+                    GameRoute.ProbePath.SOCKS -> null
+                    GameRoute.ProbePath.VPN -> {
+                        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                        cm.allNetworks.firstOrNull { cm.getNetworkCapabilities(it)
+                            ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true }
+                    }
+                }
                 val burst = when {
+                    routeMissing > 0 -> null
+                    path == GameRoute.ProbePath.PHYSICAL && network == null -> null
+                    path == GameRoute.ProbePath.VPN && network == null -> null
+                    path == GameRoute.ProbePath.SOCKS && socks == null -> null
+                    session.method == ProbeMethod.TLS_HANDSHAKE && session.tcpTarget != null ->
+                        tlsTrain(session.tcpTarget, count = 2, gapMs = 100, timeoutMs = 2000, socks = socks, network = network)
                     session.method == ProbeMethod.ECHO && session.echoTarget != null -> {
                         // Five probes, one per flow: a beacon answers a couple of packets a second
                         // per flow, and a burst of five on one flow read as loss that was not there.
-                        val flows = if (viaWarp) {
+                        val flows = if (socks != null) {
                             if (udpSessions.size < BURST_FLOWS || udpSessions.any { !it.alive }) {
                                 udpSessions.forEach { it.close() }
                                 udpSessions = SocksUdpSession.openMany(socks, BURST_FLOWS)
@@ -235,7 +254,7 @@ class GameBoostService : Service() {
                             ppsPerFlow = 20.0 / flows.size, durationMs = 250, timeoutMs = 1000)
                     }
                     session.tcpTarget != null -> tcpTrain(session.tcpTarget, count = 2, gapMs = 100, timeoutMs = 2000,
-                        socks = if (viaWarp) socks else null, network = network)
+                        socks = socks, network = network)
                     else -> null
                 }
                 val now = System.currentTimeMillis()
@@ -254,22 +273,23 @@ class GameBoostService : Service() {
                         "link ${ctxNow.wifiLinkMbps}, thermal ${ctxNow.thermal})")
                 }
                 if (burst != null) {
-                    window.addLast(now to burst.samples)
-                    sentWindow.addLast(now to burst.sent)
+                    window.addLast(now to burst)
                     series.addLast(burst.stats.p50)
                 }
                 while (window.isNotEmpty() && now - window.first().first > WINDOW_MS) window.removeFirst()
-                while (sentWindow.isNotEmpty() && now - sentWindow.first().first > WINDOW_MS) sentWindow.removeFirst()
                 while (series.size > SERIES_POINTS) series.removeFirst()
 
-                var seq = 0
-                val samples = window.flatMap { (_, s) -> s.map { it.copy(seq = seq++) } }
-                val stats = ProbeStats.stats(samples, sentWindow.sumOf { it.second })
+                val accumulated = SliceAccumulator()
+                window.forEach { (_, train) -> accumulated.add(train) }
+                val stats = accumulated.stats()
                 val status = judge(stats, baseline, burst?.ok == true)
                 badSince = if (status == LiveStatus.GOOD) 0L else if (badSince == 0L) now else badSince
                 // A single bad burst is noise; the colour only changes once it has lasted.
                 val shown = if (status != LiveStatus.GOOD && now - badSince < SUSTAIN_MS) LiveStatus.GOOD else status
-                if (shown == LiveStatus.GOOD) goodMs += BURST_EVERY_MS else badMs += BURST_EVERY_MS
+                val tickAt = android.os.SystemClock.elapsedRealtime()
+                val elapsed = tickAt - lastTickAt
+                lastTickAt = tickAt
+                if (shown == LiveStatus.GOOD) goodMs += elapsed else badMs += elapsed
                 val live = LiveReading(stats.p50, stats.jitter, stats.loss, stats.lossIsMeaningful,
                     shown, series.toList(), now,
                     lastCause = lastCause?.takeIf { now - lastCauseAt < CAUSE_SHOWN_MS }, spikes = watch.spikes)
@@ -281,7 +301,7 @@ class GameBoostService : Service() {
         } finally {
             udpSessions.forEach { it.close() }
         }
-        if (scope.isActive) stopBoost(userAsked = false)
+        if (currentCoroutineContext().isActive) stopBoost(userAsked = false)
     }
 
     private fun judge(s: PathStats, base: PathStats?, answeredLast: Boolean): LiveStatus {
@@ -328,15 +348,24 @@ class GameBoostService : Service() {
         }
     }
 
+    /**
+     * The orchestrator's teardown stops the tunnel it brought up (Aether, which seals its identity
+     * files on the way out): on the main thread that froze the app for nine seconds when a boost
+     * was stopped (1.2.42 #2256).
+     */
+    private fun abortOffMain(o: BoostOrchestrator?) {
+        if (o == null) return
+        Thread({ runCatching { o.abort() } }, "boost-abort").start()
+    }
+
     private fun stopBoost(userAsked: Boolean) {
         finishSession(userStopped = userAsked)
         overlay.hide()
         job?.cancel()
         job = null
-        orchestrator?.abort()
+        abortOffMain(orchestrator)
         orchestrator = null
         tuner.release()
-        stopOwnGameVpn()
         GameBoostController.reset()
         Log.i(TAG, "boost stopped (${if (userAsked) "user" else "session ended"})")
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -347,11 +376,10 @@ class GameBoostService : Service() {
         finishSession(userStopped = false)
         overlay.hide()
         job?.cancel()
-        orchestrator?.abort()
+        abortOffMain(orchestrator)
         tuner.release()
         // Destroyed without Stop (the system reclaimed it): a game route left behind would keep
         // the game in a session nobody watches any more. Our own game route only, never the user's.
-        stopOwnGameVpn()
         val s = GameBoostController.state.value
         if (s.phase != BoostPhase.FAILED && s.outcome?.measureOnly != true) GameBoostController.reset()
         scope.cancel()
@@ -452,7 +480,7 @@ class GameBoostService : Service() {
                 else -> Unit
             }
             try {
-                app.startService(Intent(app, GameBoostService::class.java).setAction(ACTION_STOP))
+                com.mlmvpn.scanner.utils.SafeStart.service(app, Intent(app, GameBoostService::class.java).setAction(ACTION_STOP))
             } catch (_: Exception) {
                 GameBoostController.reset()
             }

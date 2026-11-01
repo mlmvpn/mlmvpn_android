@@ -30,6 +30,9 @@ import com.mlmvpn.scanner.R
  * are random), and a worker nothing here recognises is the user's own and is never touched.
  */
 object StoreCatalog {
+    private const val IRAN_FRAG_A = "Serverless-fragA.jsonc"
+    private const val IRAN_FRAG_B = "Serverless-fragB.jsonc"
+
 
     private val Blue = Color(0xFF0A84FF)
     private val Indigo = Color(0xFF5E5CE6)
@@ -98,7 +101,12 @@ object StoreCatalog {
                 probeArgs = listOf("--version"), probeRe = Regex("""aether\s+v?([0-9][0-9.]*)"""),
                 // Read out of the shipped binary's own version string. Change it together with
                 // the binary: it is the "version in use" until the store installs one.
-                shipped = "1.4.0",
+                shipped = "2.4.0",
+                // «وارپ», the exit-country ping and the Game tab start it by these.
+                requires = listOf(
+                    "AETHER_SOCKS", "AETHER_PROTOCOL", "AETHER_CONFIG", "AETHER_NOIZE", "AETHER_IP",
+                    "AETHER_PEER", "AETHER_WG_PEER", "socks5 server listening",
+                ),
             ),
             aboutFa = "ساخت رسمی خودِ سازنده برای اندروید، بدون هیچ تغییری. پیش از استفاده یک بار اجرا می‌شود تا مطمئن شویم روی این گوشی بالا می‌آید.",
             aboutEn = "The developer's own Android build, unmodified. It is run once before use to prove it starts on this phone.",
@@ -167,7 +175,11 @@ object StoreCatalog {
             developer = "MLM VPN", repo = "mlmvpn/mlmvpn_android",
             source = StoreSource.Channel,
             icon = StoreIcon(Icons.Default.Bolt, Blue, tint2 = Indigo),
-            engine = EngineSpec(libs = listOf("libtunnelcore.so", "libtunneljni.so"), mode = EngineSpec.Mode.JNI),
+            engine = EngineSpec(
+                libs = listOf("libtunnelcore.so", "libtunneljni.so"), mode = EngineSpec.Mode.JNI,
+                // The config fields CoreConfig writes; `forced_peer` carries the exit country.
+                requires = listOf("forced_peer", "masque_transport", "ip_scan", "endpoint_cache_path"),
+            ),
         ),
         StoreItem(
             id = "gst", kind = StoreKind.ENGINE,
@@ -203,7 +215,8 @@ object StoreCatalog {
             id = "amneziawg", kind = StoreKind.ENGINE,
             titleFa = "هستهٔ AmneziaWG", titleEn = "AmneziaWG core",
             subtitleFa = "وارپ رایگان و وایرگارد", subtitleEn = "Free WARP and WireGuard",
-            developer = "Amnezia", repo = "amnezia-vpn/amneziawg-android",
+            // The library the app links (com.zaneschepke:amneziawg-android), not Amnezia's app.
+            developer = "Zane Schepke (AmneziaWG)", repo = "zaneschepke/amneziawg-android",
             source = StoreSource.WithApp,
             icon = StoreIcon(Icons.Default.VpnKey, Green),
         ),
@@ -530,10 +543,40 @@ object StoreCatalog {
             id = "iran-configs", kind = StoreKind.DATA,
             titleFa = "کانفیگ‌های ایران", titleEn = "Iran configs",
             subtitleFa = "کانفیگ ایران", subtitleEn = "Iran configs",
-            developer = "MLM VPN", repo = "mlmvpn/mlmvpn_android",
-            source = StoreSource.Channel,
+            // Followed at the source: @patterniha's repository has no releases, only commits to
+            // two .jsonc files, and the channel this item used to come from never saw v51 or v52.
+            // The store now reads those two files where they are published and rebuilds the
+            // list on the phone: the new version's configs are added, the old ones never touched.
+            developer = "patterniha", repo = "patterniha/Serverless-for-Iran",
+            source = StoreSource.GithubFiles(
+                repo = "patterniha/Serverless-for-Iran", branch = "main",
+                paths = listOf(IRAN_FRAG_A, IRAN_FRAG_B),
+                versionInContent = IranProfilesBuilder.VERSION,
+            ),
             icon = StoreIcon(Icons.Default.Flag, Green, imageRes = R.drawable.ic_app_iran),
-            data = DataSpec("iran_profiles.json", DataSpec.Target.OVERLAY, json = true),
+            data = DataSpec(
+                "iran_profiles.json", DataSpec.Target.OVERLAY, json = true,
+                // What assets/iran_profiles.json was generated from.
+                shipped = "52",
+                build = { context, files ->
+                    // Nothing already in the list is touched: the new version's own configs are
+                    // added at the top (the user's rule, 2026-10-04). The list in use -- the Store's
+                    // copy if one is installed, else the app's -- is the base.
+                    val current = StoreFiles.open(context, "iran_profiles.json").bufferedReader().use { it.readText() }
+                    val merged = IranProfilesBuilder.merge(current, listOf(files.getValue(IRAN_FRAG_A), files.getValue(IRAN_FRAG_B)))
+                    // Nothing is installed before the core that will run it has accepted it.
+                    val fresh = org.json.JSONArray(merged).let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+                        .filter { o -> runCatching { org.json.JSONArray(current).let { c -> (0 until c.length()).none { c.getJSONObject(it).optString("id") == o.optString("id") } } }.getOrDefault(true) }
+                    val native = com.mlmvpn.scanner.engines.cfdoctor.NativeProbe(context.applicationContext)
+                    try {
+                        for (o in fresh) {
+                            val (status, _) = kotlinx.coroutines.runBlocking { native.withCore(o.getString("config"), keepRouting = true) { true } }
+                            if (status != "ok") throw IranProfilesBuilder.BuildError("Xray: ${o.optString("name")}: $status")
+                        }
+                    } finally { native.release() }
+                    merged
+                },
+            ),
         ),
         StoreItem(
             id = "mitm-config", kind = StoreKind.DATA,

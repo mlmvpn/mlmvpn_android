@@ -3,7 +3,6 @@ package com.mlmvpn.scanner.engines.amnezia
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
-import java.util.Base64
 
 /**
  * One WireGuard config, read from a `.conf` file or a `wireguard://` link, with any AmneziaWG
@@ -179,7 +178,7 @@ data class WgConfig(
         }
 
         /** A 32-byte key in base64, as WireGuard writes it. */
-        fun validKey(k: String?): Boolean = k != null && runCatching { Base64.getDecoder().decode(k.trim()).size == 32 }.getOrDefault(false)
+        fun validKey(k: String?): Boolean = k != null && runCatching { com.mlmvpn.scanner.engines.cfdoctor.WireBase64.decode(k.trim()).size == 32 }.getOrDefault(false)
 
         /** Why a `.conf` cannot be used, for a message that names it; null when it can. */
         enum class Problem { NO_PEER, NO_ENDPOINT, BAD_PRIVATE_KEY, BAD_PUBLIC_KEY, NO_ADDRESS }

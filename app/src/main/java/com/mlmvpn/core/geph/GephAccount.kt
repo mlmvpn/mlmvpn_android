@@ -93,7 +93,7 @@ object GephAccount {
 
     // ── the credential ─────────────────────────────────────────────────────────────────────────
 
-    fun credential(ctx: Context): GephCredential? {
+    @Synchronized fun credential(ctx: Context): GephCredential? {
         val secret = SecureStore.getSecret(ctx, KEY_SECRET)
         if (secret.isNotBlank()) return GephCredential.Secret(secret)
         val user = SecureStore.getSecret(ctx, KEY_USER)
@@ -102,7 +102,13 @@ object GephAccount {
         return null
     }
 
-    fun hasAccount(ctx: Context): Boolean = credential(ctx) != null
+    /**
+     * Whether an account is stored: no decrypting and no lock, so a screen can ask from the main
+     * thread. It used to decrypt through the Keystore under this object's lock, and the Geph screen
+     * froze whenever the Keystore was slow or a sign-in held the lock (ANR and freeze reports, 1.2.41).
+     */
+    fun hasAccount(ctx: Context): Boolean =
+        SecureStore.hasSecret(ctx, KEY_SECRET) || (SecureStore.hasSecret(ctx, KEY_USER) && SecureStore.hasSecret(ctx, KEY_PASS))
 
     /** Digits only: people paste codes with spaces or dashes between the groups. */
     fun normalizeSecret(input: String): String? =
@@ -114,13 +120,13 @@ object GephAccount {
     /** «1234 5678 …» -- the way the official app shows it, so a user can read it aloud. */
     fun formatSecret(secret: String): String = secret.chunked(4).joinToString(" ")
 
-    fun setSecret(ctx: Context, secret: String) {
+    @Synchronized fun setSecret(ctx: Context, secret: String) {
         forgetCredentialOnly(ctx)
         SecureStore.putSecret(ctx, KEY_SECRET, secret)
         clearInfo(ctx)
     }
 
-    fun setLegacy(ctx: Context, username: String, password: String) {
+    @Synchronized fun setLegacy(ctx: Context, username: String, password: String) {
         forgetCredentialOnly(ctx)
         SecureStore.putSecret(ctx, KEY_USER, username)
         SecureStore.putSecret(ctx, KEY_PASS, password)
@@ -128,7 +134,7 @@ object GephAccount {
     }
 
     /** Removes the account from this phone. The code still works anywhere else it is entered. */
-    fun forget(ctx: Context) {
+    @Synchronized fun forget(ctx: Context) {
         credential(ctx)?.let { deleteCache(ctx, it) }
         forgetCredentialOnly(ctx)
         clearInfo(ctx)
@@ -138,6 +144,13 @@ object GephAccount {
         SecureStore.removeSecret(ctx, KEY_SECRET)
         SecureStore.removeSecret(ctx, KEY_USER)
         SecureStore.removeSecret(ctx, KEY_PASS)
+    }
+
+    /** An automatic registration must never replace an account entered while it was running. */
+    @Synchronized fun keepAutomaticSecret(ctx: Context, secret: String): GephCredential {
+        credential(ctx)?.let { return it }
+        setSecret(ctx, requireNotNull(normalizeSecret(secret)))
+        return requireNotNull(credential(ctx))
     }
 
     private fun deleteCache(ctx: Context, cred: GephCredential) {

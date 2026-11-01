@@ -6,4 +6,8 @@
     <!-- Config Studio writes an export here, shares it, and overwrites it next time.
          See ui/configstudio/parts/StudioShare.kt -->
     <cache-path name="studio" path="studio-export/" />
+    <!-- «پشتیبان‌گیری و بازگردانی» shares a backup file from here; see ui/backup/BackupScreen.kt -->
+    <cache-path name="backup" path="backup-export/" />
+    <!-- «NPV»: a kept NPV Tunnel file, copied here and handed to NPV Tunnel; see engines/npv/NpvEngine.kt -->
+    <cache-path name="npv" path="npv-open/" />
 </paths>

@@ -52,7 +52,7 @@ private fun cfwarpRunning(): Boolean {
 /** A setting changed while «وارپ» is up: reconnect so the engine starts with it. */
 private fun applyNow(ctx: android.content.Context) {
     if (!cfwarpRunning()) return
-    ctx.startService(Intent(ctx, TunnelVpnService::class.java).setAction(TunnelVpnService.ACTION_RECONNECT))
+    com.mlmvpn.scanner.utils.SafeStart.service(ctx, Intent(ctx, TunnelVpnService::class.java).setAction(TunnelVpnService.ACTION_RECONNECT))
 }
 
 private fun dateOf(ms: Long): String =
@@ -100,6 +100,7 @@ fun ColumnScope.CfWarpPanel() {
                 !made -> stringResource(R.string.cfwarp_identity_none)
                 identity.via == WarpIdRelay.VIA_WORKER -> stringResource(R.string.cfwarp_identity_worker)
                 identity.via == WarpIdRelay.VIA_FRONT -> stringResource(R.string.cfwarp_identity_front)
+                identity.via == WarpIdRelay.VIA_ECH -> stringResource(R.string.cfwarp_identity_ech)
                 else -> stringResource(R.string.cfwarp_identity_direct)
             },
             subtitle = identity.at.takeIf { made && it > 0 }?.let { faDigits(dateOf(it)) },

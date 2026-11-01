@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.mlmvpn.scanner.R
+import com.mlmvpn.scanner.store.tr
 import com.mlmvpn.scanner.data.studio.StudioStore
 import com.mlmvpn.scanner.data.studio.domain.ExpiryMode
 import com.mlmvpn.scanner.data.studio.domain.Plan
@@ -226,8 +227,16 @@ fun StudioPlanEditScreen(
         // does not. So the flat "not enforced" this used to print was wrong on any fleet with one
         // capable account, and the flat opposite would be wrong on any fleet with one that is not.
         // Where they disagree the sentence says so, because that is the fact the operator needs.
-        val enforcing = state.installations.count { it.can("enforcement.strict") }
-        if (state.installations.isNotEmpty() && enforcing == state.installations.size) {
+        // A central Worker counts none of these, by design; it is said once below rather than
+        // counted as an engine that is missing its counter.
+        val engines = state.installations.filter { !it.isCentral }
+        val enforcing = engines.count { it.can("enforcement.strict") }
+        if (engines.isEmpty()) {
+            if (state.installations.isNotEmpty()) SettingsFooter(tr(
+                "روی ورکر مرکزی فقط مدت «بسته» به کار می‌رود؛ حجم، دستگاه و آی‌پی شمرده نمی‌شود.",
+                "On the central Worker only the plan's term is used; volume, devices and IPs are not counted.",
+            ))
+        } else if (enforcing == engines.size) {
             SettingsFooter(S(R.string.studio_cap_plan_enforced))
         } else {
             NoticeCard(
@@ -237,7 +246,7 @@ fun StudioPlanEditScreen(
                 body = if (enforcing == 0) S(R.string.studio_cap_plan_none)
                 else S(R.string.studio_cap_plan_mixed)
                     .replace("%1\$s", faNum(enforcing))
-                    .replace("%2\$s", faNum(state.installations.size)),
+                    .replace("%2\$s", faNum(engines.size)),
             )
         }
         Spacer(Modifier.height(12.dp))

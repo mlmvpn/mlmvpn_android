@@ -17,12 +17,16 @@ data class AetherOptions(
     val scan: AetherScan = AetherScan.TURBO,
     val ipFamily: AetherIp = AetherIp.V4,
 
-    /** MASQUE-only. h2 falls back when UDP is throttled. */
-    val transport: String = "h3",                  // "h3" | "h2"
+    /** MASQUE and gool. "auto": the app picks per network and remembers it (AetherCarrier). */
+    val transport: String = "h3",                  // "h3" | "h2" | "auto"
     val ech: String = "",                          // "" | "auto" | a base64 ECHConfigList
     val fragment: Boolean = false,                 // true → use AETHER_MASQUE_H2_FRAGMENT
     val fragmentSize: Int? = null,                 // bytes per chunk
     val fragmentDelay: Int? = null,                // ms between chunks
+    /** The ClientHello of Aether's own TLS (MASQUE over HTTP/2, the WARP API): [AetherTls]. */
+    val tls: AetherTls = AetherTls.CHROME,
+    /** Dial out through a local Xray that cuts the ClientHello into TLS records ([AetherXrayExit]). */
+    val tlsHelloExit: Boolean = false,
     val validateSecs: Int? = null,                 // AETHER_MASQUE_VALIDATE_SECS
     val reconnectSecs: Int? = null,                // AETHER_MASQUE_RECONNECT_SECS
     val noDataCheck: Boolean = false,              // skip the data-plane probe
@@ -99,14 +103,21 @@ data class AetherOptions(
         }
         out["AETHER_NOIZE"] = resolvedNoize
 
-        if (protocol == AetherProtocol.MASQUE) {
-            if (transport == "h2") out["AETHER_MASQUE_HTTP2"] = "1"
+        // gool rides MASQUE since Aether 2.3.0 (its WireGuard hop inside a MASQUE tunnel), so the
+        // carrier settings are its too. Both are always written: left unset, the engine asks on a
+        // terminal for the carrier, and the fragment default differs between its CLI and its env.
+        if (AetherCarrier.applies(protocol)) {
+            out["AETHER_MASQUE_HTTP2"] = if (transport == "h2") "1" else "0"
             if (ech.isNotEmpty()) out["AETHER_ECH"] = ech
+            out["AETHER_MASQUE_H2_FRAGMENT"] = if (fragment) "1" else "0"
             if (fragment) {
-                out["AETHER_MASQUE_H2_FRAGMENT"] = "1"
                 fragmentSize?.let { out["AETHER_MASQUE_H2_FRAGMENT_SIZE"] = it.toString() }
                 fragmentDelay?.let { out["AETHER_MASQUE_H2_FRAGMENT_DELAY"] = it.toString() }
             }
+        }
+        // Every protocol: the WARP API calls of a first start take the same ClientHello.
+        out.putAll(tls.env)
+        if (protocol == AetherProtocol.MASQUE) {
             validateSecs?.let { out["AETHER_MASQUE_VALIDATE_SECS"] = it.toString() }
             reconnectSecs?.let { out["AETHER_MASQUE_RECONNECT_SECS"] = it.toString() }
         }
@@ -166,8 +177,11 @@ enum class AetherProtocol(
      *   - The stage parser never matched the watchdog's own log line, so the UI stayed green
      *     for the entire stale/reconnect cycle and the failure was invisible.
      *
-     * gool stays hidden: its inner tunnel dials the same Cloudflare edge as the outer one and
-     * the edge drops it. That is an upstream property, not something this layer can fix.
+     * gool is visible again with Aether 2.3.0. It was hidden because the classic gool's inner
+     * WireGuard hop dialled the same Cloudflare edge as the outer one and the edge dropped it;
+     * 2.3.0's gool carries that hop inside a MASQUE tunnel instead, registered from inside WARP,
+     * so it comes out at a foreign address -- and it rides the same carriers as MASQUE, chosen
+     * and remembered per network (AetherCarrier). The classic form is only `--gool-classic`.
      */
     val userVisible: Boolean = true,
 ) {
@@ -175,7 +189,7 @@ enum class AetherProtocol(
     WG("wg", "WireGuard"),
     // Single-language label: the other two tabs are plain English, and the bilingual form
     // wrapped onto two lines and made the tab row look broken.
-    WARP_IN_WARP("gool", "WARP-in-WARP", userVisible = false);
+    WARP_IN_WARP("gool", "WARP-in-WARP");
 }
 
 enum class AetherScan(val env: String, val displayFa: String) {

@@ -1,0 +1,35 @@
+[package]
+name = "spike-libp2p"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "MLM CHAT phase 0: the smallest rust-libp2p node with the stack the plan proposes (decision T11)"
+publish = false
+
+[lib]
+name = "spike_libp2p"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "spike-node"
+path = "src/bin/spike-node.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+futures = "0.3"
+jni = { version = "0.21", default-features = false }
+libp2p = { version = "0.56", default-features = false, features = [
+    "tokio", "tcp", "quic", "noise", "yamux", "kad", "relay", "dcutr",
+    "identify", "ping", "macros", "request-response", "json",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "unwind"
+strip = true

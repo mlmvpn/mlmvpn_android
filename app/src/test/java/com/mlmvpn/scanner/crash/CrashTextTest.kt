@@ -102,8 +102,57 @@ class CrashTextTest {
     }
 
     @Test
+    fun `one bug is one signature whatever the system's record numbers say`() {
+        fun report(uid: String) = "=== MLMVPN crash ===\n--- stack ---\n" +
+            "android.app.BackgroundServiceStartNotAllowedException: Not allowed to start service Intent { cmp=com.mlmvpn.scanner/.MyVpnService (has extras) }: app is in background uid UidRecord{$uid u0a469 SVC bg:+1m4s141ms idle}\n" +
+            "\tat com.mlmvpn.scanner.MyVpnService\$triggerReconnect\$1.invokeSuspend(SourceFile:254)\n"
+        assertEquals(CrashReporter.signatureOf(report("6492d3d")), CrashReporter.signatureOf(report("71d311f")))
+    }
+
+    @Test
     fun `older reports keep the signature they always had`() {
         val old = "=== MLMVPN crash ===\njava.lang.NullPointerException: x\n\tat com.mlmvpn.scanner.A.b(A.kt:3)\n"
         assertEquals("java.lang.NullPointerException: x  |  at com.mlmvpn.scanner.A.b(A.kt:3)", CrashReporter.signatureOf(old))
+    }
+
+    @Test
+    fun `a newer APK with the same versionCode reports a higher build number`() {
+        val old = CrashClient.buildNumber(2000077, 0)
+        val first = CrashClient.buildNumber(2000077, 410_000)
+        val later = CrashClient.buildNumber(1000077, 410_090) // another ABI, built later
+        assertTrue("the stamped build is above every unstamped report of the release", first > 2000077 && old > 2000076)
+        assertTrue("a later build is higher whichever ABI it is", later > first)
+        assertTrue("the next release is above any build of this one", CrashClient.buildNumber(78, 0) > CrashClient.buildNumber(2000077, 999_999))
+        assertEquals(77_410_000L, first)
+    }
+
+    @Test
+    fun `a tombstone's library name followed by its field byte is still found`() {
+        // The Windscribe crash of 2026-10-11: a Go abort in libgojni.so was filed as "in libart.so".
+        val runs = "SIGABRT\nSI_TKILL\nDefaultDispatch\n2f/data/app/~~LB5==/com.mlmvpn.scanner-TQi==/lib/arm64/libgojni.so0\n" +
+            "__epoll_pwait(\n2./apex/com.android.runtime/lib64/bionic/libc.soB bb31\n/apex/com.android.art/lib64/libart.soB a479"
+        assertEquals("error: native crash SIGABRT in libgojni.so (main)", CrashText.nativeHeadline("com.mlmvpn.scanner", runs))
+    }
+
+    @Test
+    fun `the screen the user was on is part of the line`() {
+        val runs = "SIGABRT\n/apex/com.android.art/lib64/libart.so"
+        val windscribe = CrashText.nativeHeadline("com.mlmvpn.scanner", runs, "windscribe")
+        assertEquals("error: native crash SIGABRT in libart.so (main) [windscribe]", windscribe)
+        assertFalse(windscribe == CrashText.nativeHeadline("com.mlmvpn.scanner", runs, "proton"))
+        assertEquals("error: native crash SIGABRT in libart.so (main)", CrashText.nativeHeadline("com.mlmvpn.scanner", runs))
+        assertEquals("error: ANR (main) [windscribe]: Input dispatching timed out", CrashText.anrHeadline("com.mlmvpn.scanner", "Input dispatching timed out", "windscribe"))
+    }
+
+    @Test
+    fun `a freeze report is grouped by its screen and the main thread's own frame`() {
+        val report = "=== MLMVPN ANR ===\nerror: freeze (main) [windscribe]: the main thread stopped answering\n" +
+            "--- breadcrumbs (most recent last) ---\n12:00:00.000  windscribe start OPENVPN_TCP cf=true\n\n" +
+            "--- main thread ---\n\tat java.lang.Object.wait(Native Method)\n\tat com.mlmvpn.scanner.lan.LanShare.currentMedium(SourceFile:3)\n" +
+            "\n--- other threads (top frames) ---\n\"x\" RUNNABLE\n\t  at com.mlmvpn.scanner.Other.run(SourceFile:1)\n"
+        assertEquals(
+            "error: freeze (main) [windscribe]: the main thread stopped answering  |  at com.mlmvpn.scanner.lan.LanShare.currentMedium(SourceFile:#)",
+            CrashReporter.signatureOf(report).replace(Regex("SourceFile:\\d+"), "SourceFile:#"),
+        )
     }
 }

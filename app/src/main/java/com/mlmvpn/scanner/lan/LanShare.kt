@@ -241,7 +241,7 @@ object LanShare {
             address = local?.address,
             medium = mediumOf(local?.iface),
             engine = engineShare(context),
-            vpnUp = isTunnelUp(),
+            vpnUp = isTunnelUp(context),
             // The effective answer, not the raw switch: a share that a protection has turned
             // off must show as off, or the screen would advertise an address nothing answers on.
             lanEnabled = NetworkSettings.lanSharingActive(
@@ -254,7 +254,7 @@ object LanShare {
             clients = clients,
             relayPort = LanRelay.boundPort(),
             upstreamPort = upstreamPort(context),
-            upstreamSpeaksHttp = MyVpnService.isRunning,
+            upstreamSpeaksHttp = MyVpnService.isRunning && MyVpnService.runtimeSocksPort != com.mlmvpn.core.aether.AetherEngine.AETHER_SOCKS_PORT,
         )
     }
 
@@ -291,8 +291,37 @@ object LanShare {
     /** The medium the phone's local address currently sits on. */
     fun currentMedium(context: Context): Medium = mediumOf(CoreConfig.localNetworkOn(context)?.iface)
 
-    /** True when either VPN service is carrying traffic. */
-    fun isTunnelUp(): Boolean = MyVpnService.isRunning || TunnelStatus.isActive()
+    /**
+     * True when any of the app's engines is carrying traffic.
+     *
+     * The engine flags first, then the two answers that need no engine to report in: a transport
+     * of the tunnel service that published a SOCKS port (WARP's tile, Geph, Tor, Psiphon -- none of
+     * them is the Rust core or tun2socks, so [TunnelStatus.isActive] alone said "no tunnel" with
+     * them up), and a VPN this app owns according to the system (the AmneziaWG backend in its own
+     * process, and any engine added later).
+     */
+    fun isTunnelUp(context: Context): Boolean = MyVpnService.isRunning || TunnelStatus.isActive() ||
+        TunnelStatus.activeSocksPort > 0 || com.mlmvpn.scanner.openvpn.OpenVpnSocks.port > 0 || vpnGateUp(context) || ownVpnUp(context)
+
+    /** The system has a VPN network up that belongs to this app. */
+    private fun ownVpnUp(context: Context): Boolean = runCatching {
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return false
+        @Suppress("DEPRECATION")
+        cm.allNetworks.any { n ->
+            val caps = cm.getNetworkCapabilities(n) ?: return@any false
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) &&
+                (android.os.Build.VERSION.SDK_INT < 29 || caps.ownerUid == android.os.Process.myUid())
+        }
+    }.getOrDefault(false)
+
+    /**
+     * VPN Gate (SoftEther) is a pure tun with no proxy branch: up, but nothing to share. Its
+     * "connected since" is saved and cleared only by a clean disconnect, so after the app was killed
+     * or crashed while it was up the stale value read as a running tunnel and the LAN screen said
+     * "on" with nothing connected (2026-10-11): it counts only while a VPN of this app is up.
+     */
+    private fun vpnGateUp(context: Context): Boolean = com.mlmvpn.scanner.engines.vpngate.VpnGateStore.connectedSinceFlow.value > 0L &&
+        (MyVpnService.isRunning || ownVpnUp(context))
 
     /**
      * What the engine that is actually running can support.
@@ -306,8 +335,14 @@ object LanShare {
      * `TunnelExclusion` -- so the order is a preference, not a race.
      */
     fun engineShare(context: Context): EngineShare {
-        if (MyVpnService.isRunning) return EngineShare.FULL
-        if (!TunnelStatus.isActive()) return EngineShare.NO_TUNNEL
+        // Except the AmneziaWG core it hosts for an AmneziaWG-only server: no listener exists there,
+        // and calling it FULL showed a ready share whose relay dialled nothing.
+        if (MyVpnService.isRunning) return if (MyVpnService.runtimeSocksPort == 0) EngineShare.IMPOSSIBLE else EngineShare.FULL
+        // OpenVPN (its tile, Windscribe's OpenVPN family): the service's own Local Port, password and all.
+        if (com.mlmvpn.scanner.openvpn.OpenVpnSocks.port > 0) return EngineShare.FULL
+        if (vpnGateUp(context)) return EngineShare.IMPOSSIBLE
+        val core = TunnelStatus.isActive()
+        if (!core && TunnelStatus.activeSocksPort <= 0 && !ownVpnUp(context)) return EngineShare.NO_TUNNEL
         // Psiphon owns the port itself and binds "any" when sharing is on, so it publishes a
         // listener even though the Rust core beside it may not.
         if (isPsiphon(context)) return EngineShare.NO_AUTH
@@ -315,6 +350,8 @@ object LanShare {
         // which on this service now means TUN -> tun2socks -> the core's own SOCKS rather than
         // "no VPN" -- see TunnelVpnService.startNativeProxyTunnel.
         if (TunnelStatus.isNativeTunMode) return EngineShare.NEEDS_PROXY_MODE
+        // Up, but neither the core nor a published port: the AmneziaWG backend, a pure tun.
+        if (!core && TunnelStatus.activeSocksPort <= 0) return EngineShare.IMPOSSIBLE
         // A listener exists, and on this service it is always plain SOCKS5 with no accounts:
         // Tor's front-end has no authentication, and the Rust core's `socks::serve` has none
         // either. Neither is a `mixed` inbound, so neither answers HTTP -- which is what the
@@ -330,7 +367,8 @@ object LanShare {
      * [TunnelStatus.activeSocksPort].
      */
     fun upstreamPort(context: Context): Int = when {
-        MyVpnService.isRunning -> LocalPort.get(context)
+        MyVpnService.isRunning -> MyVpnService.runtimeSocksPort.takeIf { it > 0 } ?: LocalPort.get(context)
+        com.mlmvpn.scanner.openvpn.OpenVpnSocks.port > 0 -> com.mlmvpn.scanner.openvpn.OpenVpnSocks.port
         else -> TunnelStatus.activeSocksPort
     }
 

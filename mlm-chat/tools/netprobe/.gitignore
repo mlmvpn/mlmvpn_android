@@ -1,0 +1,9 @@
+.gradle/
+build/
+*/build/
+local.properties
+*.log
+reports/
+# Built by build-netprobe.ps1 from native/ (cargo-ndk): rebuild, do not commit.
+app/src/main/jniLibs/
+native/target/

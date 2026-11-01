@@ -39,7 +39,7 @@ class SubGenManager(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("subgen_prefs", Context.MODE_PRIVATE)
 
-    private val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1)
+    private val client = OkHttpClient.Builder().dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns()).protocols(com.mlmvpn.scanner.engines.cloud.WorkerRoute.HTTP1).socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory()).proxySelector(com.mlmvpn.scanner.engines.cloud.CfTunnel.selector())
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
@@ -461,7 +461,8 @@ class SubGenManager(private val context: Context) {
             nodeManager.nodesFlow.collectLatest { nodes ->
                 kotlinx.coroutines.delay(5000) // Wait 5 seconds after modifications
 
-                val accounts = cloudManager.accounts
+                // A copy: the list changes under us when an account is added or refreshed.
+                val accounts = cloudManager.accounts.toList()
                 if (accounts.isEmpty()) return@collectLatest
 
                 val allLinks = getSubLinks()

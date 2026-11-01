@@ -139,7 +139,7 @@ object EngineLadder {
 
     private fun stopTunnel(app: Context) {
         runCatching {
-            app.startService(
+            com.mlmvpn.scanner.utils.SafeStart.service(app, 
                 Intent(app, TunnelVpnService::class.java)
                     .setAction(TunnelVpnService.ACTION_DISCONNECT)
             )

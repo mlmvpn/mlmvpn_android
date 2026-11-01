@@ -20,6 +20,10 @@
     {
       "repoPath": "agent/exits.mjs",
       "file": "agent/exits.mjs"
+    },
+    {
+      "repoPath": "agent/relays.mjs",
+      "file": "agent/relays.mjs"
     }
   ],
   "usableSessionMinutes": 325,
@@ -31,7 +35,7 @@
     },
     {
       "file": "agent/gt-agent.mjs",
-      "sha256": "beecddb995423f15c9f7972aa20cf78efcd8288f343c67cd19f98aa3baf3f2a8"
+      "sha256": "1b8234257532309520a2ff563399d3ef5900f1b8e2d97e4df3b4a392f1c9c9f4"
     },
     {
       "file": "agent/seal.mjs",
@@ -44,6 +48,10 @@
     {
       "file": "agent/exits.mjs",
       "sha256": "2194eead6d77be308ccda9be27195d8ac7b0411f10487dc947d2f2e64fb1ee2d"
+    },
+    {
+      "file": "agent/relays.mjs",
+      "sha256": "1276cc74e4fc81e1cf6f95ee25af08dc4c72cf740f071e3e29b03e6a8e3f317e"
     },
     {
       "file": "broker_worker.js",

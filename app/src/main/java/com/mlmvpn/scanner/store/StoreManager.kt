@@ -13,6 +13,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
@@ -115,6 +120,33 @@ object StoreManager {
         _rows.value = out
     }
 
+    /**
+     * The version of an engine built into the app. Xray says it itself (the library's
+     * `checkVersionX`), read once per app build; the other two are fixed by the build files.
+     */
+    private fun withAppVersion(context: Context, item: StoreItem): String? = when (item.id) {
+        "xray" -> {
+            val prefs = context.getSharedPreferences("store_prefs", Context.MODE_PRIVATE)
+            val code = runCatching {
+                val pi = context.packageManager.getPackageInfo(context.packageName, 0)
+                if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else @Suppress("DEPRECATION") pi.versionCode.toLong()
+            }.getOrDefault(0L)
+            val key = "withapp_xray_$code"
+            prefs.getString(key, null) ?: try {
+                val raw = libv2ray.Libv2ray.checkVersionX()
+                val v = Regex("Xray[- ]?core\\s+v?(\\d+\\.\\d+\\.\\d+)", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.get(1)
+                    ?: Regex("v?(\\d+\\.\\d+\\.\\d+)").findAll(raw).lastOrNull()?.groupValues?.get(1)
+                v?.also { prefs.edit().putString(key, it).apply() }
+            } catch (t: Throwable) {
+                null
+            }
+        }
+        // app/libs/psiphontunnel-2.0.39-ns.aar and the amneziawg-android dependency in build.gradle.
+        "psiphon" -> "2.0.39"
+        "amneziawg" -> "2.1.13"
+        else -> null
+    }
+
     /** The code the app would deploy for a worker right now: the store's copy, else the shipped one. */
     private fun workerTarget(context: Context, item: StoreItem): String? =
         runCatching { StoreFiles.readText(context, item.worker!!.asset) }.getOrNull()
@@ -133,7 +165,8 @@ object StoreManager {
             StoreKind.APP -> appRow(context, item)
             StoreKind.ENGINE -> {
                 if (item.source is StoreSource.WithApp) {
-                    StoreRow(item, null, null, false, 0, false, null, StoreRow.State.WITH_APP, checkedAt = checkedAt)
+                    StoreRow(item, withAppVersion(context, item), null, false, 0, false, null, StoreRow.State.WITH_APP,
+                        checkedAt = checkedAt, upstream = c?.optString("upstream")?.ifBlank { null })
                 } else {
                     val shipped = StoreEngines.shippedVersion(context, item)
                     val active = inst?.takeIf { it.quarantined == null }
@@ -148,7 +181,7 @@ object StoreManager {
                 }
             }
             StoreKind.DATA -> {
-                val inUse = inst?.version
+                val inUse = inst?.version ?: item.data?.shipped
                 StoreRow(
                     item = item, version = inUse, shipped = null, fromStore = inst != null,
                     installedAt = inst?.at ?: 0, canRollback = inst != null, candidate = candidate,
@@ -255,7 +288,17 @@ object StoreManager {
                 val prev = readCache(app).optJSONObject("items") ?: JSONObject()
                 val items = JSONObject()
                 for (item in StoreCatalog.ALL) {
-                    if (item.kind == StoreKind.APP || item.source is StoreSource.WithApp) continue
+                    if (item.kind == StoreKind.APP) continue
+                    if (item.source is StoreSource.WithApp) {
+                        // Not installable from here, but its developer's newest version is shown.
+                        val repo = item.repo ?: continue
+                        val o = JSONObject()
+                        runCatching { StoreNet.newestTag(app, repo) }
+                            .onSuccess { t -> t?.let { o.put("upstream", it.removePrefix("v")) } }
+                            .onFailure { prev.optJSONObject(item.id)?.optString("upstream")?.ifBlank { null }?.let { o.put("upstream", it) } }
+                        items.put(item.id, o)
+                        continue
+                    }
                     val o = JSONObject()
                     try {
                         resolve(app, item, prev.optJSONObject(item.id))?.let { o.put("candidate", candidateToJson(it)) }
@@ -268,7 +311,7 @@ object StoreManager {
                     items.put(item.id, o)
                 }
                 runCatching { survey(app, items) }.onFailure { Log.w(TAG, "survey: ${it.message}") }
-                writeCache(app, JSONObject().put("at", System.currentTimeMillis()).put("items", items))
+                writeCache(app, JSONObject().put("at", System.currentTimeMillis()).put("build", buildStamp(app)).put("items", items))
                 rebuild(app)
             } finally {
                 _checking.value = false
@@ -277,11 +320,23 @@ object StoreManager {
         }
     }
 
-    /** Check once a day on its own when the store is opened. */
+    /**
+     * Check twice a day on its own when the store is opened -- and at once after the app itself
+     * was updated: a check made by the previous build looked items up where THAT build's catalog
+     * said (the Iran configs used to come from the channel only), so its answers say nothing
+     * about this one. Seen 2026-10-04: upstream had v52, the store kept showing 50.
+     */
     fun checkIfStale(context: Context) {
-        val at = readCache(context).optLong("at")
-        if (System.currentTimeMillis() - at > 12 * 3600 * 1000L) checkAll(context, force = false)
+        val cache = readCache(context)
+        val at = cache.optLong("at")
+        val otherBuild = cache.optLong("build") != buildStamp(context)
+        if (otherBuild || System.currentTimeMillis() - at > 12 * 3600 * 1000L) checkAll(context, force = false)
     }
+
+    /** When this build of the app was installed: changes with every update, debug reinstalls included. */
+    private fun buildStamp(context: Context): Long = runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+    }.getOrDefault(0L)
 
     /** The newest installable version of one item: the developer's or the channel's. */
     private fun resolve(context: Context, item: StoreItem, prev: JSONObject?): StoreCandidate? {
@@ -289,6 +344,7 @@ object StoreManager {
         val fromDev: StoreCandidate? = when (val s = item.source) {
             is StoreSource.GithubRelease -> resolveRelease(context, item, s)
             is StoreSource.GithubFile -> resolveFile(context, item, s, prev)
+            is StoreSource.GithubFiles -> resolveFiles(context, s, prev)
             is StoreSource.SignedManifest -> resolveManifest(context, s)
             else -> null
         }
@@ -385,6 +441,41 @@ object StoreManager {
         )
     }
 
+    /**
+     * Several files of one repo at ONE commit: the newest that touched any of them, so the set is
+     * always a set upstream actually published together. Fetched only when that commit moved.
+     * raw.githubusercontent.com first, jsDelivr (same commit, same bytes) when it is filtered.
+     */
+    private fun resolveFiles(context: Context, s: StoreSource.GithubFiles, prev: JSONObject?): StoreCandidate? {
+        val commit = s.paths.map { StoreNet.latestCommit(context, s.repo, s.branch, it) }
+            .maxWith(compareBy({ it.date }, { it.sha }))
+        fun urls(path: String) = listOf(
+            "https://raw.githubusercontent.com/${s.repo}/${commit.sha}/$path",
+            "https://cdn.jsdelivr.net/gh/${s.repo}@${commit.sha}/$path",
+        )
+        val old = candidateFromJson(prev?.optJSONObject("candidate"))
+        if (old != null && old.artifacts.firstOrNull()?.urls?.firstOrNull() == urls(s.paths.first()).first()) return old
+        val texts = s.paths.map { path ->
+            var last: Exception? = null
+            urls(path).firstNotNullOfOrNull { u -> runCatching { StoreNet.getText(context, u, 2 * 1024 * 1024) }.onFailure { last = it as? Exception }.getOrNull() }
+                ?: throw last ?: StoreError("no URL")
+        }
+        val version = s.versionInContent?.find(texts.first())?.groupValues?.get(1)
+            ?: "${commit.date} (${commit.sha.take(7)})"
+        return StoreCandidate(
+            version = version,
+            notes = commit.message,
+            released = commit.date,
+            from = "developer",
+            url = commit.url,
+            artifacts = s.paths.mapIndexed { i, path ->
+                // Saved under its path in the repo: that is the name DataSpec.build asks for.
+                StoreArtifact(path.substringAfterLast('/'), urls(path), StoreNet.sha256(texts[i]),
+                    texts[i].toByteArray(Charsets.UTF_8).size.toLong(), "raw", mapOf(path to path))
+            },
+        )
+    }
+
     /** Every recognised worker on every connected Cloudflare account. */
     private fun survey(context: Context, items: JSONObject) {
         val accounts = StoreWorkers.accounts(context)
@@ -414,23 +505,45 @@ object StoreManager {
 
     // ── jobs ───────────────────────────────────────────────────────────────────────────────────
 
-    private fun setJob(id: String, phase: String, progress: Float? = null, running: Boolean = true, error: String? = null, done: String? = null) {
-        _jobs.value = _jobs.value + (id to StoreJob(id, phase, progress, running, error, done))
+    private fun setJob(
+        id: String, phase: String, progress: Float? = null, running: Boolean = true, error: String? = null, done: String? = null,
+        paused: Boolean = false, bytes: Long = 0, total: Long = 0, speedBps: Long = 0,
+    ) {
+        _jobs.value = _jobs.value + (id to StoreJob(id, phase, progress, running, error, done, paused, bytes, total, speedBps))
+    }
+
+    /** Items the user paused: their download loop stops at the next chunk and keeps the part. */
+    private val pausing = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+    @Volatile private var appRef: Context? = null
+
+    /** Stops a running download and keeps what arrived; [resume] continues from there. */
+    fun pause(id: String) { pausing += id }
+
+    /** Continues a paused download (or starts it again after an error) from the bytes on disk. */
+    fun resume(context: Context, id: String) {
+        pausing -= id
+        install(context, id)
     }
 
     fun clearJob(id: String) { _jobs.value = _jobs.value - id }
 
     fun dismissMessage() { _message.value = null }
 
-    private fun launchJob(context: Context, id: String, block: suspend (Context) -> String) {
+    private fun launchJob(context: Context, id: String, block: suspend (Context) -> String): Pair<Job, Boolean> = synchronized(running) {
         val app = context.applicationContext
-        synchronized(running) { if (running[id]?.isActive == true) return }
+        appRef = app
+        running[id]?.takeIf { !it.isCompleted }?.let { return@synchronized it to false }
+        pausing -= id
         // Set before the coroutine starts, so anything watching sees "running" at once.
         setJob(id, tr("آماده‌سازی…", "Preparing…"))
-        val job = scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 val msg = block(app)
                 setJob(id, msg, 1f, running = false, done = msg)
+            } catch (e: StoreNet.Paused) {
+                val j = _jobs.value[id]
+                setJob(id, tr("متوقف شد", "Paused"), j?.progress, running = false, paused = true, bytes = j?.bytes ?: 0, total = j?.total ?: 0)
             } catch (e: Exception) {
                 Log.w(TAG, "$id failed", e)
                 setJob(id, e.message ?: "", null, running = false, error = e.message ?: e.javaClass.simpleName)
@@ -438,12 +551,43 @@ object StoreManager {
                 rebuild(app)
             }
         }
-        synchronized(running) { running[id] = job }
+        running[id] = job
+        job.start()
+        job to true
     }
 
+    /** Install only a missing executable, using the store's verified source and validation. */
+    suspend fun ensureEngine(context: Context, id: String, lib: String) = withContext(Dispatchers.IO) {
+        val item = requireNotNull(StoreCatalog.byId(id))
+        require(item.kind == StoreKind.ENGINE && item.engine?.mode == EngineSpec.Mode.EXEC)
+        require(lib in item.engine!!.libs)
+        if (StoreEngines.available(context, id, lib)) return@withContext
+        val (job, owned) = launchJob(context, id) { app ->
+            if (StoreEngines.available(app, id, lib)) return@launchJob ""
+            val candidate = resolve(app, item, null)
+                ?: throw StoreError(tr("نسخهٔ قابل نصب پیدا نشد", "No installable version found"))
+            currentCoroutineContext().ensureActive()
+            installCandidate(app, item, candidate)
+        }
+        try {
+            job.join()
+            currentCoroutineContext().ensureActive()
+            if (!StoreEngines.available(context, id, lib)) throw StoreError(
+                jobs.value[id]?.error ?: tr("نصب موتور کامل نشد", "Engine installation did not complete"))
+        } finally {
+            if (owned && !job.isCompleted) {
+                job.cancel()
+                withContext(NonCancellable) { job.join() }
+            }
+        }
+    }
+
+    /** Stops it for good: the downloaded part is deleted too. */
     fun cancel(id: String) {
+        pausing -= id
         synchronized(running) { running[id]?.cancel() }
         clearJob(id)
+        appRef?.let { ctx -> runCatching { File(StoreFiles.itemDir(ctx, id), "partial").deleteRecursively() } }
     }
 
     // ── installing ─────────────────────────────────────────────────────────────────────────────
@@ -495,15 +639,30 @@ object StoreManager {
 
     private fun installCandidate(context: Context, item: StoreItem, c: StoreCandidate): String {
         val work = File(context.cacheDir, "store-dl/${item.id}").apply { deleteRecursively(); mkdirs() }
+        // Downloads live where a pause leaves them: resuming continues instead of starting over.
+        val partial = File(StoreFiles.itemDir(context, item.id), "partial").apply { mkdirs() }
         val staged = File(StoreFiles.itemDir(context, item.id), "staged").apply { deleteRecursively(); mkdirs() }
         try {
             // 1. download, digest-checked
             val files = HashMap<String, File>()
             c.artifacts.forEachIndexed { i, a ->
                 setJob(item.id, tr("در حال دانلود…", "Downloading…"), 0f)
-                val dl = StoreNet.download(context, a, File(work, "a$i-${a.name.substringAfterLast('/')}"), { got, total ->
-                    setJob(item.id, tr("در حال دانلود…", "Downloading…"), if (total > 0) (got.toFloat() / total).coerceIn(0f, 1f) else null)
-                }, { running[item.id]?.isCancelled == true })
+                var lastAt = 0L
+                var lastBytes = -1L
+                var speed = 0L
+                val dl = StoreNet.download(context, a, File(partial, "a$i-${a.name.substringAfterLast('/')}"), { got, total ->
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (lastBytes < 0) { lastBytes = got; lastAt = now }
+                    // Shown at most four times a second; the speed is smoothed over each step.
+                    if (now - lastAt >= 250 || (total > 0 && got >= total)) {
+                        val inst = if (now > lastAt) (got - lastBytes) * 1000 / (now - lastAt) else 0L
+                        speed = if (speed == 0L) inst else (speed * 7 + inst * 3) / 10
+                        lastAt = now; lastBytes = got
+                        setJob(item.id, tr("در حال دانلود…", "Downloading…"),
+                            if (total > 0) (got.toFloat() / total).coerceIn(0f, 1f) else null,
+                            bytes = got, total = total, speedBps = speed)
+                    }
+                }, { synchronized(running) { running[item.id]?.isCancelled == true } }, { item.id in pausing })
                 if (a.format == "raw") {
                     val name = a.extract.values.firstOrNull() ?: defaultName(item, a)
                     files[name] = dl
@@ -514,6 +673,19 @@ object StoreManager {
             }
             setJob(item.id, tr("بررسی…", "Checking…"))
             var version = c.version
+            // Sources that become the data file only once built (the Iran configs from upstream).
+            item.data?.build?.let { build ->
+                setJob(item.id, tr("ساختن کانفیگ‌ها…", "Building…"))
+                val text = try {
+                    build(context, files.mapValues { it.value.readText() })
+                } catch (e: Exception) {
+                    throw StoreError(tr("از فایل‌های تازهٔ سازنده نشد کانفیگ ساخت (${e.message}) — شکلشان عوض شده؛ چیزی نصب نشد و نسخهٔ فعلی سر جایش ماند.",
+                        "The developer's new files could not be built (${e.message}); nothing was installed and the current version stays."))
+                }
+                val built = File(work, item.data.file).apply { parentFile?.mkdirs(); writeText(text) }
+                files.clear()
+                files[item.data.file] = built
+            }
             // 2. prove it before it is used
             when (item.kind) {
                 StoreKind.ENGINE -> version = checkEngine(item, files, c.version)
@@ -528,7 +700,10 @@ object StoreManager {
                 if (item.kind == StoreKind.ENGINE) dest.setExecutable(true, true)
             }
             val before = _rows.value.firstOrNull { it.item.id == item.id }?.version
+            if (synchronized(running) { running[item.id]?.isCancelled == true }) throw kotlinx.coroutines.CancellationException()
             StoreFiles.activate(context, item.id, staged, version, c.from)
+            // Installed: the downloaded parts have done their job.
+            partial.deleteRecursively()
             if (item.data?.target == DataSpec.Target.FILES_DIR) placeLive(context, item)
             StoreFiles.addHistory(context, StoreHistory(item.id, item.title(), before, version, System.currentTimeMillis(), c.notes))
             return when (item.kind) {
@@ -557,6 +732,15 @@ object StoreManager {
         for (lib in spec.libs) {
             val f = files[lib] ?: throw StoreError(tr("فایل $lib در این نسخه نبود.", "$lib was missing from this version."))
             StoreEngines.checkElf(f, needDynamic = true)?.let { throw StoreError(it) }
+        }
+        if (spec.requires.isNotEmpty()) {
+            val missing = StoreEngines.missingStrings(files.getValue(spec.libs.first()), spec.requires)
+            if (missing.isNotEmpty()) {
+                throw StoreError(
+                    tr("این نسخه با برنامه جور نیست (${missing.first()} در آن نیست)؛ نصب نشد و نسخهٔ فعلی سر جایش ماند.",
+                        "This version does not fit the app (${missing.first()} is missing); it was not installed and the current one stays."),
+                )
+            }
         }
         if (spec.mode == EngineSpec.Mode.EXEC) {
             val exe = files.getValue(spec.libs.first())

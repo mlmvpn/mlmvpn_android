@@ -26,6 +26,35 @@ class MainActivity : AppCompatActivity() {
         super.attachBaseContext(com.mlmvpn.scanner.utils.AppLocaleManager.wrapContext(newBase))
     }
 
+    /**
+     * A remote's key press that Compose cannot place. On Android TV boxes a D-pad key arriving while
+     * the focused node is being removed (a page closing under the remote) throws "Event can't be
+     * processed because we do not have an active focus target" from inside Compose and closed the
+     * app; dropped instead, the next press finds the new page's focus.
+     */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean = try {
+        super.dispatchKeyEvent(event)
+    } catch (e: IllegalStateException) {
+        if (e.message?.contains("focus target") == true) false else throw e
+    }
+
+    /**
+     * A screen the device does not have. Some Android TV boxes, projectors and custom ROMs ship
+     * without the system's VPN permission dialog (com.android.vpndialogs), so the intent of
+     * VpnService.prepare() -- launched from here by every «connect» -- closed the app (1.2.42
+     * reports #2371, #2373). It says so instead.
+     */
+    @Deprecated("Deprecated in Java")
+    override fun startActivityForResult(intent: android.content.Intent, requestCode: Int, options: Bundle?) {
+        try {
+            @Suppress("DEPRECATION")
+            super.startActivityForResult(intent, requestCode, options)
+        } catch (e: android.content.ActivityNotFoundException) {
+            Log.w("MainActivity", "no activity for ${intent.component ?: intent.action}")
+            android.widget.Toast.makeText(this, getString(R.string.screen_missing_on_device), android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The app's UI is always dark (darkColorScheme below is hardcoded, it never follows the
@@ -46,6 +75,12 @@ class MainActivity : AppCompatActivity() {
         com.mlmvpn.scanner.ui.home.Appearance.init(this)
 
         com.mlmvpn.scanner.engines.subgenerator.SubGenManager(this).startAutoSync()
+
+        // A home-screen widget asked for one tile's page (see WidgetOpen). Only on a real start: a
+        // rotation recreates the activity with the same intent, and the request was taken off it.
+        if (savedInstanceState == null) com.mlmvpn.scanner.widget.WidgetOpen.offer(intent)
+        // Widgets speak the app's language, which may have just changed: redraw them once.
+        com.mlmvpn.scanner.widget.WidgetUpdater.refreshAllAsync(this)
 
         setContent {
             // Settings > Display > Appearance drives this. Note the honest limit: only the
@@ -163,6 +198,16 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * A widget opening a tile while the app is already up: the request is handed to the screen
+     * that is there instead of rebuilding the activity (WidgetOpen asks for single-top).
+     */
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        com.mlmvpn.scanner.widget.WidgetOpen.offer(intent)
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {

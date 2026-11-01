@@ -96,7 +96,10 @@ fun createNodeFromUri(uri: String): VpnNode {
     // real parsing happens in VpnConfig.parseUri during connection/ping
     var name = "New Node"
     if (uri.contains("#")) {
-        name = java.net.URLDecoder.decode(uri.substringAfterLast("#"), "UTF-8")
+        // A name with a bare «%» (not a %XX escape) threw out of the paste and closed the app
+        // (#473, seen again on 1.2.42): it is shown as written instead.
+        val raw = uri.substringAfterLast("#")
+        name = runCatching { java.net.URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
     } else if (uri.startsWith("vmess://")) {
         try {
             val base64 = uri.substring(8)

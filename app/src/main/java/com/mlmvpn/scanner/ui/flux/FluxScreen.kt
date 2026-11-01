@@ -161,6 +161,7 @@ private fun FluxMain(onBack: () -> Unit, onCountry: () -> Unit, onDiagnostics: (
             fontSize = 14.sp, textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
         )
+        com.mlmvpn.scanner.ui.RouteChips()
         Spacer(Modifier.height(40.dp))
     }
 }
@@ -241,7 +242,11 @@ private fun ConnectButton(connected: Boolean, busy: Boolean, onClick: () -> Unit
 @Composable
 private fun CountryPicker(onBack: () -> Unit) {
     val context = LocalContext.current
-    val countries = remember { FluxEngine.countries() }
+    // Worked out off the main thread: it parses every cached source list (thousands of links), and
+    // on the main thread the FLUX screen froze while the picker opened (freeze report, 1.2.41).
+    val countries by androidx.compose.runtime.produceState(emptyList<FluxEngine.CountryOption>()) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { FluxEngine.countries() }
+    }
     val current = FluxEngine.prefs().country
     val here = stringResource(R.string.flux_country_here)
     val unchecked = stringResource(R.string.flux_country_unchecked)

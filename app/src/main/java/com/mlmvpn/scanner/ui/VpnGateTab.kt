@@ -443,6 +443,7 @@ fun VpnGateTab(
                 hasServer = selected != null,
                 connectedSince = connectedSince,
             )
+            com.mlmvpn.scanner.ui.RouteChips()
 
             Spacer(Modifier.weight(1f))
 

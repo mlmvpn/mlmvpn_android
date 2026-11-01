@@ -122,7 +122,9 @@ fun AetherScreen() {
     var activeTab by remember { mutableStateOf(AetherProtocol.MASQUE) }
 
     // Per-tab settings (remembered across recompositions, process-scope).
-    var transport by remember { mutableStateOf("h3") }
+    // HTTP/3, HTTP/2 or HTTP/2 + fragment is the app's choice, made once per network and
+    // remembered (AetherCarrier) -- never a question for the user.
+    var transport by remember { mutableStateOf(com.mlmvpn.core.aether.AetherCarrier.AUTO) }
     var fragment by remember { mutableStateOf(false) }
     var fragmentSize by remember { mutableStateOf("") }
     var fragmentDelay by remember { mutableStateOf("") }
@@ -175,7 +177,7 @@ fun AetherScreen() {
             putExtra("PROXY_MODE", false)
             putExtra("LOCAL_PORT", com.mlmvpn.scanner.utils.LocalPort.getString(context))
         }
-        context.startService(intent)
+        com.mlmvpn.scanner.utils.SafeStart.service(context, intent)
     }
 
     val vpnPrepareLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -228,7 +230,7 @@ fun AetherScreen() {
             fragmentSize = fragmentSize.toIntOrNull(),
             fragmentDelay = fragmentDelay.toIntOrNull(),
             noize = when (activeTab) {
-                AetherProtocol.MASQUE -> if (transport == "h3") "firewall" else "balanced"
+                AetherProtocol.MASQUE -> "firewall"
                 AetherProtocol.WG -> wgNoize
                 AetherProtocol.WARP_IN_WARP -> wgNoize
             },
@@ -259,7 +261,7 @@ fun AetherScreen() {
         // down, and its ACTION_STOP calls engine.stop() on the shared singleton concurrently
         // with the one AetherTunEngine.stop() is already running — two threads through the
         // same process teardown, for no gain.
-        context.startService(
+        com.mlmvpn.scanner.utils.SafeStart.service(context, 
             android.content.Intent(context, com.mlmvpn.scanner.MyVpnService::class.java)
                 .apply { action = "STOP" }
         )
@@ -289,6 +291,8 @@ fun AetherScreen() {
         wasRunning = state.running
         // screenOwnsSession: never "recover" a session another screen started — see its doc.
         if (!ended || state.connected || userStopped || !screenOwnsSession) return@LaunchedEffect
+        // Between two carriers of the automatic ladder the engine stops for a moment: not an end.
+        if (com.mlmvpn.core.aether.AetherTunEngine.ladderActive) return@LaunchedEffect
 
         when {
             // Cloudflare accepted the TLS connection and refused the session: the stored
@@ -308,6 +312,8 @@ fun AetherScreen() {
             // gateway hunt overruns, AetherTunEngine aborts on its own 90-second budget
             // ("give up after 90234ms: budget exhausted") while the prober is still scanning,
             // so the engine never reaches the line that would have set the flag.
+            // (Only for a fixed h3; with the automatic carrier the engine itself goes on to HTTP/2
+            // and HTTP/2 + fragment, and remembers what worked.)
             activeTab == AetherProtocol.MASQUE && transport == "h3" && !triedH2Fallback -> {
                 triedH2Fallback = true
                 transport = "h2"
@@ -352,6 +358,7 @@ fun AetherScreen() {
         Spacer(modifier = Modifier.height(16.dp))
 
         AetherStatusLine(state, modifier = Modifier.align(Alignment.CenterHorizontally))
+        com.mlmvpn.scanner.ui.RouteChips()
 
         autoRetryNote?.also { note ->
             Spacer(modifier = Modifier.height(10.dp))

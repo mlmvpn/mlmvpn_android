@@ -1,6 +1,7 @@
 package com.mlmvpn.scanner.ui.mae
 
 import androidx.compose.foundation.clickable
+import com.mlmvpn.scanner.store.tr
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -190,8 +191,110 @@ internal fun MaeConfirmRemove(name: String, body: String, onConfirm: () -> Unit,
  * its own page. The row of equal chips that used to sit under each app -- pause, auto, every
  * route and remove, all the same shape -- put a destructive action one mis-tap from a harmless one.
  */
+/**
+ * An exit abroad the user gets by setting up a method on its own tile, as MAE sees it: [ready] when
+ * it is set up, [inUse] when MAE takes it, [status] what it has or what to do, [tile] where that is done.
+ */
+internal data class SetupExit(
+    val title: String,
+    val status: String,
+    val ready: Boolean,
+    val tile: String,
+    val inUse: Boolean = ready,
+) {
+    /** Whether [routeId] is one of this method's exits in MAE. */
+    fun owns(routeId: String): Boolean = when (tile) {
+        "fenix" -> com.mlmvpn.scanner.engines.fenix.FenixRoute.isFenixRoute(routeId)
+        "proton" -> com.mlmvpn.scanner.engines.amnezia.WgExitRoute.isProton(routeId)
+        "windscribe" -> com.mlmvpn.scanner.engines.amnezia.WgExitRoute.isWindscribe(routeId)
+        "outline" -> com.mlmvpn.scanner.engines.outline.OutlineRoute.isOutlineRoute(routeId)
+        else -> false
+    }
+}
+
+private fun faDigits(n: Int) = com.mlmvpn.scanner.backup.BackupNames.persianDigits(n.toString())
+
+private val notSetUp get() = tr("راه‌اندازی نشده — برای راه‌اندازی بزنید", "Not set up — tap to set it up")
+
+/**
+ * FENIX, Proton and Windscribe, in that order: the fixed exits abroad a user gets by setting up the
+ * method itself -- and so the ones MAE names when it finds no exit for an app. Reads their stores:
+ * call it off the main thread.
+ */
+internal fun setupExits(context: android.content.Context): List<SetupExit> {
+    val fenix = runCatching {
+        com.mlmvpn.scanner.engines.fenix.FenixEngine.init(context)
+        com.mlmvpn.scanner.engines.fenix.FenixEngine.hasAccounts() to com.mlmvpn.scanner.engines.fenix.FenixEngine.forMae
+    }.getOrDefault(false to false)
+    val (proton, windscribe) = com.mlmvpn.scanner.engines.amnezia.AmzMae.counts(context)
+    val windscribeIn = com.mlmvpn.scanner.engines.windscribe.WindscribeEngine.signedIn(context)
+    // FENIX is set up by adding an account, nothing more: MAE takes it by itself (its «استفاده در MAE»
+    // on the FENIX page is on unless the user switched it off) -- the user's rule, 2026-10-18: never
+    // ask the user to turn FENIX on.
+    return listOf(
+        SetupExit(context.getString(R.string.fenix_title), when {
+            !fenix.first -> notSetUp
+            !fenix.second -> tr("در صفحهٔ FENIX، «استفاده در MAE» خاموش شده است", "«Use in MAE» was switched off on the FENIX page")
+            else -> tr("آماده · کشور انتخابی و آمریکا", "Ready · the chosen country and the US")
+        }, ready = fenix.first, tile = "fenix", inUse = fenix.first && fenix.second),
+        SetupExit(tr("پروتون", "Proton"),
+            if (proton > 0) tr("${faDigits(proton)} سرور وایرگارد", "$proton WireGuard servers") else notSetUp, proton > 0, "proton"),
+        SetupExit(tr("ویندسکرایب", "Windscribe"), when {
+            windscribe > 0 -> tr("${faDigits(windscribe)} سرور وایرگارد", "$windscribe WireGuard servers")
+            windscribeIn -> tr("وارد شده‌اید؛ یک بار در صفحهٔ ویندسکرایب وصل شوید تا سرورهایش ساخته شود", "Signed in; connect once in Windscribe so its servers are made")
+            else -> notSetUp
+        }, windscribe > 0, "windscribe"),
+    )
+}
+
+/** Names the way a sentence lists them: «A، B و C» / "A, B and C". */
+internal fun sayList(names: List<String>): String =
+    if (names.size < 2) names.joinToString("")
+    else names.dropLast(1).joinToString(tr("، ", ", ")) + tr(" و ", " and ") + names.last()
+
+/**
+ * The exits abroad an app that refuses Iran can be given -- and the only ones Gemini and Google Flow
+ * get, since they need one fixed server abroad: FENIX, Proton, Windscribe and Outline, plus Lantern
+ * for the rest. MAE measures which one each app opens on by itself; what is not set up is listed all
+ * the same, with a tap to its own tile to set it up.
+ */
 @Composable
-internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
+private fun ForeignExitsList(onOpenTile: (String) -> Unit) {
+    val context = LocalContext.current
+    val rows by produceState(emptyList<SetupExit>()) {
+        value = withContext(Dispatchers.IO) {
+            val outline = com.mlmvpn.scanner.engines.outline.OutlineMae.servers(context).size
+            setupExits(context) + SetupExit(tr("اوتلاین", "Outline"),
+                if (outline > 0) tr("${faDigits(outline)} سرور روی این اینترنت جواب داده", "$outline servers answered on this internet")
+                else tr("هنوز سروری روی این اینترنت جواب نداده — کلید بگذارید یا بسنجید", "No server answered on this internet yet — add a key or test"),
+                outline > 0, "outline")
+        }
+    }
+    if (rows.isEmpty()) return
+    SettingsSectionHeader(tr("خروجی‌های خارجی ثابت", "Fixed exits abroad"))
+    SettingsGroup {
+        rows.forEachIndexed { i, r ->
+            if (i > 0) Separator()
+            SettingsRow(
+                title = r.title,
+                subtitle = r.status,
+                icon = Icons.Default.Public,
+                tint = if (r.inUse) Ios.Green else Ios.Orange,
+                value = if (r.inUse) stringResource(R.string.on_2) else null,
+                onClick = { onOpenTile(r.tile) },
+            )
+        }
+    }
+    SettingsFooter(
+        tr(
+            "جمنای و گوگل فلو فقط از یک سرور ثابت در خارج باز می‌شوند، نه از ورکر کلادفلر یا لنترن که خروجشان عوض می‌شود. هر کدام از این چهار را که راه بیندازید، MAE برای هر برنامه خودش می‌سنجد کدام بهتر کار می‌کند؛ هرچه بیشتر، احتمال پیدا شدن راه بیشتر.",
+            "Gemini and Google Flow open only from one fixed server abroad, not from the Cloudflare Worker or Lantern, whose exit moves. Set up any of these four and MAE measures by itself which works best for each app; the more of them, the likelier a way is found.",
+        )
+    )
+}
+
+@Composable
+internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false, onOpenTile: (String) -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // The rows, as the main screen has them: worked out off the main thread and emitted only
@@ -202,7 +305,6 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
     var siteError by remember { mutableStateOf<String?>(null) }
     var exitBusy by remember { mutableStateOf(false) }
     var exitError by remember { mutableStateOf<String?>(null) }
-    var askReinstall by remember { mutableStateOf(false) }
     var askRemoveExit by remember { mutableStateOf(false) }
     val invalid = stringResource(R.string.mae_add_site_invalid)
     var showPicker by rememberSaveable { mutableStateOf(openPicker) }
@@ -225,6 +327,9 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
                     p.id == ServerlessRoute.id -> "Serverless"
                     p.id == FragmentRoute.id -> "Fragment"
                     p is UserConfigRoute && !p.id.startsWith(UserConfigRoute.CLOUD_PREFIX) -> "${routeName(context, p.id)} · ${p.label}"
+                    // Several servers of one method: their countries tell them apart.
+                    p is com.mlmvpn.scanner.engines.amnezia.WgExitRoute -> routeName(context, p.id, country = p.country)
+                    p is com.mlmvpn.scanner.engines.outline.OutlineRoute -> routeName(context, p.id, country = p.country)
                     else -> routeName(context, p.id)
                 }
             }
@@ -237,36 +342,27 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
         }
     }
 
+    // FENIX, Proton and Windscribe: on every app's route list even when MAE has none of their
+    // servers, so the user sees what more could carry it and is one tap from setting it up.
+    val exits by produceState(emptyList<SetupExit>(), worker) {
+        value = withContext(Dispatchers.IO) { setupExits(context) }
+    }
+
     detail?.let { id ->
         val v = views.firstOrNull { it.def.id == id }
         if (v == null) { LaunchedEffect(id) { detail = null }; return }
         androidx.activity.compose.BackHandler { detail = null }
-        MaeAppDetail(v, routes, onBack = { detail = null })
+        MaeAppDetail(v, routes, exits, onOpenTile, onBack = { detail = null })
         return
     }
 
-    if (askReinstall) {
-        IosAlert(
-            title = stringResource(R.string.mae_exit_current_title),
-            message = stringResource(R.string.mae_exit_current_body, worker?.version ?: MaeEgressDeployer.VERSION),
-            actions = listOf(
-                IosAlertAction(stringResource(R.string.worker_reinstall), onClick = {
-                    askReinstall = false
-                    exitBusy = true; exitError = null
-                    scope.launch {
-                        MaeEngine.deployEgress().onFailure { exitError = it.message ?: it.javaClass.simpleName }
-                        exitBusy = false
-                    }
-                }),
-                IosAlertAction(stringResource(R.string.worker_ok), onClick = { askReinstall = false }, preferred = true),
-            ),
-            onDismiss = { askReinstall = false },
-        )
-    }
     if (askRemoveExit) {
         IosAlert(
-            title = stringResource(R.string.mae_exit_remove_title),
-            message = stringResource(R.string.mae_exit_remove_body),
+            title = com.mlmvpn.scanner.store.tr("ورکر قدیمی MAE حذف شود؟", "Remove MAE's old Worker?"),
+            message = com.mlmvpn.scanner.store.tr(
+                "MAE حالا از ورکر مرکزی حسابتان استفاده می‌کند و این ورکر دیگر به کار نمی‌آید. برنامه‌هایی که از آن رد می‌شدند، روی ورکر مرکزی دوباره بررسی می‌شوند.",
+                "MAE now uses your account's central Worker, and this one is no longer needed. Apps that went through it are checked again on the central Worker.",
+            ),
             actions = listOf(
                 IosAlertAction(stringResource(R.string.mae_cancel), onClick = { askRemoveExit = false }, preferred = true),
                 IosAlertAction(stringResource(R.string.mae_foreign_exit_remove), destructive = true, onClick = {
@@ -354,56 +450,61 @@ internal fun MaeManageScreen(onBack: () -> Unit, openPicker: Boolean = false) {
             }
         }
 
-        // The foreign exit, versioned: it says which build is on the account, and a tap on one
-        // that is already current asks before installing it again -- an "update" of a current
-        // exit used to check every app again from scratch.
+        // The foreign exit is the account's central Worker -- the one every panel rides. MAE makes no
+        // Worker of its own any more; one made before is offered for removal once the central one is up.
+        val gwVersion by com.mlmvpn.scanner.engines.gateway.EdgeGateway.version.collectAsState()
+        val central by produceState<com.mlmvpn.scanner.engines.gateway.EdgeGateway.Exit?>(null, gwVersion, worker, exitBusy) {
+            value = withContext(Dispatchers.IO) { com.mlmvpn.scanner.engines.gateway.EdgeGateway.anyExit(context) }
+        }
         SettingsSectionHeader(stringResource(R.string.mae_foreign_exit))
         SettingsGroup {
             val w = worker
-            val outdated = w != null && MaeEgressDeployer.needsUpgrade(w)
+            val gw = central
             SettingsRow(
-                title = stringResource(R.string.mae_foreign_exit),
+                title = com.mlmvpn.scanner.store.tr("ورکر مرکزی", "Central Worker"),
                 icon = Icons.Default.Public,
                 tint = Ios.CloudflareOrange,
                 subtitle = when {
                     exitBusy -> stringResource(R.string.mae_foreign_exit_working)
-                    w == null -> stringResource(R.string.mae_foreign_exit_none)
-                    outdated -> stringResource(R.string.worker_update_available, MaeEgressDeployer.VERSION, w.version)
-                    else -> stringResource(R.string.mae_exit_current, w.version)
+                    gw != null -> gw.host
+                    w != null -> com.mlmvpn.scanner.store.tr("فعلاً ورکر قدیمی MAE؛ با راه‌اندازی ورکر مرکزی جایگزین می‌شود", "For now MAE's old Worker; replaced once the central Worker is set up")
+                    else -> stringResource(R.string.mae_foreign_exit_none)
                 },
-                value = if (w != null && !outdated && !exitBusy) stringResource(R.string.on_2) else null,
-                badge = if (outdated && !exitBusy) 1 else 0,
+                value = if (gw != null && !exitBusy) stringResource(R.string.on_2) else null,
                 showChevron = false,
             )
-            Separator()
-            if (accounts.isEmpty()) {
-                SettingsRow(title = stringResource(R.string.mae_foreign_exit_no_account), showChevron = false)
-            } else {
-                SettingsActionRow(
-                    label = stringResource(when {
-                        w == null -> R.string.mae_foreign_exit_deploy
-                        outdated -> R.string.mae_foreign_exit_update
-                        else -> R.string.worker_reinstall
-                    }),
-                    icon = if (w != null && !outdated) Icons.Default.Refresh else Icons.Default.CloudUpload,
-                    tint = Ios.CloudflareOrange, busy = exitBusy,
-                ) {
-                    if (exitBusy) return@SettingsActionRow
-                    if (w != null && !outdated) { askReinstall = true; return@SettingsActionRow }
-                    exitBusy = true; exitError = null
-                    scope.launch {
-                        MaeEngine.deployEgress().onFailure { exitError = it.message ?: it.javaClass.simpleName }
-                        exitBusy = false
+            if (gw == null) {
+                Separator()
+                if (accounts.isEmpty()) {
+                    SettingsRow(title = stringResource(R.string.mae_foreign_exit_no_account), showChevron = false)
+                } else {
+                    SettingsActionRow(
+                        label = com.mlmvpn.scanner.store.tr("راه‌اندازی ورکر مرکزی", "Set up the central Worker"),
+                        icon = Icons.Default.CloudUpload,
+                        tint = Ios.CloudflareOrange, busy = exitBusy,
+                    ) {
+                        if (exitBusy) return@SettingsActionRow
+                        exitBusy = true; exitError = null
+                        scope.launch {
+                            MaeEngine.deployEgress().onFailure { exitError = it.message ?: it.javaClass.simpleName }
+                            exitBusy = false
+                        }
                     }
                 }
             }
         }
         exitError?.let { SettingsFooter(stringResource(R.string.mae_foreign_exit_failed, it)) }
-        SettingsFooter(stringResource(R.string.mae_foreign_exit_footer))
-        if (worker != null && accounts.isNotEmpty()) {
+        SettingsFooter(
+            com.mlmvpn.scanner.store.tr(
+                "برنامه‌هایی که آی‌پی ایران را نمی‌پذیرند به خروجی خارج از کشور نیاز دارند. MAE از ورکر مرکزی حساب کلادفلر شما استفاده می‌کند (همان ورکری که پنل‌ها رویش هستند) و ورکر جدایی نمی‌سازد. با Proxy IP آن، سایت‌های پشت کلادفلر هم باز می‌شوند. پیش از استفاده، برای هر برنامه جداگانه آزمایش می‌شود.",
+                "Apps that refuse an Iranian address need an exit abroad. MAE uses your Cloudflare account's central Worker (the one the panels ride) and makes no Worker of its own. Its Proxy IP opens Cloudflare-hosted sites too. Each app is tested on it before it is used.",
+            )
+        )
+        ForeignExitsList(onOpenTile = onOpenTile)
+        if (worker != null && central != null && accounts.isNotEmpty()) {
             // Destructive, alone in its own card and centred, the way iOS sets apart "Delete Account".
             SettingsGroup(modifier = Modifier.padding(top = 18.dp)) {
-                DestructiveRow(stringResource(R.string.mae_foreign_exit_remove), enabled = !exitBusy) { askRemoveExit = true }
+                DestructiveRow(com.mlmvpn.scanner.store.tr("حذف ورکر قدیمی MAE", "Remove MAE's old Worker"), enabled = !exitBusy) { askRemoveExit = true }
             }
         }
         Spacer(Modifier.height(40.dp))
@@ -448,7 +549,13 @@ private fun DestructiveRow(label: String, enabled: Boolean = true, onClick: () -
  * as an action -- and Remove alone at the bottom, red, behind a confirmation.
  */
 @Composable
-private fun MaeAppDetail(v: MaeEngine.ServiceView, routes: List<Pair<String, String>>, onBack: () -> Unit) {
+private fun MaeAppDetail(
+    v: MaeEngine.ServiceView,
+    routes: List<Pair<String, String>>,
+    exits: List<SetupExit>,
+    onOpenTile: (String) -> Unit,
+    onBack: () -> Unit,
+) {
     val context = LocalContext.current
     val name = serviceName(context, v.def)
     val testing by MaeEngine.testingFlow.collectAsState()
@@ -494,6 +601,16 @@ private fun MaeAppDetail(v: MaeEngine.ServiceView, routes: List<Pair<String, Str
                 Separator()
                 CheckRow(label = label, detail = null, checked = v.pinned && v.routeId == id) { MaeEngine.pin(v.def.id, id) }
             }
+            // A method MAE has no server of yet is listed all the same, its reason in orange, and a
+            // tap opens its tile -- there is nothing to pin until it is set up.
+            exits.filter { e -> routes.none { (id, _) -> e.owns(id) } }.forEach { e ->
+                Separator()
+                SetupRow(
+                    label = e.title,
+                    detail = if (e.inUse) tr("فعلاً در دسترس MAE نیست — برای بررسی بزنید", "Not available to MAE right now — tap to check")
+                        else e.status,
+                ) { onOpenTile(e.tile) }
+            }
         }
         SettingsFooter(stringResource(R.string.mae_route_footer))
 
@@ -527,6 +644,24 @@ private fun CheckRow(label: String, detail: String?, checked: Boolean, onClick: 
             if (detail != null) Text(detail, color = Ios.SecondaryLabel, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (checked) Icon(Icons.Default.Check, contentDescription = null, tint = Ios.Blue, modifier = Modifier.size(20.dp))
+    }
+}
+
+/** A method MAE could use once it is set up: its name, in orange why not yet, a chevron to its tile. */
+@Composable
+private fun SetupRow(label: String, detail: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 44.dp).padding(horizontal = 16.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = Ios.Label, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(detail, color = Ios.Orange, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Icon(
+            Icons.Default.ChevronRight, contentDescription = null, tint = Ios.Chevron,
+            modifier = Modifier.size(18.dp).scale(if (LocalLayoutDirection.current == LayoutDirection.Rtl) -1f else 1f, 1f),
+        )
     }
 }
 

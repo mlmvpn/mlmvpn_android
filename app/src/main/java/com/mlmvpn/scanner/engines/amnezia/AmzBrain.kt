@@ -12,10 +12,10 @@ package com.mlmvpn.scanner.engines.amnezia
  */
 object AmzBrain {
 
-    const val MAX_POOL = 3000
-    const val MAX_WARP = 250
     const val DEAD_STREAK = 3
     const val BEST_COUNT = 200
+    /** At most this many of a «test the best» go to plain WireGuard servers before anything else. */
+    const val WG_SLICE = 80
     private const val TOMBSTONE_MS = 7L * 24 * 3_600_000
     private const val NET_MAX = 6
     private const val NET_MAX_AGE_MS = 30L * 24 * 3_600_000
@@ -24,9 +24,11 @@ object AmzBrain {
     // ---------------------------------------------------------------- the pool
 
     /**
-     * New servers in, better countries for known ones, removed ones kept out, and the pool held to
-     * [MAX_POOL] (dropping first what has never worked anywhere and comes from the weakest lists).
+     * New servers in, better countries for known ones, removed ones kept out. Every server the lists
+     * bring is kept: the pool used to be cut at 3,000 servers and 250 public WARP accounts, so most of
+     * the big Hysteria2 lists were never even looked at (user, 2026-10-17: «محدودیت‌هاشون رو بردار»).
      */
+    @Suppress("UNUSED_PARAMETER")
     fun merge(s: AmzState, incoming: List<AmzServer>, now: Long, net: String = ""): AmzState {
         val tomb = s.tombstones.filterValues { now - it < TOMBSTONE_MS }
         val byId = LinkedHashMap<String, AmzServer>(s.servers.size + incoming.size)
@@ -35,28 +37,26 @@ object AmzBrain {
             val old = byId[n.id]
             if (old == null) {
                 if (n.id in tomb && !n.user) continue
-                byId[n.id] = n
+                byId[n.id] = n.copy(seenAt = now)
             } else {
                 // The same server from another list: its name's country only fills a gap.
                 byId[n.id] = old.withCountry(n.country, n.countryFrom).let { if (n.user && !it.user) it.copy(sourceId = n.sourceId) else it }
+                    .let { if (n.selfSigned && !it.selfSigned) it.copy(selfSigned = true) else it }
+                    .copy(seenAt = now)
             }
         }
-        return cap(s.copy(servers = byId.values.toList(), tombstones = tomb), now, net)
+        // A public server its list stopped carrying goes after STALE_MS -- judged only for a list that
+        // answered now (one the line could not reach says nothing), and never for one that ever worked.
+        val answered = incoming.mapTo(HashSet()) { it.sourceId }
+        val worked = s.stats.values.flatMap { m -> m.filterValues { it.ok > 0 }.keys }.toHashSet()
+        val kept = byId.values.filter { sv ->
+            sv.user || sv.sourceId !in answered || sv.id in worked || now - sv.lastSeen <= STALE_MS
+        }
+        return s.copy(servers = kept, tombstones = tomb)
     }
 
-    private fun cap(s: AmzState, now: Long, net: String): AmzState {
-        var servers = s.servers
-        val warps = servers.filter { it.warp && !it.user }
-        if (warps.size > MAX_WARP) {
-            val drop = warps.sortedByDescending { value(it, s, net, now) }.drop(MAX_WARP).map { it.id }.toHashSet()
-            servers = servers.filterNot { it.id in drop }
-        }
-        if (servers.size > MAX_POOL) {
-            val keep = servers.sortedByDescending { if (it.user) Double.MAX_VALUE else value(it, s, net, now) }.take(MAX_POOL).map { it.id }.toHashSet()
-            servers = servers.filter { it.id in keep }
-        }
-        return if (servers.size == s.servers.size) s else s.copy(servers = servers)
-    }
+    /** A public server its list has not carried for this long is gone (unless it ever worked). */
+    const val STALE_MS = 3L * 24 * 3_600_000
 
     fun remove(s: AmzState, ids: Collection<String>, now: Long): AmzState {
         if (ids.isEmpty()) return s
@@ -70,6 +70,17 @@ object AmzBrain {
         )
     }
 
+    /**
+     * Once, when the Cloudflare way arrives: a plain WireGuard server's failures so far were over the
+     * line alone, which on many networks drops its UDP. They say little now that Cloudflare can carry
+     * it, so they are forgotten and the server is tested afresh -- on the next test, both ways.
+     */
+    fun forgetLineOnlyFailures(s: AmzState): AmzState {
+        val wg = s.servers.filter { it.kind != AmzKind.HY2 && !it.warp }.mapTo(HashSet()) { it.id }
+        val stats = s.stats.mapValues { (_, m) -> m.filterNot { (id, st) -> id in wg && st.tested && !st.alive } }
+        return if (stats == s.stats) s else s.copy(stats = stats)
+    }
+
     /** «حذف مرده‌ها»: every server whose last test on this network failed. Never the user's own files. */
     fun deadIds(s: AmzState, net: String): List<String> {
         val st = s.statsFor(net)
@@ -78,7 +89,8 @@ object AmzBrain {
 
     // ---------------------------------------------------------------- results
 
-    data class Result(val id: String, val ms: Long?, val country: String? = null)
+    /** [via]: how a success got there ([AmzStat.VIA_CF] inside Cloudflare), null straight over the line. */
+    data class Result(val id: String, val ms: Long?, val country: String? = null, val via: String? = null)
 
     /**
      * One test round's results. [offline]: every test failed AND the network itself did not answer
@@ -96,7 +108,10 @@ object AmzBrain {
             val old = netStats[r.id] ?: AmzStat()
             val next = if (r.ms != null) old.copy(
                 ok = old.ok + 1, streak = 0, lastMs = r.ms, lastOkAt = now, lastTestAt = now,
-                ewmaMs = if (old.ewmaMs <= 0.0) r.ms.toDouble() else old.ewmaMs * (1 - ALPHA) + r.ms * ALPHA,
+                // A delay through Cloudflare is not comparable with a direct one: a change of way
+                // starts the smoothing over rather than averaging the two.
+                ewmaMs = if (old.ewmaMs <= 0.0 || old.via != r.via.orEmpty()) r.ms.toDouble() else old.ewmaMs * (1 - ALPHA) + r.ms * ALPHA,
+                via = r.via.orEmpty(),
             ) else old.copy(fail = old.fail + 1, streak = old.streak + 1, lastMs = -1, lastTestAt = now)
             netStats[r.id] = next
             // A source is judged on a server's first verdict only, or a list with one good server
@@ -119,6 +134,10 @@ object AmzBrain {
         out = remove(out, dead, now)
         return prune(out, now)
     }
+
+    /** Self-signed servers' links, pinned to the certificates they showed (id -> new link). */
+    fun pin(s: AmzState, links: Map<String, String>): AmzState =
+        if (links.isEmpty()) s else s.copy(servers = s.servers.map { sv -> links[sv.id]?.let { sv.copy(raw = it) } ?: sv })
 
     /** The exit measured through the running tunnel: the server moves to the country it really is. */
     fun exitCountry(s: AmzState, id: String, cc: String): AmzState =
@@ -167,11 +186,19 @@ object AmzBrain {
                 // being explored instead of re-testing the same two hundred forever.
                 val ranked = pool.sortedByDescending { value(it, s, net, now) }
                 val st = s.statsFor(net)
-                val known = ranked.filter { st[it.id]?.alive == true }.take(BEST_COUNT * 3 / 4)
-                val fresh = ranked.filter { st[it.id]?.tested != true }.take(BEST_COUNT - known.size)
-                val taken = (known + fresh).mapTo(HashSet()) { it.id }
-                val rest = ranked.filter { it.id !in taken }.take(BEST_COUNT - known.size - fresh.size)
-                (known + fresh + rest)
+                // Every plain WireGuard server that works here or has not been tried yet comes along:
+                // they are few, and the kind that answers most now that Cloudflare carries them. By
+                // value alone they lost their places to Hysteria2 lists that looked good on paper --
+                // a test of 200 took 6 of them and 82 Hysteria2 servers (2026-10-07).
+                val wg = ranked.filter { it.kind != AmzKind.HY2 && !it.warp && !it.user && st[it.id]?.let { x -> x.alive || !x.tested } != false }
+                    .take(WG_SLICE)
+                val budget = BEST_COUNT - wg.size
+                val taken0 = wg.mapTo(HashSet()) { it.id }
+                val known = ranked.filter { it.id !in taken0 && st[it.id]?.alive == true }.take(budget * 3 / 4)
+                val fresh = ranked.filter { it.id !in taken0 && st[it.id]?.tested != true }.take(budget - known.size)
+                val taken = (wg + known + fresh).mapTo(HashSet()) { it.id }
+                val rest = ranked.filter { it.id !in taken }.take(budget - known.size - fresh.size)
+                (wg + known + fresh + rest)
             }
         }
     }

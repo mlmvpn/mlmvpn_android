@@ -56,10 +56,12 @@ object GephEngine {
      */
     const val TUN_DNS = "1.1.1.1"
 
-    private const val VERIFY_HOST = "www.gstatic.com"
+    internal const val VERIFY_HOST = "www.gstatic.com"
     private const val GEO_HOST = "api.ip.sb"
-    private const val SPEED_HOST = "dl.google.com"
-    const val SPEED_PATH = "/android/repository/platform-tools-latest-linux.zip"
+    internal const val SPEED_HOST = "dl.google.com"
+    // Measured 2026-10-03: through Geph's exits dl.google.com answers 404 for the platform-tools
+    // zips (it serves them directly), and 206 for Chrome's installer -- so that is what is timed.
+    const val SPEED_PATH = "/linux/direct/google-chrome-stable_current_amd64.deb"
 
     enum class Mode {
         /** The TUN is the engine's own stdin: its userspace stack, no hop in between. */
@@ -339,7 +341,7 @@ object GephEngine {
             synchronized(queryLock) {
                 users--
                 if (users == 0) {
-                    idleStop = timer.schedule({ synchronized(queryLock) { if (users == 0) stopQueryNow() } }, 60, TimeUnit.SECONDS)
+                    idleStop = timer.schedule({ synchronized(queryLock) { if (users == 0) stopQueryNow() } }, 20, TimeUnit.SECONDS)
                 }
             }
         }
@@ -372,6 +374,21 @@ object GephEngine {
         }
         proc.stop(null)
         throw IllegalStateException(ENGINE_DID_NOT_START)
+    }
+
+    /**
+     * The app went to the background: a query engine nobody is using goes now. It used to run on
+     * for a minute after the last question, as a process of its own with nothing in front of it --
+     * and the system killed the whole app for that child's CPU use (1.2.41, after the Geph screen).
+     */
+    fun onAppBackground() {
+        synchronized(queryLock) {
+            if (users == 0) {
+                idleStop?.cancel(false)
+                idleStop = null
+                stopQueryNow()
+            }
+        }
     }
 
     private fun stopQueryNow() {
@@ -425,15 +442,16 @@ object GephEngine {
 
     // ── plumbing ────────────────────────────────────────────────────────────────────────────────
 
-    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
+    internal fun freePort(): Int = ServerSocket(0).use { it.localPort }
 
-    @Volatile private var lastBodyBytes = 0L
+    @Volatile internal var lastBodyBytes = 0L
+        private set
 
     /**
      * One HTTPS GET to [host] through the engine's loopback forward on [port]: TLS with the real
      * name for SNI and certificate checking, so a forward that went somewhere else fails.
      */
-    private fun httpsViaForward(
+    internal fun httpsViaForward(
         port: Int,
         host: String,
         path: String,

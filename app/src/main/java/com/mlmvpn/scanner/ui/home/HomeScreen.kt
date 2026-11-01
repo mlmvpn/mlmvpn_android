@@ -40,6 +40,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Shield
@@ -106,12 +107,34 @@ import kotlin.math.roundToInt
  * from ever hiding an icon — anything that does not fit goes onto a second page rather than off
  * the bottom edge.
  */
-private data class BoardShape(val columns: Int, val rows: Int) {
+private data class BoardShape(
+    val columns: Int,
+    val rows: Int,
+    /** Slots at the start of the first page taken by the connection widget (HomeConnectionWidget). */
+    val reserved: Int = 0,
+) {
     val perPage: Int get() = columns * rows
 
-    fun pageCount(items: Int): Int =
-        if (perPage <= 0) 1 else ((items + perPage - 1) / perPage).coerceAtLeast(1)
+    /** Icons the first page holds once the widget has its rows. */
+    val firstCapacity: Int get() = (perPage - reserved).coerceAtLeast(0)
+
+    fun pageCount(items: Int): Int = when {
+        perPage <= 0 -> 1
+        items <= firstCapacity -> 1
+        else -> 1 + (items - firstCapacity + perPage - 1) / perPage
+    }
+
+    /** The page and the slot on it of visual index [visual]. */
+    fun place(visual: Int): Pair<Int, Int> =
+        if (visual < firstCapacity) 0 to (visual + reserved)
+        else (1 + (visual - firstCapacity) / perPage) to ((visual - firstCapacity) % perPage)
 }
+
+/** Rows of the first page the connection widget takes: iOS's medium widget, two rows of icons. */
+private const val WIDGET_ROWS = 2
+
+/** The widget needs room around it: a board shorter than this many rows does without it. */
+private const val WIDGET_MIN_ROWS = 5
 
 /** Cell pitch below which a row is too cramped to hold a tile and its caption. */
 private val MIN_ROW_HEIGHT = 96.dp
@@ -154,6 +177,10 @@ private val SlotSpring = spring<Offset>(dampingRatio = 0.82f, stiffness = 420f)
 private val FolderOpenSpring = spring<Float>(dampingRatio = 0.86f, stiffness = 340f)
 private val FolderCloseSpring = spring<Float>(dampingRatio = 1f, stiffness = 520f)
 
+/** The search coming down over the board, and going. */
+private val SearchOpenSpring = spring<Float>(dampingRatio = 1f, stiffness = 520f)
+private val SearchCloseSpring = spring<Float>(dampingRatio = 1f, stiffness = 760f)
+
 /**
  * The app's front door: a wallpaper, a grid of icons, and a dock.
  *
@@ -181,6 +208,8 @@ fun HomeScreen(
     onOpen: (HomeApp) -> Unit,
     /** Settings > Software update. Only reachable while [updateReady] is true. */
     onOpenUpdate: () -> Unit = {},
+    /** Settings, on the page of a row the search found (the route); the row is armed already. */
+    onOpenSetting: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -195,6 +224,7 @@ fun HomeScreen(
     var shownKey by remember { mutableStateOf<String?>(null) }
     val folderProgress = remember { Animatable(0f) }
     var removing by remember { mutableStateOf<BoardItem.Folder?>(null) }
+    var removingWidget by remember { mutableStateOf(false) }
 
     val drag = remember { HomeDrag(scope) }
 
@@ -219,6 +249,33 @@ fun HomeScreen(
         }
     }
 
+    // The search over the board (HomeSearch), kept the way the folder is: [searchOpen] while it
+    // takes input, [searchShown] for as long as it is on screen at all, the fade included.
+    var searchOpen by remember { mutableStateOf(false) }
+    var searchShown by remember { mutableStateOf(false) }
+    val searchProgress = remember { Animatable(0f) }
+    fun openSearch() {
+        // Not over a rearrangement, an open folder or an icon in the air: each of those has the board.
+        if (editMode || openKey != null || drag.session != null) return
+        searchOpen = true
+        searchShown = true
+        scope.launch { searchProgress.animateTo(1f, SearchOpenSpring) }
+    }
+    fun closeSearch() {
+        if (!searchOpen) return
+        searchOpen = false
+        scope.launch {
+            searchProgress.animateTo(0f, SearchCloseSpring)
+            if (!searchOpen) searchShown = false
+        }
+    }
+    /** Leaving for what the search found: gone at once -- that screen covers this one anyway. */
+    fun dropSearch() {
+        searchOpen = false
+        searchShown = false
+        scope.launch { searchProgress.snapTo(0f) }
+    }
+
     // Wired on every composition, so the drag always acts on the board as it is now.
     drag.committed = { HomeLayoutStore.toLayout(order) }
     drag.commit = { commitLayout(it) }
@@ -232,9 +289,11 @@ fun HomeScreen(
     // Leaving edit mode is what back does first, before it would ever offer to exit the app. An
     // open folder answers back itself (it closes, or leaves its own renaming first).
     BackHandler(enabled = editMode && openKey == null) { editMode = false }
+    GerehTileMenuDialog(onEditHome = { editMode = true }, onRemoved = { order = HomeLayoutStore.load(context) })
 
     val liveEngines = ActiveEngines.ids()
     val progress: State<Float> = folderProgress.asState()
+    val searchState: State<Float> = searchProgress.asState()
 
     Box(
         modifier = Modifier
@@ -259,7 +318,8 @@ fun HomeScreen(
                 // The board softens behind an open folder. Read in the layer, so the opening costs a
                 // redraw a frame and no recomposition; below Android 12 the scrim alone does it.
                 .graphicsLayer {
-                    val p = progress.value
+                    // Behind the search as well, while it fades in over the board.
+                    val p = maxOf(progress.value, searchState.value)
                     renderEffect = if (p > 0.01f) BlurEffect(p * 28f, p * 28f, TileMode.Decal) else null
                 }
                 .padding(
@@ -309,6 +369,12 @@ fun HomeScreen(
                     }
                 },
                 onRemoveFolder = { removing = it },
+                // While the search covers the board, a remote's focus stays in the search.
+                tvFocus = !searchShown,
+                onOpenSearch = { openSearch() },
+                widget = Appearance.homeWidget,
+                onOpenApp = { if (!editMode) onOpen(it) },
+                onRemoveWidget = { removingWidget = true },
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
@@ -324,6 +390,7 @@ fun HomeScreen(
                     tileSize = 56.dp,
                     onOpen = { if (!editMode) onOpen(it) },
                     modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 10.dp),
+                    focusable = !searchShown,
                 )
             }
         }
@@ -368,6 +435,47 @@ fun HomeScreen(
                 is BoardItem.Folder -> FolderTile(folder = item, tileSize = size, connected = item.apps.any { it.id in liveEngines })
             }
         }
+
+        // The search, over everything: board, dock, an open folder (it cannot be opened over one).
+        if (searchShown) {
+            HomeSearch(
+                open = searchOpen,
+                progress = searchState,
+                board = order,
+                liveEngines = liveEngines,
+                onOpenApp = { app ->
+                    dropSearch()
+                    onOpen(app)
+                },
+                onOpenSetting = { route ->
+                    dropSearch()
+                    onOpenSetting(route)
+                },
+                onClose = { closeSearch() },
+            )
+        }
+    }
+
+    if (removingWidget) {
+        IosAlert(
+            title = com.mlmvpn.scanner.store.tr("برداشتن ویجت اتصال؟", "Remove the connection widget?"),
+            message = com.mlmvpn.scanner.store.tr(
+                "ویجت از صفحهٔ اصلی برداشته می‌شود و کاشی‌ها جای آن را می‌گیرند. هر وقت خواستید از تنظیمات › صفحه نمایش یا ویجت استدیو دوباره روشنش کنید.",
+                "The widget leaves the home screen and the icons take its place. Turn it back on any time in Settings › Display or in Widget Studio.",
+            ),
+            actions = listOf(
+                IosAlertAction(stringResource(R.string.common_cancel), onClick = { removingWidget = false }),
+                IosAlertAction(
+                    com.mlmvpn.scanner.store.tr("برداشتن", "Remove"),
+                    onClick = {
+                        removingWidget = false
+                        Appearance.setHomeWidget(context, false)
+                    },
+                    destructive = true,
+                ),
+            ),
+            onDismiss = { removingWidget = false },
+        )
     }
 
     removing?.let { f ->
@@ -399,8 +507,8 @@ private fun folderTileRect(drag: HomeDrag, order: List<BoardItem>, key: String):
     val gap = if (drag.active) drag.boardGap else null
     val index = items.indexOfFirst { it.id == ref }.takeIf { it >= 0 } ?: return null
     val visual = if (gap != null && index >= gap) index + 1 else index
-    if (visual / g.perPage != g.page) return null
-    return g.tileRect(visual % g.perPage)
+    if (g.pageOf(visual) != g.page) return null
+    return g.tileRect(g.slotOf(visual))
 }
 
 /**
@@ -434,6 +542,33 @@ private fun HomeStatusStrip(
                 tint = if (isRunning) green else muted.copy(alpha = 0.55f),
                 modifier = Modifier.size(16.dp),
             )
+            // Supporting the app, beside the shield: one tap, the donation page in the browser.
+            if (!editMode) {
+                val context = LocalContext.current
+                Spacer(Modifier.width(8.dp))
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.14f))
+                        .pointerInput(Unit) { detectTapGestures { com.mlmvpn.scanner.utils.Donate.open(context) } }
+                        .padding(horizontal = 9.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Default.Favorite,
+                        contentDescription = null,
+                        tint = Color(0xFFFF2D55),
+                        modifier = Modifier.size(12.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        com.mlmvpn.scanner.store.tr("حمایت", "Support"),
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
         }
 
         if (editMode) {
@@ -507,15 +642,28 @@ private fun BoardGrid(
     onExitEditMode: () -> Unit,
     onOpen: (BoardItem) -> Unit,
     onRemoveFolder: (BoardItem.Folder) -> Unit,
+    tvFocus: Boolean,
+    onOpenSearch: () -> Unit,
+    /** The connection widget is on (Settings > Display); it is drawn only where the board has room. */
+    widget: Boolean = false,
+    onOpenApp: (HomeApp) -> Unit = {},
+    onRemoveWidget: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier = modifier) {
         val density = LocalDensity.current
         val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
         val scope = rememberCoroutineScope()
+        // Read here: the pager's page lambda cannot reach this scope's constraints implicitly.
+        val boardWidth = maxWidth
 
         val slots = items.size + if (gap != null) 1 else 0
-        val shape = boardShapeFor(maxWidth, maxHeight, slots)
+        val base = boardShapeFor(maxWidth, maxHeight, slots)
+        // The widget takes the top rows of the first page, as an iOS widget takes a block of cells;
+        // the icons flow on after it. On a short board (a phone turned sideways, a TV) it would leave
+        // the first page almost empty, so it is not shown there.
+        val showWidget = widget && base.rows >= WIDGET_MIN_ROWS
+        val shape = if (showWidget) base.copy(reserved = base.columns * WIDGET_ROWS) else base
         val pageCount = shape.pageCount(slots)
         // Declared here rather than hoisted, because its page count is a function of the measured
         // shape: a rotation changes how many icons fit and therefore how many pages exist.
@@ -525,8 +673,8 @@ private fun BoardGrid(
         // that no longer exists draws an empty board with no way back.
         val page = pagerState.currentPage.coerceIn(0, pageCount - 1)
 
-        // The pager leaves the page dots their own strip below it.
-        val dotsHeight = if (pageCount > 1) 15.dp else 0.dp
+        // The pager leaves the search pill -- the page dots ride inside it -- a strip of its own below it.
+        val dotsHeight = SearchPillStrip
         val cellW = maxWidth / shape.columns
         val cellH = (maxHeight - dotsHeight) / shape.rows
         // 26dp covers the 6dp gap and the 11sp caption, so a tile can never push its own label
@@ -563,6 +711,7 @@ private fun BoardGrid(
                 tilePx = tilePx,
                 tileTopPx = ((cellHpx - content) / 2f).coerceAtLeast(0f),
                 rtl = rtl,
+                reserved = shape.reserved,
             )
         }
         LaunchedEffect(pagerState.currentPage, pageCount, shape, tilePx, rtl, contentHeight.floatValue) { publish() }
@@ -615,11 +764,21 @@ private fun BoardGrid(
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = AbsoluteAlignment.TopLeft) {
                     val cellWpx = with(density) { cellW.toPx() }
                     val cellHpx = with(density) { cellH.toPx() }
-                    val first = pageIndex * shape.perPage
+                    if (pageIndex == 0 && shape.reserved > 0) {
+                        HomeConnectionWidget(
+                            editMode = editMode,
+                            onOpenApp = onOpenApp,
+                            onEnterEditMode = onEnterEditMode,
+                            onRemove = onRemoveWidget,
+                            modifier = Modifier
+                                .size(boardWidth, cellH * WIDGET_ROWS)
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        )
+                    }
                     items.forEachIndexed { index, item ->
                         val visual = if (gap != null && index >= gap) index + 1 else index
-                        if (visual < first || visual >= first + shape.perPage) return@forEachIndexed
-                        val slot = visual - first
+                        val (onPage, slot) = shape.place(visual)
+                        if (onPage != pageIndex) return@forEachIndexed
                         val row = slot / shape.columns
                         val col = slot % shape.columns
                         val visualCol = if (rtl) shape.columns - 1 - col else col
@@ -644,6 +803,7 @@ private fun BoardGrid(
                                 onTap = { onOpen(item) },
                                 onEnterEditMode = onEnterEditMode,
                                 onRemove = (item as? BoardItem.Folder)?.let { f -> { onRemoveFolder(f) } },
+                                tvFocus = tvFocus,
                                 modifier = Modifier
                                     .absoluteOffset { position.value.toIntOffset() }
                                     .size(cellW, cellH),
@@ -653,7 +813,14 @@ private fun BoardGrid(
                 }
             }
 
-            if (pageCount > 1) PageDots(count = pageCount, current = page)
+            // iOS's way in to search: the dots under the board, in a pill that opens it when tapped.
+            SearchPill(
+                pageCount = pageCount,
+                current = page,
+                editMode = editMode,
+                focusable = tvFocus,
+                onSearch = onOpenSearch,
+            )
         }
     }
 }
@@ -694,6 +861,8 @@ internal fun BoardCell(
     /** Folders only: the edit-mode badge that takes the folder apart. */
     onRemove: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    /** Off while something covers the board (the search), so a remote cannot move behind it. */
+    tvFocus: Boolean = true,
 ) {
     var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     // The gestures live as long as the cell; these keep what they act on current.
@@ -730,7 +899,7 @@ internal fun BoardCell(
                 onTap = { currentOnTap() },
                 onEnterEditMode = { currentOnEnterEditMode() },
             )
-            .tvFocusable(onPress = onTap)
+            .tvFocusable(enabled = tvFocus, onPress = onTap)
             .graphicsLayer {
                 alpha = when {
                     landing -> 0f

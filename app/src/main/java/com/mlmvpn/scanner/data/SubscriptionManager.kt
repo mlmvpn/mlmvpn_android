@@ -82,7 +82,7 @@ class SubscriptionManager private constructor(val context: Context) {
 
     private fun saveSubscriptions() {
         val arr = JSONArray()
-        for (sub in subscriptions) {
+        for (sub in subscriptions.toList()) { // a copy: another coroutine may add or remove meanwhile
             val obj = JSONObject()
             obj.put("id", sub.id)
             obj.put("name", sub.name)
@@ -210,7 +210,7 @@ class SubscriptionManager private constructor(val context: Context) {
     suspend fun updateAllSubscriptions(nodeManager: NodeManager): Pair<Int, Int> {
         var successCount = 0
         var failCount = 0
-        for (sub in subscriptions) {
+        for (sub in subscriptions.toList()) { // a copy: another coroutine may add or remove meanwhile
             val res = updateSubscription(sub, nodeManager)
             if (res.first) successCount++ else failCount++
         }

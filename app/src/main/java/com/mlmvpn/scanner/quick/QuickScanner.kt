@@ -149,9 +149,9 @@ object QuickScanner {
             // already done it -- the pipeline below has, by definition.
             if (!skipTcp && tcpOpen(config.address, config.port, TCP_TIMEOUT_MS) < 0) return@withContext -1
             val json = XrayJsonGenerator.generateSpeedtestConfig(config)
-            val ms = withTimeoutOrNull(REAL_TIMEOUT_MS) {
-                libv2ray.Libv2ray.measureOutboundDelay(json, DELAY_TEST_URL)
-            } ?: 0L
+            // In `:xmeasure`, with a timeout that really fires (CombineEngine.measureDelay): a pool
+            // config that panics Xray used to close the app from inside Quick Connect's scan.
+            val ms = com.mlmvpn.scanner.data.CombineEngine.measureDelay(json, DELAY_TEST_URL, REAL_TIMEOUT_MS)
             if (ms > 0) ms.toInt() else -1
         } catch (e: Exception) {
             -1

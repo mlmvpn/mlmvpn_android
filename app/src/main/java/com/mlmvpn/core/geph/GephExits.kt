@@ -2,14 +2,9 @@ package com.mlmvpn.core.geph
 
 import android.content.Context
 import android.os.SystemClock
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.net.InetSocketAddress
-import java.net.Proxy
-import java.util.concurrent.TimeUnit
 
 /** One Geph exit server, as the network lists it (net_status). */
 data class GephExit(
@@ -96,7 +91,18 @@ object GephExits {
         val error: String? = null,
     )
 
-    private const val PROBE_SOCKS = 21400
+    /**
+     * How long one country gets to make a session. The real connection gets two minutes
+     * (TunnelVpnService), and on a phone on an Iranian line a fresh engine routinely needs more than
+     * the half minute this used to allow -- so every country "did not answer" while connecting to
+     * the same countries worked. A country that does connect still ends its probe at once.
+     */
+    private const val SESSION_BUDGET_MS = 90_000L
+
+    /** Why a probe failed, for the screen to say in words. */
+    const val NO_SESSION = "GEPH_PROBE_NO_SESSION"
+    const val NO_DATA = "GEPH_PROBE_NO_DATA"
+    const val ENGINE_EXITED = "GEPH_PROBE_ENGINE_EXITED"
 
     /**
      * Measures each candidate for real, one at a time: connect, time to first byte, and half a
@@ -145,85 +151,121 @@ object GephExits {
         }
         dir.deleteRecursively()
         val ranked = results.sortedWith(compareByDescending<Probe> { it.ok }.thenByDescending { it.mbit }.thenBy { it.ttfbMs })
-        ranked.firstOrNull { it.ok }?.let { best ->
+        // The whole run is kept -- every country, with its numbers or why it failed -- so it is
+        // still on the screen after the user connects and comes back. The best one is also kept at
+        // the top level, where the Geph screen's "last fastest" row reads it.
+        if (results.isNotEmpty()) {
+            val best = ranked.firstOrNull { it.ok }
             GephSettings.setLastFastest(app, JSONObject()
                 .put("at", System.currentTimeMillis())
-                .put("country", best.exit.country)
-                .put("city", best.exit.city ?: JSONObject.NULL)
-                .put("mbit", best.mbit)
-                .put("ttfb", best.ttfbMs)
+                .apply {
+                    if (best != null) {
+                        put("country", best.exit.country)
+                        put("city", best.exit.city ?: JSONObject.NULL)
+                        put("mbit", best.mbit)
+                        put("ttfb", best.ttfbMs)
+                    }
+                }
                 .put("ranked", JSONArray().apply {
                     ranked.forEach { p ->
                         put(JSONObject()
                             .put("country", p.exit.country).put("city", p.exit.city ?: JSONObject.NULL)
-                            .put("ok", p.ok).put("mbit", p.mbit).put("ttfb", p.ttfbMs))
+                            .put("ok", p.ok).put("mbit", p.mbit).put("ttfb", p.ttfbMs)
+                            .put("connect", p.connectMs).put("error", p.error ?: JSONObject.NULL))
                     }
                 }))
         }
         return ranked
     }
 
+    /**
+     * One country, measured exactly the way the real connection is checked: the engine's own
+     * port forwards to Google, with TLS from here (GephEngine.httpsViaForward) -- not a SOCKS proxy,
+     * a different path the real connection never takes. "Answered" is a request that crossed; the
+     * speed is measured after that and only ranks the countries, so a slow or failed download no
+     * longer turns a working country into "did not answer".
+     */
     private fun probeOne(ctx: Context, cred: GephCredential, exit: GephExitChoice, db: File, dir: File): Probe {
         val control = File(dir, "probe.sock").apply { delete() }.absolutePath
+        val verifyPort = GephEngine.freePort()
+        val speedPort = GephEngine.freePort()
         val run = GephRun(
             credential = cred,
             exit = exit,
             dryRun = false,
             controlSocket = control,
             cacheFile = db.absolutePath,
-            socks5 = "127.0.0.1:$PROBE_SOCKS",
             allowDirect = GephSettings.allowDirect(ctx),
+            forwards = listOf(
+                GephForward("127.0.0.1:$verifyPort", "${GephEngine.VERIFY_HOST}:443"),
+                GephForward("127.0.0.1:$speedPort", "${GephEngine.SPEED_HOST}:443"),
+            ),
         )
         val cfg = File(dir, "config.json").apply { writeText(GephConfig.build(run).toString()) }
         val started = SystemClock.elapsedRealtime()
         val proc = GephProcess.start(ctx, "probe", cfg, dir, null, onLine = {}, onExit = {})
         val c = GephControl(control)
         try {
-            val deadline = started + 30_000
             var connected = false
-            while (SystemClock.elapsedRealtime() < deadline && proc.isAlive) {
-                if (runCatching { c.connInfo(2_000).connected }.getOrDefault(false)) {
+            while (SystemClock.elapsedRealtime() - started < SESSION_BUDGET_MS && proc.isAlive) {
+                if (runCatching { c.connInfo(3_000).connected }.getOrDefault(false)) {
                     connected = true
                     break
                 }
-                Thread.sleep(300)
+                Thread.sleep(400)
             }
-            if (!connected) return Probe(exit, ok = false, error = "no session in 30 s")
+            if (!connected) return Probe(exit, ok = false, error = if (proc.isAlive) NO_SESSION else ENGINE_EXITED)
             val connectMs = SystemClock.elapsedRealtime() - started
-            val client = OkHttpClient.Builder()
-                .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", PROBE_SOCKS)))
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(25, TimeUnit.SECONDS)
-                .callTimeout(40, TimeUnit.SECONDS)
-                .build()
-            val t0 = SystemClock.elapsedRealtime()
-            client.newCall(Request.Builder().url("https://www.gstatic.com/generate_204").build()).execute().use { }
-            val ttfb = SystemClock.elapsedRealtime() - t0
+
+            // A request across, twice at most: the free tier's first request can be slow.
+            var ttfb = -1L
+            repeat(2) {
+                if (ttfb >= 0) return@repeat
+                val t0 = SystemClock.elapsedRealtime()
+                val ok = runCatching {
+                    GephEngine.httpsViaForward(verifyPort, GephEngine.VERIFY_HOST, "/generate_204", 20_000, maxBody = 0).first in 200..399
+                }.getOrDefault(false)
+                if (ok) ttfb = SystemClock.elapsedRealtime() - t0
+            }
+            if (ttfb < 0) return Probe(exit, ok = false, connectMs = connectMs, error = NO_DATA)
+
+            // Half a megabyte from Google's download CDN, for the ranking.
             val size = 524_288
             val t1 = SystemClock.elapsedRealtime()
-            var got = 0L
-            client.newCall(
-                Request.Builder()
-                    .url("https://dl.google.com" + GephEngine.SPEED_PATH)
-                    .header("Range", "bytes=0-${size - 1}")
-                    .build(),
-            ).execute().use { r ->
-                val buf = ByteArray(16_384)
-                val input = r.body?.byteStream() ?: return@use
-                while (got < size) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    got += n
-                }
-            }
+            val got = runCatching {
+                val (status, _) = GephEngine.httpsViaForward(
+                    speedPort, GephEngine.SPEED_HOST, GephEngine.SPEED_PATH, 30_000, maxBody = size,
+                    extraHeaders = "Range: bytes=0-${size - 1}\r\n",
+                )
+                if (status in 200..299) GephEngine.lastBodyBytes else 0L
+            }.getOrDefault(0L)
             val ms = SystemClock.elapsedRealtime() - t1
-            val mbit = if (ms > 0) got * 8.0 / ms / 1000.0 else 0.0
-            return Probe(exit, ok = got > 0, connectMs = connectMs, ttfbMs = ttfb, mbit = mbit)
+            val mbit = if (got > 0 && ms > 0) got * 8.0 / ms / 1000.0 else 0.0
+            return Probe(exit, ok = true, connectMs = connectMs, ttfbMs = ttfb, mbit = mbit)
         } catch (e: Exception) {
             return Probe(exit, ok = false, error = e.message ?: e.javaClass.simpleName)
         } finally {
             proc.stop(c)
         }
+    }
+
+    /** The last run as it was measured, and when (ms); null before the first. */
+    fun lastRun(ctx: Context): Pair<Long, List<Probe>>? {
+        val o = GephSettings.lastFastest(ctx) ?: return null
+        val arr = o.optJSONArray("ranked") ?: return null
+        val list = (0 until arr.length()).mapNotNull { i ->
+            val x = arr.optJSONObject(i) ?: return@mapNotNull null
+            val country = x.optString("country").takeIf { it.length == 2 } ?: return@mapNotNull null
+            Probe(
+                exit = GephExitChoice(country, x.optString("city").takeIf { it.isNotBlank() && !x.isNull("city") }),
+                ok = x.optBoolean("ok"),
+                connectMs = x.optLong("connect"),
+                ttfbMs = x.optLong("ttfb"),
+                mbit = x.optDouble("mbit", 0.0),
+                error = if (x.isNull("error")) null else x.optString("error").ifBlank { null },
+            )
+        }
+        return if (list.isEmpty()) null else o.optLong("at") to list
     }
 
     const val BUSY = "GEPH_BUSY"

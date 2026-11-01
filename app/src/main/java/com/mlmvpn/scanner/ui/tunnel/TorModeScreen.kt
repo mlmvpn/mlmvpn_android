@@ -58,7 +58,15 @@ private val OPTIONS = listOf(
         S(R.string.rides_the_traffic_on_a_cdn_the_2),
     ),
     IosOption(
+        "webtunnel", "WebTunnel",
+        S(R.string.tor_mode_webtunnel_sub),
+    ),
+    IosOption(
         "snowflake", "Snowflake",
         S(R.string.volunteer_webrtc_proxies_the_last_resort_when),
+    ),
+    IosOption(
+        "vanilla", S(R.string.tor_mode_vanilla),
+        S(R.string.tor_mode_vanilla_sub),
     ),
 )

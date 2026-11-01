@@ -112,8 +112,7 @@ object GameDoctor {
     private suspend fun checkHost(host: String, cls: TrafficClass, network: Network?): HostCheck = coroutineScope {
         // The system resolver can hang for tens of seconds on a bad line; it is asked on the side
         // and abandoned after 1.5 s.
-        val sysJob = async(Dispatchers.IO) { resolveV4(host).mapNotNull { it.hostAddress } }
-        val sysIps = withTimeoutOrNull(1_500) { sysJob.await() } ?: emptyList()
+        val sysIps = resolveV4(host, network).mapNotNull { it.hostAddress }
         val usable = sysIps.firstOrNull { !HostVerdict.isFakeAnswer(it) && !HostVerdict.isPrivate(it) }
         val sysOutcome = usable?.let { SanctionProbe.probe(host, it, network, connectTimeoutMs = 1500, tlsTimeoutMs = 2000).outcome }
         if (usable != null && (sysOutcome == SanctionProbe.Outcome.OPEN || sysOutcome == SanctionProbe.Outcome.GEO_BLOCKED)) {

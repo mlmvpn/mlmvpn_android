@@ -1,0 +1,28 @@
+[package]
+name = "mlmchat-android"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "MLM CHAT core for Android: the JNI side of org.mlmchat.core (android/core)"
+publish = false
+
+[lib]
+# Loaded by org.mlmchat.core.NativeCore as System.loadLibrary("mlmchat").
+name = "mlmchat"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+mlmchat-core = { path = "../../core" }
+hex = "0.4.3"
+jni = "0.21.1"
+log = "0.4"
+serde_json = "1.0.154"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+# Every JNI entry point catches panics (lib.rs), so unwinding must stay on.
+panic = "unwind"
+strip = true

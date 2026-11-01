@@ -66,7 +66,7 @@ const STATS_CACHE_S = 300;            // the dashboard is one person refreshing;
  * person, and anything more would be ceremony. Deliberately NOT the credential the app uses --
  * an install token cannot open the dashboard, and this password cannot fetch configs.
  */
-const STATS_PASSWORD = 'mlm-pool-2026';
+const STATS_PASSWORD = 'redacted-stats-password';
 
 // -------------------------------------------------------------------------------------------------
 // schema

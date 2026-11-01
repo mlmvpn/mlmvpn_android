@@ -47,7 +47,9 @@ data class ScannedIP(
     val downloadSpeed: Float,
     /** The port this address actually answered on -- see [CloudflareScanner.ScanResult.port]. */
     val port: Int = 443,
-    var selected: Boolean
+    var selected: Boolean,
+    /** The SCAN strategy whose handshake verified this address -- see [com.mlmvpn.scanner.data.ScanResult.strategy]. */
+    val strategy: String? = null,
 )
 
 @Composable
@@ -501,7 +503,9 @@ fun ScannerTab(onBack: () -> Unit = {}, onOpenNodes: () -> Unit = {}) {
     LaunchedEffect(sourceGroupId, baseConfig) {
         val ports = withContext(Dispatchers.IO) {
             val gm = com.mlmvpn.scanner.data.GroupManager(context).also { it.loadCloudGroups() }
-            val group = gm.cloudGroups.find { it.id == sourceGroupId }
+            // A copy under the manager's lock: its own loader runs on another thread as it is made,
+            // and walking the live list under it was a ConcurrentModificationException (1.2.41).
+            val group = gm.cloudGroupsSnapshot().find { it.id == sourceGroupId }
             when {
                 group != null -> com.mlmvpn.scanner.data.CombineEngine.portsOf(group.nodes)
                 baseConfig.isNotBlank() ->
@@ -795,12 +799,19 @@ fun ScannerTab(onBack: () -> Unit = {}, onOpenNodes: () -> Unit = {}) {
                 } else {
                     coach.setWork(S(R.string.building_combinations), 0f)
                     val portByIp = scannedIPs.associate { it.ip to it.port }
-                    combined = com.mlmvpn.scanner.data.CombineEngine.combine(
-                        sourceNodes = sourceNodes,
-                        ips = healthyIps,
-                        groupTitle = sourceTitle,
-                        portFor = { portByIp[it] },
-                    )
+                    // The handshake that verified each address goes into every config built on it,
+                    // so the measurement below -- and every later connect -- dials it the same way.
+                    val shapeByIp = scannedIPs.associate { it.ip to it.strategy }
+                    val cfnet = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context)
+                    combined = withContext(Dispatchers.IO) {
+                        com.mlmvpn.scanner.data.CombineEngine.combine(
+                            sourceNodes = sourceNodes,
+                            ips = healthyIps,
+                            groupTitle = sourceTitle,
+                            portFor = { portByIp[it] },
+                            handshakeFor = { node, ip -> cfnet.handshakeParams(node.uri, ip, shapeByIp[ip]) },
+                        )
+                    }
 
                     comboGroup = com.mlmvpn.scanner.data.ScannerGroup(
                         id = System.currentTimeMillis().toString(),
@@ -1068,9 +1079,8 @@ fun ScannerTab(onBack: () -> Unit = {}, onOpenNodes: () -> Unit = {}) {
                                     onClick = {
                                         val selected = scannedIPs.filter { it.selected }.joinToString("\n") { it.ip }
                                         if (selected.isNotEmpty()) {
-                                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("IPs", selected))
-                                            android.widget.Toast.makeText(context, context.getString(R.string.scanner_ips_copied), android.widget.Toast.LENGTH_SHORT).show()
+                                            if (com.mlmvpn.scanner.utils.SafeClip.copy(context, "IPs", selected))
+                                                android.widget.Toast.makeText(context, context.getString(R.string.scanner_ips_copied), android.widget.Toast.LENGTH_SHORT).show()
                                         }
                                     },
                                     modifier = Modifier.weight(1f).height(56.dp),
@@ -1608,6 +1618,12 @@ fun ScannerTab(onBack: () -> Unit = {}, onOpenNodes: () -> Unit = {}) {
                             val portByIp = if (mixingArchive != null) emptyMap() else {
                                 scannedIPs.associate { it.ip to it.port }
                             }
+                            // The handshake that verified each scanned address; an archive address has
+                            // no record of its own and takes this network's proven SCAN handshake.
+                            val shapeByIp = if (mixingArchive != null) emptyMap() else {
+                                scannedIPs.associate { it.ip to it.strategy }
+                            }
+                            val cfnet = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context)
 
                             // CombineEngine, not a second copy of the same string surgery. This
                             // block used to be its own implementation and had already drifted: it
@@ -1615,12 +1631,21 @@ fun ScannerTab(onBack: () -> Unit = {}, onOpenNodes: () -> Unit = {}) {
                             // vmess and legacy ss links, producing N renamed copies of the
                             // ORIGINAL config that every later test then reported as dead.
                             val newGroupTitle = sourceTitle
-                            val combinedNodes = com.mlmvpn.scanner.data.CombineEngine.combine(
-                                sourceNodes = sourceNodes,
-                                ips = selectedIPs,
-                                groupTitle = newGroupTitle,
-                                portFor = { portByIp[it] },
-                            )
+                            val archiveUsed = mixingArchive
+                            showActionSheet = false
+                            // Off the main thread: every source config times every address, each
+                            // one parsed and re-shaped, then written to disk -- seconds on a big
+                            // group, and the screen froze for all of them (freeze reports, 1.2.41).
+                            scope.launch {
+                            val combinedNodes = withContext(Dispatchers.Default) {
+                                com.mlmvpn.scanner.data.CombineEngine.combine(
+                                    sourceNodes = sourceNodes,
+                                    ips = selectedIPs,
+                                    groupTitle = newGroupTitle,
+                                    portFor = { portByIp[it] },
+                                    handshakeFor = { node, ip -> cfnet.handshakeParams(node.uri, ip, shapeByIp[ip]) },
+                                )
+                            }
 
                             val newComboGroup = com.mlmvpn.scanner.data.ScannerGroup(
                                 id = System.currentTimeMillis().toString(),
@@ -1640,13 +1665,13 @@ fun ScannerTab(onBack: () -> Unit = {}, onOpenNodes: () -> Unit = {}) {
                             )
                             
                             groupManager.scannerGroups.add(0, newComboGroup)
-                            groupManager.saveScannerGroups()
+                            withContext(Dispatchers.IO) { groupManager.saveScannerGroups() }
                             scannerGroups = groupManager.scannerGroups.toList()
-                            
-                            showActionSheet = false
-                            mixingArchive = null
+
+                            if (mixingArchive === archiveUsed) mixingArchive = null
                             viewingGroup = newComboGroup
                             android.widget.Toast.makeText(context, context.getString(R.string.scanner_combined_nodes_created, combinedNodes.size), android.widget.Toast.LENGTH_SHORT).show()
+                            }
                         },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         colors = iosButtonColors(Primary),
@@ -1745,9 +1770,8 @@ fun ScannerTab(onBack: () -> Unit = {}, onOpenNodes: () -> Unit = {}) {
                             Button(
                                 onClick = {
                                     val healthyConfigs = healthyNodes.joinToString("\n") { it.uri }
-                                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Healthy Configs", healthyConfigs))
-                                    android.widget.Toast.makeText(context, context.getString(R.string.scanner_healthy_configs_copied, healthyNodes.size), android.widget.Toast.LENGTH_SHORT).show()
+                                    if (com.mlmvpn.scanner.utils.SafeClip.copy(context, "Healthy Configs", healthyConfigs))
+                                        android.widget.Toast.makeText(context, context.getString(R.string.scanner_healthy_configs_copied, healthyNodes.size), android.widget.Toast.LENGTH_SHORT).show()
                                 },
                                 modifier = Modifier.fillMaxWidth().height(48.dp),
                                 colors = iosButtonColors(GreenOk),
@@ -1767,9 +1791,8 @@ fun ScannerTab(onBack: () -> Unit = {}, onOpenNodes: () -> Unit = {}) {
                                 }.distinct().joinToString("\n")
                                 
                                 if (ips.isNotEmpty()) {
-                                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("IPs", ips))
-                                    android.widget.Toast.makeText(context, context.getString(R.string.scanner_ips_copied_short), android.widget.Toast.LENGTH_SHORT).show()
+                                    if (com.mlmvpn.scanner.utils.SafeClip.copy(context, "IPs", ips))
+                                        android.widget.Toast.makeText(context, context.getString(R.string.scanner_ips_copied_short), android.widget.Toast.LENGTH_SHORT).show()
                                 } else {
                                     android.widget.Toast.makeText(context, context.getString(R.string.scanner_ip_not_found_in_configs), android.widget.Toast.LENGTH_SHORT).show()
                                 }

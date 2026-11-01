@@ -47,7 +47,7 @@ object PanelRegistry {
         val kv: String?, val d1: String?, val s: JSONObject, val by: String, val at: Long,
     )
 
-    private val http = OkHttpClient.Builder().dns(WorkerRoute.dns()).protocols(WorkerRoute.HTTP1)
+    private val http = OkHttpClient.Builder().dns(WorkerRoute.dns()).protocols(WorkerRoute.HTTP1).socketFactory(WorkerRoute.cfSocketFactory()).proxySelector(com.mlmvpn.scanner.engines.cloud.CfTunnel.selector())
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
     private val JSON = "application/json".toMediaType()
     private val TEXT = "text/plain".toMediaType()

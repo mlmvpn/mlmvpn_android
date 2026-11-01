@@ -18,6 +18,12 @@ const DNS_CACHE = new Map();
  */
 const XHTTP_SESSIONS = new Map();
 const XHTTP_IDLE_MS = 60000;
+/**
+ * Set on a packet-up request the Worker has handed to the session's Durable Object (03-entry.js),
+ * so the object runs the request instead of forwarding it again. Internal: a client that sends it
+ * only gets the per-isolate behaviour every install had before build 23.
+ */
+const STUDIO_XHTTP_HOP = 'x-studio-xhttp-hop';
 /** Upload POSTs that arrived ahead of their turn, per session: bounded, or a client could grow it forever. */
 const XHTTP_MAX_EARLY_BYTES = 8 * 1024 * 1024;
 let xhttpSweptAt = 0;

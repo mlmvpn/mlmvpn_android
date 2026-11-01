@@ -2068,7 +2068,13 @@ err_t client_sent_func (void *arg, struct tcp_pcb *tpcb, u16_t len)
     ASSERT(client->socks_up)
     ASSERT(len > 0)
     ASSERT(len <= client->socks_recv_tcp_pending)
-    
+
+    // lwIP has been seen acknowledging more than this client queued (the assertion above fired in
+    // the field). Never let the count go negative: a negative count is never "all confirmed".
+    if (len > client->socks_recv_tcp_pending) {
+        len = client->socks_recv_tcp_pending;
+    }
+
     // decrement pending
     client->socks_recv_tcp_pending -= len;
     

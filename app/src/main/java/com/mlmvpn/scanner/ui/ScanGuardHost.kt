@@ -42,6 +42,7 @@ import com.mlmvpn.scanner.ui.theme.iosButtonColors
 fun ScanGuardHost() {
     val pending by ScanGuard.pending.collectAsState()
     val request = pending ?: return
+    val scout = ScanGuard.isScoutBusy() && !com.mlmvpn.scanner.data.ScannerManager.isScanning.value
 
     AlertDialog(
         onDismissRequest = { ScanGuard.dismiss() },
@@ -53,16 +54,21 @@ fun ScanGuardHost() {
         shape = CardShape,
         title = {
             Text(
-                stringResource(R.string.scan_busy_title),
+                if (scout) com.mlmvpn.scanner.store.tr("MLM Scout در حال بررسی است", "MLM Scout is running")
+                else stringResource(R.string.scan_busy_title),
                 color = TextPrimary,
                 fontWeight = FontWeight.Bold,
             )
         },
         text = {
             Text(
-                when (request.reason) {
-                    ScanGuard.Reason.CONNECT_VPN -> stringResource(R.string.scan_busy_connect_body)
-                    ScanGuard.Reason.DELAY_TEST -> stringResource(R.string.scan_busy_delay_body)
+                when {
+                    scout -> com.mlmvpn.scanner.store.tr(
+                        "Scout الان روش‌ها را روی خودِ اینترنت شما می‌سنجد؛ کار دیگری در این لحظه عددها را خراب می‌کند. صبر می‌کنید یا Scout را متوقف کنم؟ نتایج تا همین لحظه می‌ماند.",
+                        "Scout is measuring the methods on your own line right now; doing this now would spoil its numbers. Wait, or stop Scout? The results so far are kept.",
+                    )
+                    request.reason == ScanGuard.Reason.CONNECT_VPN -> stringResource(R.string.scan_busy_connect_body)
+                    else -> stringResource(R.string.scan_busy_delay_body)
                 },
                 color = TextMuted,
                 fontSize = 14.sp,
@@ -77,7 +83,11 @@ fun ScanGuardHost() {
                 colors = iosButtonColors(Primary),
                 border = iosButtonBorder(Primary),
             ) {
-                Text(stringResource(R.string.scan_busy_stop_scan), fontWeight = FontWeight.Bold)
+                Text(
+                    if (scout) com.mlmvpn.scanner.store.tr("توقف Scout و ادامه", "Stop Scout and go on")
+                    else stringResource(R.string.scan_busy_stop_scan),
+                    fontWeight = FontWeight.Bold,
+                )
             }
         },
         dismissButton = {

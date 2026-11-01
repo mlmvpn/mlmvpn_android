@@ -43,7 +43,7 @@ fun isWireguardTrialActive(): Boolean =
 /** Tears down the active VPN (WireGuard trial) before an Xray engine takes over. */
 fun stopActiveVpn(context: Context) {
     val stop = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
-    context.startService(stop)
+    com.mlmvpn.scanner.utils.SafeStart.service(context, stop)
     MyVpnService.isRunning = false
     MyVpnService.connectedNodeId = null
 }
@@ -140,7 +140,7 @@ fun restartAppProcess(context: Context) {
 fun stopAllEnginesAndRestart(context: Context) {
     try {
         val stop = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
-        context.startService(stop)
+        com.mlmvpn.scanner.utils.SafeStart.service(context, stop)
     } catch (_: Exception) {}
     try { com.mlmvpn.scanner.engines.rstaspoof.RstaSpoofManager.stop() } catch (_: Exception) {}
     MyVpnService.isRunning = false
@@ -161,7 +161,7 @@ fun stopAllEnginesAndRestart(context: Context) {
 fun stopVpnSafely(context: Context) {
     com.mlmvpn.scanner.CrashReporter.note("stopVpnSafely")
     val stop = Intent(context, MyVpnService::class.java).apply { action = "STOP" }
-    context.startService(stop)
+    com.mlmvpn.scanner.utils.SafeStart.service(context, stop)
 }
 
 /**

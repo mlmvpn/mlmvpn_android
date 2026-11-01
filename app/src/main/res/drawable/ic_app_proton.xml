@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Home tile «proton» — Proton VPN's own mark (from the user's proton-vpn-icon.svg) seated on the
+    app's squircle in Proton's night purple. The mark's two shapes keep their own gradients: the
+    SVG's radial one is drawn as a linear top-to-bottom ramp, which is what it reads as at tile size.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+    <path android:pathData="M651.264 51.2c92.16 0 138.24 0 188.416 15.36 54.272 19.456 97.28 62.464 116.736 116.736C972.8 233.472 972.8 280.576 972.8 372.736v278.528c0 92.16 0 138.24-15.36 188.416-19.456 54.272-62.464 97.28-116.736 116.736-51.2 16.384-97.28 16.384-189.44 16.384H372.736c-92.16 0-138.24 0-188.416-15.36-55.296-20.48-97.28-62.464-117.76-117.76C51.2 790.528 51.2 744.448 51.2 651.264V372.736c0-92.16 0-138.24 15.36-188.416 20.48-54.272 62.464-97.28 117.76-116.736C233.472 51.2 279.552 51.2 372.736 51.2h278.528z" android:fillColor="#FF1C1B33" />
+    <group android:translateX="258" android:translateY="248" android:scaleX="14.75" android:scaleY="14.75">
+        <path android:pathData="M14.46 32.334c1.369 2.46 4.882 2.593 6.435.244l14.484-21.901c1.536-2.323.067-5.437-2.715-5.753L4.196 1.684C1.16 1.339-1.001 4.539.476 7.193l.115.207 12.703 8.705-.154 13.847 1.32 2.382z"
+            android:fillType="evenOdd">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="2" android:startY="2"
+                    android:endX="34" android:endY="34">
+                    <item android:offset="0" android:color="#FF8EFFEE" />
+                    <item android:offset="0.07" android:color="#FF8EFFEE" />
+                    <item android:offset="0.45" android:color="#FFC9C7FF" />
+                    <item android:offset="1" android:color="#FF7341FF" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M15.276 30.04l1.286-1.917 9.764-14.749c.853-1.29.038-3.02-1.506-3.197L.588 7.395l12.553 22.567a1.258 1.258 0 002.135.078z"
+            android:fillType="nonZero">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="15" android:startY="-3"
+                    android:endX="15" android:endY="34">
+                    <item android:offset="0" android:color="#FF6D4AFF" />
+                    <item android:offset="0.4" android:color="#FF6D4AFF" />
+                    <item android:offset="1" android:color="#FF00F0C3" />
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+</vector>

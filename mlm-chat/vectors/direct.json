@@ -1,0 +1,8 @@
+{
+  "about": "SPEC 14.7: Noise_NNpsk0_25519_ChaChaPoly_SHA256, prologue \"mlmchat/direct/1\", psk = HKDF-SHA256(salt none, ikm loc, info \"mlmchat/direct/1/psk\"); hello signs \"mlmchat/direct/1/hello\" || role ('I' or 'R') || handshake hash",
+  "handshake_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+  "hello_input_initiator": "6d6c6d636861742f6469726563742f312f68656c6c6f493333333333333333333333333333333333333333333333333333333333333333",
+  "hello_signature_alice": "8142ac0bb021d41775e3f276fad480916d1a6fb27206674d507eb947531eb81f15d0cb4000b205cf3441e00790f1532b2b4bfa312756abcfd56b7439abb81c0a",
+  "loc": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+  "psk": "27ceece9919665daf902392fc42016bc0955bfaae53a788e8f603b4247b0d1ef"
+}

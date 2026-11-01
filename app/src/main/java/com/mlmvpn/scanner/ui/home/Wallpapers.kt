@@ -347,7 +347,18 @@ object CustomWallpaper {
             }
 
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-            val decoded = BitmapFactory.decodeFile(f.absolutePath, opts) ?: return null
+            val decoded = BitmapFactory.decodeFile(f.absolutePath, opts)?.let { raw ->
+                // Some decoders ignore inSampleSize (seen with a phone-camera photo on a Galaxy,
+                // 1.2.39: a 207 MB bitmap and "Canvas: trying to draw too large"). Whatever came
+                // back, nothing larger than the ceiling reaches the screen.
+                val edge = maxOf(raw.width, raw.height)
+                if (edge <= MAX_DECODE_EDGE) raw else {
+                    val k = MAX_DECODE_EDGE.toFloat() / edge
+                    android.graphics.Bitmap.createScaledBitmap(
+                        raw, (raw.width * k).toInt().coerceAtLeast(1), (raw.height * k).toInt().coerceAtLeast(1), true,
+                    ).also { if (it !== raw) raw.recycle() }
+                }
+            } ?: return null
 
             // `inSampleSize` only halves, and only while BOTH sides still exceed the request, so
             // it routinely stops several times larger than what was asked for. That is fine for
@@ -453,16 +464,21 @@ fun HomeWallpaper(
             // was. Below API 31 there is no choice, so the old path stays as the fallback.
             val realBlur = android.os.Build.VERSION.SDK_INT >= 31
             val decodeScale = if (realBlur) 1f else scale
-            val image = remember(Wallpapers.customRevision, decodeScale, wPx, hPx) {
-                CustomWallpaper.load(
-                    context,
-                    (wPx * decodeScale).toInt().coerceAtLeast(16),
-                    (hPx * decodeScale).toInt().coerceAtLeast(16),
-                )
+            // Decoded on a worker thread: a display-sized photo on the main thread froze the
+            // home screen (ANR #719).
+            val image by androidx.compose.runtime.produceState<ImageBitmap?>(null, Wallpapers.customRevision, decodeScale, wPx, hPx) {
+                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    CustomWallpaper.load(
+                        context,
+                        (wPx * decodeScale).toInt().coerceAtLeast(16),
+                        (hPx * decodeScale).toInt().coerceAtLeast(16),
+                    )
+                }
             }
-            if (image != null) {
+            val photo = image
+            if (photo != null) {
                 Image(
-                    bitmap = image,
+                    bitmap = photo,
                     contentDescription = null,
                     modifier = Modifier
                         .fillMaxSize()
@@ -495,20 +511,47 @@ fun HomeWallpaper(
 
         val preset = Wallpapers.byId(wallpaperId)
         if (blur == 0) {
-            Canvas(modifier = Modifier.fillMaxSize()) { drawWallpaper(preset) }
-        } else {
-            val softness = blur / 100f
-            val small = remember(preset.id, blur, wPx, hPx) {
-                renderPreset(
-                    preset,
-                    (wPx * scale).toInt().coerceAtLeast(8),
-                    (hPx * scale).toInt().coerceAtLeast(8),
-                    density,
-                    softness,
+            // Drawn once into a picture on a worker thread, then only copied: drawn live, the
+            // preset's gradients ran again with every frame anything on the board moved, and a
+            // slow phone's main thread spent long enough there for Android to call it frozen
+            // (1.2.42 #2302).
+            val sharp by androidx.compose.runtime.produceState<ImageBitmap?>(null, preset.id, wPx, hPx) {
+                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    runCatching { renderPreset(preset, wPx, hPx, density, 0f) }.getOrNull()
+                }
+            }
+            val picture = sharp
+            if (picture == null) {
+                Canvas(modifier = Modifier.fillMaxSize()) { drawWallpaper(preset) }
+            } else {
+                Image(
+                    bitmap = picture,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
                 )
             }
+        } else {
+            val softness = blur / 100f
+            // Rendered on a worker thread (ANR #659); the sharp preset shows until it is ready.
+            val small by androidx.compose.runtime.produceState<ImageBitmap?>(null, preset.id, blur, wPx, hPx) {
+                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    renderPreset(
+                        preset,
+                        (wPx * scale).toInt().coerceAtLeast(8),
+                        (hPx * scale).toInt().coerceAtLeast(8),
+                        density,
+                        softness,
+                    )
+                }
+            }
+            val ready = small
+            if (ready == null) {
+                Canvas(modifier = Modifier.fillMaxSize()) { drawWallpaper(preset) }
+                return@BoxWithConstraints
+            }
             Image(
-                bitmap = small,
+                bitmap = ready,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
@@ -656,14 +699,24 @@ fun rememberFrostedBackdrop(widthPx: Int, heightPx: Int): ImageBitmap? {
     val id = Wallpapers.current
     val revision = Wallpapers.customRevision
 
-    return remember(id, revision, widthPx, heightPx, Wallpapers.blur) {
-        if (widthPx <= 0 || heightPx <= 0) return@remember null
+    // Made on a worker thread: blurring a photo-sized copy on the main thread froze the home
+    // screen for seconds on slower phones (ANR #489, #659, #719). The glass is plain until it is ready.
+    val blurSetting = Wallpapers.blur
+    val made by androidx.compose.runtime.produceState<ImageBitmap?>(null, id, revision, widthPx, heightPx, blurSetting) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { makeFrostedBackdrop(context, density, id, widthPx, heightPx, blurSetting) }
+    }
+    return made
+}
+
+private fun makeFrostedBackdrop(context: Context, density: Density, id: String?, widthPx: Int, heightPx: Int, blurSetting: Int): ImageBitmap? {
+    run {
+        if (widthPx <= 0 || heightPx <= 0) return null
         // A sixth, not a fourteenth. The blur is done properly now, so the copy no longer has to
         // be tiny to hide the fact that it was not -- and a larger source means the 6x upscale
         // adds no blockiness of its own.
         val w = (widthPx / 6).coerceAtLeast(48)
         val h = (heightPx / 6).coerceAtLeast(48)
-        val softness = Wallpapers.blur / 100f
+        val softness = blurSetting / 100f
 
         val flat = if (id == Wallpapers.CUSTOM_ID) {
             val photo = CustomWallpaper.load(context, w * 2, h * 2)
@@ -680,7 +733,7 @@ fun rememberFrostedBackdrop(widthPx: Int, heightPx: Int): ImageBitmap? {
         // Roughly a tenth of the copy's width, so the frost scales with the screen rather than
         // being a fixed pixel count that looks heavy on a small phone and weak on a tablet.
         val radius = (w / 10).coerceIn(4, 24)
-        try {
+        return try {
             boxBlur(flat.asAndroidBitmap(), radius).asImageBitmap()
         } catch (e: Throwable) {
             // A blur is a nicety; a crash on the home screen is not.

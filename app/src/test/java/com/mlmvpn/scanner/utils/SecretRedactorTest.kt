@@ -6,6 +6,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SecretRedactorTest {
+    @Test fun streamedPemNeverLeaksBodyLines() {
+        val stream = SecretRedactor.Stream()
+        assertFalse(stream.redact("-----BEGIN PRIVATE KEY-----").contains("BEGIN"))
+        assertFalse(stream.redact("secret-body-on-a-separate-line").contains("secret-body"))
+        assertFalse(stream.redact("-----END PRIVATE KEY-----").contains("END"))
+        assertEquals("connected", stream.redact("connected"))
+    }
     private fun clean(s: String) = SecretRedactor.redact(s)
 
     @Test fun `global api key is masked`() {
@@ -40,5 +47,29 @@ class SecretRedactorTest {
     @Test fun `ordinary stack frames pass through`() {
         val frame = "at com.mlmvpn.scanner.data.CloudManager.loadAccounts(CloudManager.kt:63)"
         assertEquals(frame, clean(frame))
+    }
+
+    @Test fun `wireguard private key is masked`() {
+        val wg = "cGFzc3dvcmQxMjM0NTY3ODkwYWJjZGVmZ2hpams9"  // 40-char, under the token rule
+        val real = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNk="   // 44-char base64, 32 bytes
+        val out = clean("wg_private_key=$real and interface $wg")
+        assertFalse(out.contains(real))
+    }
+
+    @Test fun `pem private material is masked`() {
+        val pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqh\nkiG9w0BAQEF\n-----END PRIVATE KEY-----"
+        val out = clean("cert_pem: $pem\nnext line")
+        assertFalse(out.contains("MIIEvQIBADANBgkqh"))
+        assertTrue(out.contains("next line"))
+    }
+
+    @Test fun `identity named fields are masked`() {
+        assertFalse(clean("""{"private_key":"abcd1234efgh","ipv4":"1.2.3.4"}""").contains("abcd1234efgh"))
+        assertFalse(clean("access_token = ZZZtopsecretvalueZZZ").contains("ZZZtopsecretvalueZZZ"))
+    }
+
+    @Test fun `uuid device ids are masked`() {
+        val uuid = "11111111-2222-3333-4444-555555555555"
+        assertFalse(clean("device_id $uuid").contains(uuid))
     }
 }

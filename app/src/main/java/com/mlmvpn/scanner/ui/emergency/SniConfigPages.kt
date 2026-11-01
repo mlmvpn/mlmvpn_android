@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -70,6 +71,9 @@ import java.util.UUID
  * Shows the measured delay against each one when a measurement has been run, because that is the
  * only reason to open this page rather than let the measurement adopt the fastest by itself.
  */
+/** Rows of the SNI config list composed at a time; see SniConfigPickerPage. */
+private const val SNI_PAGE = 150
+
 @Composable
 internal fun SniConfigPickerPage(
     configs: List<VpnNode>,
@@ -181,8 +185,13 @@ internal fun SniConfigPickerPage(
         }
 
         Spacer(Modifier.height(14.dp))
+        // A page of rows at a time. Every row was composed at once -- a swipe row, a text layout and
+        // a delay badge each -- and a phone holding a few thousand SNI configs froze on this page
+        // and then ran out of memory on it (freeze and OOM reports, 1.2.41). Sorted fastest first,
+        // the rows that matter are on the first page anyway.
+        var limit by remember { mutableStateOf(SNI_PAGE) }
         SettingsGroup {
-            shown.forEachIndexed { index, node ->
+            shown.take(limit).forEachIndexed { index, node ->
                 if (index > 0) Separator()
                 SwipeToDeleteRow(
                     revealed = swiped == node.id,
@@ -208,6 +217,20 @@ internal fun SniConfigPickerPage(
                         },
                     )
                 }
+            }
+        }
+        if (shown.size > limit) {
+            Spacer(Modifier.height(10.dp))
+            SettingsGroup {
+                SettingsActionRow(
+                    label = com.mlmvpn.scanner.store.tr(
+                        "نمایش ${faDigits(minOf(SNI_PAGE, shown.size - limit).toString())} مورد بعدی (${faDigits((shown.size - limit).toString())} مانده)",
+                        "Show ${minOf(SNI_PAGE, shown.size - limit)} more (${shown.size - limit} left)",
+                    ),
+                    icon = Icons.Default.Sort,
+                    tint = Ios.Blue,
+                    onClick = { limit += SNI_PAGE },
+                )
             }
         }
         SettingsFooter(stringResource(R.string.sni_picker_footer))
@@ -397,7 +420,17 @@ private fun SniConfigRow(
 @Composable
 internal fun SniBuildPage(onBuilt: (Int) -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
-    val buckets = remember {
+    // Read from the two lists as they ARRIVE, not from a snapshot taken at first composition.
+    //
+    // Both stores load on a background thread when they are first created, so a snapshot taken
+    // the moment this page opened could see an empty list and answer «no cloud config to convert»
+    // over a phone full of them. And the configs a panel hands out in Cloud live in Cloud's own
+    // groups, not in the connection list -- a user who had just pressed «دریافت کانفیگ‌ها» on BPB
+    // was told there was nothing to build from (device, 2026-10-05).
+    val nodeStore = remember { NodeManager(context) }
+    val listed by nodeStore.nodesFlow.collectAsState()
+    val cloudGroups by com.mlmvpn.scanner.data.GroupManager(context).cloudGroupsFlow.collectAsState()
+    val buckets = remember(listed, cloudGroups) {
         // Cloud panel configs only -- BPB, EDG, Nahan, MLM, and the combined configs built from
         // them. See [SniSession.isConvertible] for why that is not a preference: the front dials
         // a Cloudflare edge, and only a config whose own server sits behind that edge can be
@@ -406,13 +439,24 @@ internal fun SniBuildPage(onBuilt: (Int) -> Unit, onBack: () -> Unit) {
         //
         // Protected Iran defaults and the SNI configs themselves are excluded by the same call --
         // the latter already point at the front, and converting one would aim it at itself.
-        val nm = NodeManager(context)
-        synchronized(nm.nodes) { nm.nodes.toList() }
-            .filter { SniSession.isConvertible(it) }
+        val seen = HashSet<String>()
+        val fromList = listed
+            .filter { SniSession.isConvertible(it) && seen.add(it.uri) }
             .groupBy { it.groupTitle }
             .map { (g, ns) -> (g ?: S(R.string.default_str_r2)) to ns }
+        // A Cloud group is a panel's own output, so its configs qualify when they are TLS to a
+        // worker -- the same test the connect path uses to call a config Cloudflare-fronted.
+        val fromCloud = cloudGroups.mapNotNull { g ->
+            val ns = g.nodes.filter { n ->
+                !SniSession.isSniNode(n) && seen.add(n.uri) &&
+                    com.mlmvpn.scanner.utils.VpnConfig.parseUri(n.uri)
+                        ?.let { com.mlmvpn.scanner.utils.CfUnfilter.isCloudflareFronted(it) } == true
+            }
+            ns.takeIf { it.isNotEmpty() }?.let { g.title to it }
+        }
+        fromList + fromCloud
     }
-    val allNodes = remember { buckets.flatMap { it.second } }
+    val allNodes = remember(buckets) { buckets.flatMap { it.second } }
     var selectedIdx by remember { mutableStateOf(-1) }
 
     IosScreen(

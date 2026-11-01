@@ -99,8 +99,13 @@ fun QuickServersScreen(
     // touches the network, because the download is six feeds and ~12,000 lines and the user
     // came here to look at a list, not to wait for one. Refreshing is a button.
     LaunchedEffect(Unit) {
-        catalog = QuickConnectRepository.cached(context)
-        cacheAge = QuickConnectRepository.cacheAgeMs(context)
+        // Off the main thread: the stored list is ~12,000 lines of JSON, each named after its
+        // country, and reading it there froze the screen as it opened (freeze reports, 1.2.41).
+        val (c, age) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            QuickConnectRepository.cached(context) to QuickConnectRepository.cacheAgeMs(context)
+        }
+        catalog = c
+        cacheAge = age
         loading = false
     }
 

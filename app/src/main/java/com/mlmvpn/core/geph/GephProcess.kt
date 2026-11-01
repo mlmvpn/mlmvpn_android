@@ -1,5 +1,9 @@
 package com.mlmvpn.core.geph
 
+import com.mlmvpn.scanner.utils.alive
+import com.mlmvpn.scanner.utils.killHard
+import com.mlmvpn.scanner.utils.waitUpTo
+
 import android.content.Context
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -43,11 +47,11 @@ class GephProcess private constructor(
     fun stop(control: GephControl?) {
         if (!isAlive) return
         control?.stop()
-        val gone = runCatching { process.waitFor(1500, TimeUnit.MILLISECONDS) }.getOrDefault(false)
+        val gone = runCatching { process.waitUpTo(1500, TimeUnit.MILLISECONDS) }.getOrDefault(false)
         if (!gone) {
             process.destroy()
-            if (!runCatching { process.waitFor(1000, TimeUnit.MILLISECONDS) }.getOrDefault(false)) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) process.destroyForcibly()
+            if (!runCatching { process.waitUpTo(1000, TimeUnit.MILLISECONDS) }.getOrDefault(false)) {
+                process.killHard()
             }
         }
     }

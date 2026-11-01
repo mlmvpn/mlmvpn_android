@@ -120,6 +120,9 @@ object ScannerManager {
         useRealLine: Boolean = false,
     ) {
         if (_isScanning.value) return
+        // The IP scan and MLM Scout never share the line: the newer request wins, and Scout keeps
+        // (and labels) what it had measured.
+        com.mlmvpn.scanner.engines.scout.ScoutEngine.stop(com.mlmvpn.scanner.engines.scout.EndReason.OTHER_SCAN)
         val myGeneration = ++generation
         _isScanning.value = true
         _scannedIPs.value = emptyList()
@@ -230,13 +233,16 @@ object ScannerManager {
                             }
                         },
                         onIpFound = { result ->
+                            // (The scanner itself has already noted this edge as working, with its
+                            // real-test delay -- CfEdge.noteGood in CloudflareScanner's verifier.)
                             // Update our map silently
                             val existing = currentMap[result.ip]
                             if (existing != null) {
                                 currentMap[result.ip] = existing.copy(
                                     ping = result.ping,
                                     downloadSpeed = result.downloadSpeed,
-                                    port = result.port
+                                    port = result.port,
+                                    strategy = result.strategy,
                                 )
                             } else {
                                 currentMap[result.ip] = ScannedIP(
@@ -245,7 +251,8 @@ object ScannerManager {
                                     ping = result.ping,
                                     downloadSpeed = result.downloadSpeed,
                                     port = result.port,
-                                    selected = true
+                                    selected = true,
+                                    strategy = result.strategy,
                                 )
                             }
                         },

@@ -3,6 +3,7 @@ package com.mlmvpn.scanner.engines.flux
 import android.content.Context
 import android.util.Log
 import com.mlmvpn.scanner.engines.flux.core.model.FluxNode
+import com.mlmvpn.scanner.engines.flux.core.parse.FluxLinkParser
 import com.mlmvpn.scanner.engines.flux.core.source.FluxSources
 import com.mlmvpn.scanner.engines.flux.core.source.NodeSource
 import com.mlmvpn.scanner.engines.flux.core.source.SourceHealth
@@ -52,13 +53,49 @@ class FluxSourceRepo(private val app: Context) {
 
     /** Every cached node, parsed once per change of the cache. */
     fun nodes(): List<FluxNode> {
-        val stamp = sources().sumOf { cacheFile(it).lastModified() } + sources().size
+        val stamp = sources().sumOf { cacheFile(it).lastModified() } + sources().size + (own?.first ?: 0L)
         parsed?.takeIf { it.first == stamp }?.let { return it.second }
         val batches = sources().mapNotNull { src ->
             val f = cacheFile(src)
             if (!f.exists()) null else runCatching { FluxSources.parse(src, f.readText()).nodes }.getOrNull()
         }
-        return FluxSources.merge(batches).also { parsed = stamp to it }
+        // The user's own Cloudflare configs lead: the panels they deployed and the scanner's
+        // combinations carry the handshake the Doctor proved on this very line.
+        return FluxSources.merge(listOf(own?.second.orEmpty()) + batches).also { parsed = stamp to it }
+    }
+
+    @Volatile private var own: Pair<Long, List<FluxNode>>? = null
+
+    /**
+     * The user's own Cloudflare-fronted VLESS/Trojan configs (connection list, panels, scanner
+     * combinations), as FLUX nodes from source "own": measured ones first, at most [OWN_MAX].
+     * Read again at most every ten minutes -- the scanner's groups can be large, so this blocks
+     * and is called off the main thread at the start of a connect; [nodes] only reads the result.
+     */
+    fun refreshOwn(): List<FluxNode> {
+        val now = System.currentTimeMillis()
+        own?.let { (at, list) -> if (now - at < 10 * 60_000L) return list }
+        val list = runCatching {
+            val nodes = com.mlmvpn.scanner.data.NodeManager(app).nodes.toList()
+            val groups = com.mlmvpn.scanner.data.GroupManager(app)
+            runCatching { groups.loadCloudGroups() }
+            runCatching { groups.loadScannerGroupsPublic() }
+            val pool = nodes + groups.cloudGroups.flatMap { it.nodes } + groups.scannerGroups.flatMap { it.nodes }
+            pool.asSequence()
+                .distinctBy { it.uri }
+                .filter { n ->
+                    val c = com.mlmvpn.scanner.utils.VpnConfig.parseUri(n.uri) ?: return@filter false
+                    (c.protocol == "vless" || c.protocol == "trojan") &&
+                        com.mlmvpn.scanner.utils.CfUnfilter.isCloudflareFronted(c) && !com.mlmvpn.scanner.utils.CfUnfilter.isLocalFront(c)
+                }
+                .sortedBy { it.delay.removeSuffix("ms").trim().toLongOrNull()?.takeIf { d -> d > 0 } ?: Long.MAX_VALUE }
+                .mapNotNull { (FluxLinkParser.parse(it.uri, OWN_SOURCE) as? FluxLinkParser.Result.Ok)?.node }
+                .take(OWN_MAX)
+                .toList()
+        }.getOrDefault(emptyList())
+        own = now to list
+        if (list.isNotEmpty()) FluxLog.i("own: ${list.size} of the user's Cloudflare configs join the race")
+        return list
     }
 
     fun hasAnyCache(): Boolean = sources().any { cacheFile(it).exists() }
@@ -144,5 +181,7 @@ class FluxSourceRepo(private val app: Context) {
         private const val TAG = "FluxSources"
         private const val PREFS = "flux_sources"
         private const val KEY_USER = "user_subs"
+        const val OWN_SOURCE = "own"
+        private const val OWN_MAX = 150
     }
 }

@@ -26,14 +26,12 @@ class AndroidNetEnv(context: Context): NetEnv {
         put("vpn",cm.allNetworks.any { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN)==true }.toString())
         put("private_dns",if(Build.VERSION.SDK_INT>=28) (links?.isPrivateDnsActive==true).toString() else "unsupported")
         put("android",Build.VERSION.SDK_INT.toString()); put("model",Build.MODEL.take(48))
-        put("app",runCatching { context.packageManager.getPackageInfo(context.packageName,0).versionName }.getOrDefault("unknown"))
+        put("app",runCatching { context.packageManager.getPackageInfo(context.packageName,0).versionName }.getOrNull() ?: "unknown")
         put("time",java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm-ss",java.util.Locale.US).format(java.util.Date()))
         put("timezone",java.util.TimeZone.getDefault().id)
     }
     companion object {
-        fun operator(context: Context): String = runCatching {
-            val sim=(context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager).networkOperator
-            when(sim) { "43211" -> "MCI"; "43235" -> "MTN"; "43220" -> "RIGHTEL"; else -> "OTHER" }
-        }.getOrDefault("UNKNOWN")
+        /** The operator of the SIM carrying data (see Carrier): MCI, MTN, RIGHTEL, OTHER or UNKNOWN. */
+        fun operator(context: Context): String = com.mlmvpn.scanner.data.Carrier.code(context)
     }
 }

@@ -43,9 +43,25 @@ object SniSession {
      * a config out of; the address is the thing that decides whether the front has to be up.
      */
     fun isSniUri(uri: String): Boolean {
-        val cfg = VpnConfig.parseUri(uri) ?: return false
-        return cfg.address == LOCAL_HOST && cfg.port == LOCAL_PORT
+        // The node list asks this of every config on every update. A link that names no loopback
+        // address cannot point at the front, and a vmess blob is decoded once: full parses of
+        // thousands of links held the main thread for seconds (freeze reports, 1.2.41).
+        if (!uri.startsWith("vmess://", ignoreCase = true)) {
+            if (!uri.contains(LOCAL_HOST)) return false
+        } else {
+            sniCache[uri]?.let { return it }
+        }
+        val cfg = VpnConfig.parseUri(uri)
+        val sni = cfg != null && cfg.address == LOCAL_HOST && cfg.port == LOCAL_PORT
+        if (uri.startsWith("vmess://", ignoreCase = true)) {
+            if (sniCache.size > 4_096) sniCache.clear()
+            sniCache[uri] = sni
+        }
+        return sni
     }
+
+    /** vmess links already looked at: their address is inside base64, so there is no cheap test. */
+    private val sniCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     fun isSniNode(node: VpnNode): Boolean = isSniUri(node.uri)
 
@@ -123,7 +139,7 @@ object SniSession {
     ) {
         val app = context.applicationContext
         RstaSpoofManager.setRoute(app, routeIp, routePort, routeSni)
-        app.startService(
+        com.mlmvpn.scanner.utils.SafeStart.service(app, 
             Intent(app, MyVpnService::class.java).apply {
                 putExtra("NODE_URI", node.uri)
                 putExtra("NODE_ID", node.id)
@@ -143,7 +159,7 @@ object SniSession {
      */
     fun disconnect(context: Context) {
         val app = context.applicationContext
-        app.startService(Intent(app, MyVpnService::class.java).apply { action = "STOP" })
+        com.mlmvpn.scanner.utils.SafeStart.service(app, Intent(app, MyVpnService::class.java).apply { action = "STOP" })
         try { RstaSpoofManager.stop() } catch (e: Exception) { /* already down */ }
     }
 }

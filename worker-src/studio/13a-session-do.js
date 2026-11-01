@@ -93,6 +93,27 @@ function studioAdmissionVerdict(counts, policy) {
   return { allow: true, reason: null };
 }
 
+/**
+ * One XHTTP packet-up request, inside the session's Durable Object (build 23).
+ *
+ * The object is named after the session (`x:{session}`), so the download GET, the header POST and
+ * every upload POST of one connection arrive HERE, in one isolate -- and the per-isolate session
+ * table (01-globals.js), which was correct all along except that the requests did not meet, now
+ * holds the whole session. The request goes through the ordinary routing; the hop mark keeps it
+ * from being forwarded again. The download response streams back through the Worker untouched.
+ */
+async function studioXhttpInObject(object, request) {
+  const ctx = {
+    waitUntil(p) { try { object.ctx.waitUntil(p); } catch (e) { } },
+    passThroughOnException() { },
+  };
+  try {
+    return await handleRequest(request, object.env, ctx);
+  } catch (e) {
+    return denyTransport('xhttp-do: ' + (e && e.message || e));
+  }
+}
+
 export class SessionDO {
   constructor(ctx, env) {
     this.ctx = ctx;
@@ -128,6 +149,11 @@ export class SessionDO {
   }
 
   async fetch(request) {
+    // An XHTTP packet-up request handed over by the Worker (03-entry.js): this object is the
+    // session's meeting point, so the request runs here, through the ordinary routing, against the
+    // session state this isolate already holds. Before anything reads the body -- it is the tunnel.
+    if (request.headers.get(STUDIO_XHTTP_HOP) === '1') return studioXhttpInObject(this, request);
+
     this.ensure();
     const url = new URL(request.url);
     let body = {};

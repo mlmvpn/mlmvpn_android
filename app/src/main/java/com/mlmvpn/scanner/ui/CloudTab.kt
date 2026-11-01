@@ -56,6 +56,25 @@ fun CloudTab(
     onOpenConfigStudio: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val doctorPrefs = remember { context.getSharedPreferences("cfnet_ui", android.content.Context.MODE_PRIVATE) }
+    // Cloudflare Doctor runs as a setup the first time Cloud opens after an install or an update
+    // (or a new engine version): every stage is diagnosed on this network, then Cloud opens.
+    // «ورود به Cloud» or «رد شدن» marks it done for this version; leaving with Back does not.
+    val setupVersion = remember {
+        val code = runCatching {
+            androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(context.packageManager.getPackageInfo(context.packageName, 0))
+        }.getOrDefault(0L)
+        "$code:${com.mlmvpn.scanner.engines.cfnet.StrategyStore.ENGINE_VERSION}"
+    }
+    var doctorOpen by remember { mutableStateOf(doctorPrefs.getString("setup_version", null) != setupVersion) }
+    var doctorSetup by remember { mutableStateOf(doctorOpen) }
+    if (doctorOpen) {
+        com.mlmvpn.scanner.ui.doctor.CloudDoctorScreen(setup = doctorSetup,
+            onBack = { if (doctorSetup) onBack() else doctorOpen = false },
+            onContinue = { doctorPrefs.edit().putString("setup_version", setupVersion).apply(); doctorOpen = false; doctorSetup = false },
+            onOpenScanner = onNavigateToScanner)
+        return
+    }
     val scope = rememberCoroutineScope()
     val cloudManager = remember { CloudManager(context) }
     val groupManager = remember { com.mlmvpn.scanner.data.GroupManager(context) }
@@ -70,6 +89,7 @@ fun CloudTab(
     var showBpbSettingsFor by remember { mutableStateOf<CloudAccount?>(null) }
     var bpbInitialSettings by remember { mutableStateOf<JSONObject?>(null) }
     var showEdgSettingsFor by remember { mutableStateOf<CloudAccount?>(null) }
+    var showGatewaySettingsFor by remember { mutableStateOf<CloudAccount?>(null) }
     var showSpiderFor by remember { mutableStateOf<CloudAccount?>(null) }
     var showArenaFor by remember { mutableStateOf<CloudAccount?>(null) }
     var accountToDelete by remember { mutableStateOf<com.mlmvpn.scanner.models.CloudAccount?>(null) }
@@ -80,7 +100,7 @@ fun CloudTab(
     // Physical back closes whichever settings/add sheet is open, instead of falling through to
     // the app-level handler (which would leave the Cloud tab entirely).
     val anySheetOpen = showAddModal || showNahanSettingsFor != null || showMlmUsersFor != null ||
-        showMlmSettingsFor != null || showBpbSettingsFor != null || showEdgSettingsFor != null ||
+        showMlmSettingsFor != null || showBpbSettingsFor != null || showEdgSettingsFor != null || showGatewaySettingsFor != null ||
         showSpiderFor != null || showArenaFor != null || accountToDelete != null
     androidx.activity.compose.BackHandler(enabled = anySheetOpen) {
         showAddModal = false
@@ -89,6 +109,7 @@ fun CloudTab(
         showMlmSettingsFor = null
         showBpbSettingsFor = null
         showEdgSettingsFor = null
+        showGatewaySettingsFor = null
         showSpiderFor = null
         showArenaFor = null
         accountToDelete = null
@@ -201,6 +222,7 @@ fun CloudTab(
                 troubleshootCredential = null
             },
             onAccountChanged = { accounts = cloudManager.accounts.toList() },
+            onOpenScanner = onNavigateToScanner,
         )
     })
 
@@ -262,6 +284,19 @@ fun CloudTab(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
 
+                // «دکتر کلادفلر»: where to go when a part of Cloud does not work -- each part is
+                // diagnosed on its own, and the way that works is saved for this network.
+                item {
+                    com.mlmvpn.scanner.ui.settings.SettingsGroup {
+                        com.mlmvpn.scanner.ui.settings.SettingsRow(
+                            title = stringResource(R.string.cf_doctor_title),
+                            subtitle = stringResource(R.string.cfnet_cloud_row_sub),
+                            icon = Icons.Default.HealthAndSafety,
+                            tint = com.mlmvpn.scanner.ui.settings.Ios.Blue,
+                            onClick = { doctorSetup = false; doctorOpen = true })
+                    }
+                }
+
                 // The coach rides at the top of the list, above the account it is talking about.
                 if (cloudStep != CloudCoach.Step.IDLE && cloudStep != CloudCoach.Step.OFFERED) {
                     item {
@@ -319,6 +354,10 @@ fun CloudTab(
                     }
                 }
 
+                // «روش اتصال این شبکه»: one button that finds which way of reaching Cloudflare works on this network, kept
+                // for it and used by the scanner, the connect and the configs the combine centre builds. Above the chart.
+                if (accounts.isNotEmpty()) item { com.mlmvpn.scanner.ui.cloud.CfMethodCard(accounts) }
+
                 // «مصرف روزانه»: the opening module -- every account's Worker requests, seven days.
                 if (accounts.isNotEmpty()) item { com.mlmvpn.scanner.ui.cloud.CloudUsageModule(accounts) }
 
@@ -363,6 +402,7 @@ fun CloudTab(
                             showBpbSettingsFor = acc 
                         },
                         onShowEdgSettings = { showEdgSettingsFor = it },
+                        onShowGatewaySettings = { showGatewaySettingsFor = it },
                         onShowSpider = { showSpiderFor = it },
                         onDelete = {
                             accountToDelete = account
@@ -604,6 +644,12 @@ fun CloudTab(
             )
         }
     }
+
+    showGatewaySettingsFor?.let { acc ->
+        com.mlmvpn.scanner.ui.home.IosModalHost(modifier = Modifier.fillMaxSize()) {
+            com.mlmvpn.scanner.ui.cloud.GatewaySettingsScreen(account = acc, onDismiss = { showGatewaySettingsFor = null })
+        }
+    }
     }
 
     if (!twoPane) {
@@ -662,6 +708,8 @@ fun AccountGroupCard(
     onOpenConfigStudio: () -> Unit = {},
     onShowBpbSettings: (org.json.JSONObject?, CloudAccount) -> Unit,
     onShowEdgSettings: (CloudAccount) -> Unit,
+    /** Opens the central Worker's settings for this account (ui/cloud/GatewaySettingsScreen). */
+    onShowGatewaySettings: (CloudAccount) -> Unit = {},
     /** Opens «پنل اسپایدر» for this account, as a page of the Cloud tab. */
     onShowSpider: (CloudAccount) -> Unit = {},
     onDelete: () -> Unit,
@@ -699,6 +747,8 @@ fun AccountGroupCard(
     var progress by remember { mutableStateOf(0f) }
     var edgProgress by remember { mutableStateOf(0f) }
     var mlmProgress by remember { mutableStateOf(0f) }
+    // «دریافت کانفیگ xhttp»: busy while the config is made and proven on this network (MlmXhttp).
+    var mlmXhttpBusy by remember { mutableStateOf(false) }
     var isNahanFetching by remember { mutableStateOf(false) }
     var nahanProgress by remember { mutableStateOf(0f) }
     var isFetching by remember { mutableStateOf(false) }
@@ -716,6 +766,25 @@ fun AccountGroupCard(
     var showEmailModal by remember { mutableStateOf(false) }
     
     val context = LocalContext.current
+    // Which panels are installed as FULL panels on this account. A full panel keeps its own row below; a panel that is not
+    // installed gets a row of the account's ONE central Worker instead of a «Deploy» button of its own (ui/cloud/GatewayRows.kt).
+    var thirdPartyTick by remember { mutableStateOf(0) }
+    val spiderInstall = remember(thirdPartyTick) { com.mlmvpn.scanner.engines.spider.SpiderPanel.install(context, account.accountId) }
+    val netra = remember(thirdPartyTick) { com.mlmvpn.scanner.engines.netra.NetraPanel.install(context, account.accountId) }
+    val gozargah = remember(thirdPartyTick) { com.mlmvpn.scanner.engines.gozargah.GozargahPanel.install(context, account.accountId) }
+    val nova = remember(thirdPartyTick) { com.mlmvpn.scanner.engines.nova.NovaPanel.install(context, account.accountId) }
+    val gwVersion by com.mlmvpn.scanner.engines.gateway.EdgeGateway.version.collectAsState()
+    val gw = remember(gwVersion, account.accountId) { com.mlmvpn.scanner.engines.gateway.EdgeGateway.status(context, account) }
+    var edgGwBusy by remember { mutableStateOf(false) }
+    val legacyPanels = buildSet {
+        if (edgDeployState != "idle") add("EDG")
+        if (nahanDeployState != "idle") add("NHN")
+        if (mlmDeployState != "idle") add("MLM")
+        if (spiderInstall != null) add("SPD")
+        if (netra != null) add("NTR")
+        if (gozargah != null) add("GZG")
+        if (nova != null) add("NVA")
+    }
     val prefs = context.getSharedPreferences("smart_verify", android.content.Context.MODE_PRIVATE)
     var emailSendTime by remember { mutableStateOf(prefs.getLong("email_${account.id}", 0L)) }
     var isCheckingStatus by remember { mutableStateOf(false) }
@@ -793,35 +862,31 @@ fun AccountGroupCard(
     // The coach has to be able to run exactly what the buttons run -- not a second implementation
     // that drifts from them. Both report through CloudCoach when the coach is the caller, and
     // both are otherwise unchanged from the rows that used to own them.
+    // EDG is a row of the account's central Worker now: «install» connects it to the ONE Worker (installing that first when
+    // the account has none) and «fetch» takes its links from there. An EDG panel installed the old way keeps working as it did.
     val runEdgInstall: (Boolean) -> Unit = { coached ->
-        if (edgDeployState != "deploying" && edgDeployState != "done") {
-            edgDeployState = "deploying"
-            edgProgress = 0f
+        if (edgDeployState == "idle" && !edgGwBusy) {
+            edgGwBusy = true
             scope.launch {
-                val result = cloudManager.deployEdgWorker(account) { percent, _ ->
-                    edgProgress = percent.toFloat()
-                    if (coached) CloudCoach.setWork(S(R.string.installing_the_panel_on_your_account), percent / 100f)
+                val result = com.mlmvpn.scanner.engines.gateway.EdgeGateway.connectPanel(context, account, "EDG") { stepText ->
+                    if (coached) CloudCoach.setWork(stepText, 0.5f)
                 }
-                if (result.first) {
-                    edgDeployState = "done"
-                    account.edgStatus = "DEPLOYED"
-                    cloudManager.saveAccounts()
+                edgGwBusy = false
+                if (result.isSuccess) {
                     if (coached) CloudCoach.advance(CloudCoach.Step.FETCH)
                 } else {
-                    edgDeployState = "idle"
+                    val raw = com.mlmvpn.scanner.engines.gateway.EdgeGateway.localized(result.exceptionOrNull()!!)
                     if (coached) {
                         CloudCoach.failed(
                             CloudCoach.diagnose(
                                 emailVerified = isEmailVerified,
                                 hasSubdomain = hasSubdomain,
                                 installed = false,
-                                rawError = result.second,
+                                rawError = raw,
                             )
                         )
-                    } else if (result.second == "ERR_ACCOUNT_HAS_SUBDOMAIN") {
-                        showSubdomainError = true
                     } else {
-                        android.widget.Toast.makeText(context, result.second, android.widget.Toast.LENGTH_LONG).show()
+                        android.widget.Toast.makeText(context, raw, android.widget.Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -829,7 +894,9 @@ fun AccountGroupCard(
     }
 
     val runEdgFetch: (Boolean) -> Unit = { coached ->
-        if (edgDeployState == "done" && !isEdgFetching) {
+        val viaGateway = edgDeployState != "done"
+        val ready = !viaGateway || com.mlmvpn.scanner.engines.gateway.EdgeGateway.status(context, account).connected("EDG")
+        if (ready && !isEdgFetching) {
             scope.launch {
                 isEdgFetching = true
                 if (coached) {
@@ -837,26 +904,35 @@ fun AccountGroupCard(
                 } else {
                     android.widget.Toast.makeText(context, context.getString(R.string.cloud_fetching_edg_configs), android.widget.Toast.LENGTH_SHORT).show()
                 }
-                val result = cloudManager.fetchEdgConfigs(account)
-                if (result.first && result.second.isNotEmpty()) {
-                    val engineNodes = result.second.mapIndexed { index, uri ->
-                        com.mlmvpn.scanner.models.VpnNode(
-                            id = "edg_${account.id}_$index",
-                            name = "EDG Node ${index + 1}",
-                            uri = uri,
-                            type = if (uri.startsWith("vless")) "vless" else "trojan",
-                            engineType = "EDG"
-                        )
+                val newGroup: com.mlmvpn.scanner.data.CloudGroup? = if (viaGateway) {
+                    com.mlmvpn.scanner.ui.cloud.GatewayConfigs.fetch(context, groupManager, account, "EDG", offer = false).getOrNull()?.let {
+                        groupManager.cloudGroups.firstOrNull { g -> g.id.startsWith(com.mlmvpn.scanner.ui.cloud.GatewayConfigs.groupPrefix("EDG", account.id)) }
                     }
-                    val newGroup = com.mlmvpn.scanner.data.CloudGroup(
-                        id = "edg_${account.id}_${System.currentTimeMillis()}",
-                        accountId = account.id,
-                        date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()),
-                        title = com.mlmvpn.scanner.utils.NamingHelper.generateMythName(),
-                        nodes = engineNodes
-                    )
-                    groupManager.cloudGroups.add(0, newGroup)
-                    groupManager.saveCloudGroups()
+                } else {
+                    val result = cloudManager.fetchEdgConfigs(account)
+                    if (result.first && result.second.isNotEmpty()) {
+                        val engineNodes = result.second.mapIndexed { index, uri ->
+                            com.mlmvpn.scanner.models.VpnNode(
+                                id = "edg_${account.id}_$index",
+                                name = "EDG Node ${index + 1}",
+                                uri = uri,
+                                type = if (uri.startsWith("vless")) "vless" else "trojan",
+                                engineType = "EDG"
+                            )
+                        }
+                        com.mlmvpn.scanner.data.CloudGroup(
+                            id = "edg_${account.id}_${System.currentTimeMillis()}",
+                            accountId = account.id,
+                            date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()),
+                            title = com.mlmvpn.scanner.utils.NamingHelper.generateMythName(),
+                            nodes = engineNodes
+                        ).also {
+                            groupManager.cloudGroups.add(0, it)
+                            groupManager.saveCloudGroups()
+                        }
+                    } else null
+                }
+                if (newGroup != null) {
                     onGroupsUpdated()
                     if (coached) {
                         // Straight into the combine coach at step 4 of 8 -- no second offer, the
@@ -872,7 +948,7 @@ fun AccountGroupCard(
                         onCoachHandOff(newGroup.id, newGroup.nodes.firstOrNull()?.uri ?: "")
                     } else {
                         com.mlmvpn.scanner.ui.CombineCoach.offer(context, newGroup.id, newGroup.nodes.firstOrNull()?.uri ?: "")
-                        android.widget.Toast.makeText(context, context.getString(R.string.cloud_configs_added_successfully, engineNodes.size), android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, context.getString(R.string.cloud_configs_added_successfully, newGroup.nodes.size), android.widget.Toast.LENGTH_SHORT).show()
                     }
                 } else {
                     if (coached) {
@@ -891,6 +967,13 @@ fun AccountGroupCard(
                 isEdgFetching = false
             }
         }
+    }
+
+    // MLM on the phone is Config Studio, and Config Studio now runs on this account's central Worker
+    // (data/studio/central): the row opens it here instead of installing the old full engine.
+    val installFullMlm: () -> Unit = {
+        com.mlmvpn.scanner.data.studio.central.CentralFleet.register(context, account)
+        onOpenConfigStudio()
     }
 
     // Only the first card answers the coach; with two accounts connected, "install the panel"
@@ -969,16 +1052,21 @@ fun AccountGroupCard(
                 } else {
                     PanelLamps(
                         lamps = listOf(
-                            "BPB" to lampOf(deployState, cfgCount("BPB")),
-                            "EDG" to lampOf(edgDeployState, cfgCount("EDG")),
-                            "NHN" to lampOf(nahanDeployState, cfgCount("NHN")),
-                            "MLM" to lampOf(mlmDeployState, cfgCount("MLM")),
-                            "NTR" to lampOf(if (com.mlmvpn.scanner.engines.netra.NetraPanel.install(context, account.accountId) != null) "done" else "idle", cfgCount("NTR")),
-                            "GZG" to lampOf(if (com.mlmvpn.scanner.engines.gozargah.GozargahPanel.install(context, account.accountId) != null) "done" else "idle", cfgCount("GZG")),
-                            "NVA" to lampOf(if (com.mlmvpn.scanner.engines.nova.NovaPanel.install(context, account.accountId) != null) "done" else "idle", cfgCount("NVA")),
-                            "SPD" to lampOf(if (com.mlmvpn.scanner.engines.spider.SpiderPanel.install(context, account.accountId) != null) "done" else "idle", cfgCount("SPD")),
+                            // A panel is «on» when it is installed as a full panel OR connected to the account's central Worker.
+                            "BPB" to lampOf(if (deployState == "done" || gw.installed) "done" else "idle", cfgCount("BPB")),
+                            "EDG" to lampOf(if (edgDeployState == "done" || gw.connected("EDG")) "done" else "idle", cfgCount("EDG")),
+                            "NHN" to lampOf(if (nahanDeployState == "done" || gw.connected("NHN")) "done" else "idle", cfgCount("NHN")),
+                            "MLM" to lampOf(if (mlmDeployState == "done" || gw.connected("MLM")) "done" else "idle", cfgCount("MLM")),
+                            "NTR" to lampOf(if (netra != null || gw.connected("NTR")) "done" else "idle", cfgCount("NTR")),
+                            "GZG" to lampOf(if (gozargah != null || gw.connected("GZG")) "done" else "idle", cfgCount("GZG")),
+                            "NVA" to lampOf(if (nova != null || gw.connected("NVA")) "done" else "idle", cfgCount("NVA")),
+                            "SPD" to lampOf(if (spiderInstall != null || gw.connected("SPD")) "done" else "idle", cfgCount("SPD")),
                         ),
-                        onSelect = { openPanel = if (openPanel == it) null else it },
+                        onSelect = { picked ->
+                            // BPB with no full panel on the account is the central Worker's own row.
+                            val key = if (picked == "BPB" && deployState == "idle") "GW" else picked
+                            openPanel = if (openPanel == key) null else key
+                        },
                     )
                 }
             }
@@ -1036,6 +1124,23 @@ fun AccountGroupCard(
                 // "locked/disabled" cue with zero native-blur risk.
                 .then(if (!isEmailVerified || !hasSubdomain) Modifier.alpha(0.35f) else Modifier)
             ) {
+            // ── the account's ONE central Worker (BPB's row) and a row for every panel that is not installed as a full panel ──
+            com.mlmvpn.scanner.ui.cloud.GatewayBlock(
+                account = account,
+                groupManager = groupManager,
+                cfgCount = cfgCount,
+                legacy = legacyPanels,
+                openPanel = openPanel,
+                setOpenPanel = { openPanel = it },
+                onShowSettings = { onShowGatewaySettings(account) },
+                onGroupsUpdated = onGroupsUpdated,
+                onInstallFullMlm = installFullMlm,
+            )
+            // ── full panels, only the ones that are installed ──
+            if (deployState != "idle" || legacyPanels.isNotEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
+            }
+            if (deployState != "idle") {
             CloudPanelHeaderRow(
                 title = "BPB",
                 subtitle = S(R.string.full_panel_with_more_settings),
@@ -1169,7 +1274,9 @@ fun AccountGroupCard(
             }
 
             Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
+            }
 
+            if (edgDeployState != "idle") {
             CloudPanelHeaderRow(
                 title = "EDG",
                 subtitle = S(R.string.the_quickest_way_to_get_a_config),
@@ -1290,7 +1397,9 @@ fun AccountGroupCard(
             }
             
             Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
-            
+            }
+
+            if (nahanDeployState != "idle") {
             // --- ROW 4: Nahan Engine ---
             CloudPanelHeaderRow(
                 title = "Nahan",
@@ -1500,12 +1609,14 @@ fun AccountGroupCard(
             }
 
             Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
+            }
 
+            if (spiderInstall != null) {
             // --- Spider: get configs here like the others; install, users and exits on its page ---
             CloudPanelHeaderRow(
                 title = "Spider",
                 subtitle = com.mlmvpn.scanner.store.tr("خروجی مسابقه‌ای و محدودیت IP", "Racing exits and IP limits"),
-                state = if (com.mlmvpn.scanner.engines.spider.SpiderPanel.install(context, account.accountId) != null) "done" else "idle",
+                state = if (spiderInstall != null) "done" else "idle",
                 configCount = cfgCount("SPD"),
                 expanded = openPanel == "SPD",
                 onClick = { openPanel = if (openPanel == "SPD") null else "SPD" },
@@ -1518,12 +1629,10 @@ fun AccountGroupCard(
                     onGroupsUpdated = onGroupsUpdated,
                 )
             }
+            }
 
             // --- Netra and Gozargah: third-party panels, deployed from their developers' releases ---
-            var thirdPartyTick by remember { mutableStateOf(0) }
-            val netra = remember(thirdPartyTick) { com.mlmvpn.scanner.engines.netra.NetraPanel.install(context, account.accountId) }
-            val gozargah = remember(thirdPartyTick) { com.mlmvpn.scanner.engines.gozargah.GozargahPanel.install(context, account.accountId) }
-
+            if (netra != null) {
             Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
             CloudPanelHeaderRow(
                 title = "Netra",
@@ -1548,7 +1657,9 @@ fun AccountGroupCard(
                     extra = netra?.let { n -> { com.mlmvpn.scanner.ui.cloud.OpenPanelRow("${n.url}/${n.subPath}/panel") } },
                 )
             }
+            }
 
+            if (gozargah != null) {
             Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
             CloudPanelHeaderRow(
                 title = "Gozargah",
@@ -1579,9 +1690,10 @@ fun AccountGroupCard(
                     } },
                 )
             }
+            }
 
             // --- Nova: fetched from the developer's repository at install, checked against its SHA-256 ---
-            val nova = remember(thirdPartyTick) { com.mlmvpn.scanner.engines.nova.NovaPanel.install(context, account.accountId) }
+            if (nova != null) {
             Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
             CloudPanelHeaderRow(
                 title = "Nova",
@@ -1611,7 +1723,9 @@ fun AccountGroupCard(
                     } },
                 )
             }
+            }
 
+            if (mlmDeployState != "idle") {
             Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
             
             // --- ROW 5: MLM Engine ---
@@ -1683,6 +1797,63 @@ fun AccountGroupCard(
                 }
                 
                 Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
+
+                // «دریافت کانفیگ xhttp»: the panel's own XHTTP config (packet-up over HTTP/2), saved only
+                // after it has carried real data on this network. Needs the panel at build 23, where a
+                // session's requests meet in its Durable Object (MlmXhttp, 03-entry.js).
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = mlmDeployState == "done" && !mlmXhttpBusy) {
+                            mlmXhttpBusy = true
+                            scope.launch {
+                                val outcome = try {
+                                    com.mlmvpn.scanner.engines.mlm.MlmXhttp.obtain(context, account)
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    com.mlmvpn.scanner.engines.mlm.MlmXhttp.Outcome.Failed(com.mlmvpn.scanner.engines.mlm.MlmXhttp.Reason.PANEL_ERROR)
+                                } finally { mlmXhttpBusy = false }
+                                val message = when (outcome) {
+                                    is com.mlmvpn.scanner.engines.mlm.MlmXhttp.Outcome.Ready -> {
+                                        val filed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            runCatching {
+                                                com.mlmvpn.scanner.data.NodeManager(context).addConfigs(listOf(outcome.link), groupTitle = "MLM XHTTP")
+                                                com.mlmvpn.scanner.ui.cloud.PanelConfigs.file(context, groupManager, account, "MLM", "XHTTP",
+                                                    listOf(com.mlmvpn.scanner.ui.cloud.PanelConfigs.nameOf(outcome.link) to outcome.link))
+                                            }.isSuccess
+                                        }
+                                        onGroupsUpdated()
+                                        if (filed) S(R.string.mlm_xhttp_ready) else S(R.string.mlm_xhttp_failed)
+                                    }
+                                    com.mlmvpn.scanner.engines.mlm.MlmXhttp.Outcome.Outdated -> S(R.string.mlm_xhttp_outdated)
+                                    is com.mlmvpn.scanner.engines.mlm.MlmXhttp.Outcome.Failed -> when (outcome.reason) {
+                                        com.mlmvpn.scanner.engines.mlm.MlmXhttp.Reason.NOT_WORKING -> S(R.string.mlm_xhttp_not_working)
+                                        com.mlmvpn.scanner.engines.mlm.MlmXhttp.Reason.NO_PANEL_CONFIG -> S(R.string.mlm_xhttp_no_config)
+                                        com.mlmvpn.scanner.engines.mlm.MlmXhttp.Reason.PANEL_ERROR -> S(R.string.mlm_xhttp_failed)
+                                    }
+                                }
+                                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        },
+                ) {
+                    val color = if (mlmDeployState == "done") TextPrimary else TextDim
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.SwapVert, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(S(R.string.mlm_get_xhttp), color = color, fontSize = 15.sp)
+                            if (mlmXhttpBusy) Text(S(R.string.mlm_xhttp_checking), color = TextDim, fontSize = 12.sp)
+                        }
+                        if (mlmXhttpBusy) CircularProgressIndicator(modifier = Modifier.size(16.dp), color = com.mlmvpn.scanner.ui.settings.Ios.Blue, strokeWidth = 2.dp)
+                    }
+                }
+
+                Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(0.5.dp).background(com.mlmvpn.scanner.ui.settings.Ios.Separator))
                 
                 // MLM Users Button
                 Box(
@@ -1753,6 +1924,7 @@ fun AccountGroupCard(
                     )
                 }
             } // end MLM Engine
+            }
             }
 
             // Smart Verification Overlay

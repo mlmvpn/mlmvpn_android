@@ -43,6 +43,7 @@ data class Evidence(
         fun failure(id: String, route: String, phase: String, error: Throwable, ms: Long = 0): Evidence {
             if(generateSequence(error) { it.cause }.take(8).any { it is java.security.cert.CertificateException || it is javax.net.ssl.SSLPeerUnverifiedException })
                 return Evidence(id,route,"cert_unexpected",elapsedMs=ms)
+            if (error is ProbeBusy) return Evidence(id, route, "probe_busy", elapsedMs = ms)
             val kind = when (error) {
                 is java.net.UnknownHostException -> "nxdomain"
                 is java.net.SocketTimeoutException -> "timeout"

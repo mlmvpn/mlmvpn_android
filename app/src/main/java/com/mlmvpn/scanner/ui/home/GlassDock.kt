@@ -34,6 +34,8 @@ fun GlassDock(
     tileSize: Dp,
     onOpen: (HomeApp) -> Unit,
     modifier: Modifier = Modifier,
+    /** Off while the home screen's search covers the dock, so a remote's focus stays in the search. */
+    focusable: Boolean = true,
 ) {
     // Read once for the whole dock rather than per icon: every AppIconCell would otherwise
     // subscribe to the same four flows separately.
@@ -71,8 +73,9 @@ fun GlassDock(
                 tileSize = tileSize,
                 showLabel = Appearance.dockLabels,
                 connected = app.id in live,
-                onClick = { onOpen(app) },
-                modifier = Modifier.tvFocusable(cornerRadius = 18, onPress = { onOpen(app) }),
+                // The click is a focus target of its own, so it goes too while covered.
+                onClick = if (focusable) ({ onOpen(app) }) else null,
+                modifier = Modifier.tvFocusable(enabled = focusable, cornerRadius = 18, onPress = { onOpen(app) }),
             )
         }
     }

@@ -59,11 +59,26 @@ object WarpIdRelay {
     private const val CERT_LIFETIME_DAYS = 365L
 
     private val JSON_TYPE = "application/json; charset=UTF-8".toMediaType()
+    private val cancelWatch = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { task ->
+        Thread(task, "identity-request-cancel").apply { isDaemon = true }
+    }
 
     @Volatile private var app: Context? = null
 
     /** From Application.onCreate, so the core's prepare step can reach this without a context. */
     fun bind(context: Context) { app = context.applicationContext }
+    /** Sealed off the caller's thread: a stop pressed on the screen waited on the Keystore (ANR #662). */
+    fun onCoreStop() {
+        val ctx = app ?: return
+        Thread({
+            runCatching {
+                // Not under a session that has started meanwhile: its core is loading these files.
+                com.mlmvpn.scanner.data.CfIdentityFiles.sealDirectory(ctx, ctx.filesDir, maySeal = {
+                    !com.mlmvpn.core.tunnel.TunnelEngine.preparing && !runCatching { com.mlmvpn.core.tunnel.TunnelEngine.isRunning() }.getOrDefault(false)
+                })
+            }
+        }, "seal-core-identities").start()
+    }
 
     fun ensure(configJson: String) {
         val ctx = app ?: return
@@ -71,23 +86,40 @@ object WarpIdRelay {
             ensure(ctx, configJson)
         } catch (e: IllegalStateException) {
             if (isBlocked(e.message)) throw e
-            Log.w(TAG, "ensure", e)
+            if (e.message?.startsWith("secure_") == true) throw IllegalStateException(BLOCKED + fa("ذخیره‌سازی امن دستگاه در دسترس نیست.", "Secure device storage is unavailable."))
+            Log.w(TAG, "ensure failed: ${e.javaClass.simpleName}")
         } catch (e: Exception) {
-            Log.w(TAG, "ensure", e)
+            if (Thread.currentThread().isInterrupted) throw e
+            Log.w(TAG, "ensure failed: ${e.javaClass.simpleName}")
         }
     }
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    private fun relayKey(context: Context): String? {
+        val p = prefs(context)
+        p.getString("key_sealed", null)?.let { return com.mlmvpn.scanner.data.SecureStore.open(it) }
+        val legacy = p.getString("key", null) ?: return null
+        val sealed = com.mlmvpn.scanner.data.SecureStore.seal(legacy) ?: return null
+        if (!p.edit().putString("key_sealed", sealed).remove("key").commit()) return null
+        return legacy
+    }
+
     /** The relay's base address (`https://x.y.workers.dev/<key>`), or null when not set up. */
     fun base(context: Context): String? {
         val p = prefs(context)
         val url = p.getString("url", null)?.trimEnd('/') ?: return null
-        val key = p.getString("key", null) ?: return null
+        val key = relayKey(context) ?: return null
         return "$url/$key"
     }
 
-    fun isReady(context: Context): Boolean = base(context) != null
+    /**
+     * Set up at all. Only looks at what is stored -- no Keystore call: the screens ask this while they
+     * draw, and opening the sealed key on the main thread froze the WireGuard tab (ANR #870).
+     */
+    fun isReady(context: Context): Boolean = prefs(context).let { p ->
+        p.getString("url", null) != null && (p.contains("key_sealed") || p.contains("key"))
+    }
 
     /**
      * The relay's build. Bump it whenever assets/warp_id_worker.js changes: a relay on an older
@@ -112,7 +144,13 @@ object WarpIdRelay {
      * A second deploy keeps the script name and the key, so it replaces the code in place.
      */
     fun deploy(context: Context, account: CloudAccount, onStep: (String) -> Unit = {}): Pair<Boolean, String> {
-        val client = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(40, TimeUnit.SECONDS).build()
+        // Deploying this worker is itself a call to api.cloudflare.com, so it takes the same route the
+        // rest of the app uses for Cloudflare: a proven edge (WorkerRoute.dns) with the ClientHello
+        // split past the name filter (CfFront), for the networks where the API host is cut by name.
+        val client = OkHttpClient.Builder()
+            .dns(com.mlmvpn.scanner.engines.cloud.WorkerRoute.dns())
+            .socketFactory(com.mlmvpn.scanner.engines.cloud.WorkerRoute.cfSocketFactory())
+            .connectTimeout(15, TimeUnit.SECONDS).readTimeout(40, TimeUnit.SECONDS).build()
         val headers = CloudAuth.headers(account)
         val api = "https://api.cloudflare.com/client/v4/accounts/${account.accountId}"
         return try {
@@ -126,8 +164,10 @@ object WarpIdRelay {
             val sameAccount = p.getString("account", null) == account.accountId
             val name = p.getString("script", null)?.takeIf { sameAccount }
                 ?: (com.mlmvpn.scanner.utils.AntiDpi.generateSafeWorkerName() + "-wid")
-            val key = p.getString("key", null)?.takeIf { sameAccount }
+            val key = relayKey(context)?.takeIf { sameAccount }
                 ?: ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+            val sealedKey = com.mlmvpn.scanner.data.SecureStore.seal(key)
+                ?: throw IllegalStateException("secure_storage_unavailable")
 
             onStep(fa("بارگذاری ورکر…", "Uploading the worker…"))
             val script = com.mlmvpn.scanner.store.StoreFiles.readText(context, "warp_id_worker.js")
@@ -152,7 +192,7 @@ object WarpIdRelay {
             }
             p.edit()
                 .putString("url", "https://$name.$sub.workers.dev")
-                .putString("key", key)
+                .putString("key_sealed", sealedKey).remove("key")
                 .putString("script", name)
                 .putString("account", account.accountId)
                 .putInt("version", VERSION)
@@ -162,8 +202,8 @@ object WarpIdRelay {
                 "Ready. From now on the WireGuard, WARP-in-WARP and MASQUE identity is made through your own worker.",
             )
         } catch (e: Exception) {
-            Log.w(TAG, "deploy failed", e)
-            false to fa("خطا: ", "Error: ") + (e.message ?: e.javaClass.simpleName)
+            Log.w(TAG, "deploy failed: ${e.javaClass.simpleName}")
+            false to fa("راه‌اندازی ورکر انجام نشد.", "Worker setup failed.")
         }
     }
 
@@ -177,7 +217,12 @@ object WarpIdRelay {
      * the inner leg of the nested modes (aether `lib.rs`, derive_sibling_path).
      */
     fun ensure(context: Context, configJson: String) {
-        val base = base(context)
+        check(com.mlmvpn.scanner.data.SecureStore.available) { "secure_identity_unavailable" }
+        val relay = base(context)
+        val base = relay ?: DIRECT_BASE.takeIf {
+            com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context)
+                .saved(com.mlmvpn.scanner.engines.cfnet.CfStage.IDENTITY) != null
+        }
         val cfg = runCatching { JSONObject(configJson) }.getOrNull() ?: return
         // A Zero Trust organization registers with its own login; that path is not this one.
         if (cfg.optString("team").isNotBlank()) return
@@ -206,22 +251,22 @@ object WarpIdRelay {
         var missing = false
         for ((path, masque) in targets) {
             val file = File(path)
+            com.mlmvpn.scanner.data.CfIdentityFiles.restore(context, file)
             if (file.exists() && file.length() > 0) continue
             if (base == null) { missing = true; continue }
             try {
-                ConnectionLog.record("Identity: making ${if (masque) "a MASQUE" else "a WARP"} identity through your worker")
+                ConnectionLog.record("Identity: making ${if (masque) "a MASQUE" else "a WARP"} identity through the selected route")
                 val toml = provision(context, base, masque)
                 file.parentFile?.mkdirs()
-                val tmp = File(file.parentFile, ".${file.name}.relay.tmp")
-                tmp.writeText(toml)
-                if (!tmp.renameTo(file)) { tmp.copyTo(file, overwrite = true); tmp.delete() }
-                markSource(context, file.name, VIA_WORKER)
-                ConnectionLog.record("Identity: saved to ${file.name} through the worker")
+                com.mlmvpn.scanner.data.CfIdentityFiles.save(context, file, toml, materialize = true)
+                markSource(context, file.name, if (relay != null) VIA_WORKER else VIA_DIRECT)
+                ConnectionLog.record("Identity: saved to ${file.name} through the selected route")
             } catch (e: Exception) {
-                relayError = e.message ?: e.javaClass.simpleName
+                if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("identity_cancelled")
+                relayError = e.javaClass.simpleName
                 missing = true
                 ConnectionLog.record("Identity: the worker route failed ($relayError)")
-                Log.w(TAG, "provision through the relay failed", e)
+                Log.w(TAG, "provision through the relay failed: ${e.javaClass.simpleName}")
             }
         }
         if (!missing) return
@@ -233,6 +278,8 @@ object WarpIdRelay {
             ConnectionLog.record("Identity: the WARP API answers directly; the core will register")
             return
         }
+        // Filtered by its name: Aether registers with the name encrypted (ECH), in the core's format.
+        if (provisionOverEch(context, targets)) return
         ConnectionLog.record("Identity: the WARP API is filtered on this network")
         throw IllegalStateException(
             BLOCKED + if (base == null) {
@@ -244,6 +291,39 @@ object WarpIdRelay {
                     (relayError?.let { " ($it)" } ?: "")
             }
         )
+    }
+
+    /**
+     * Make the identities [targets] still lacks with Aether over ECH ([com.mlmvpn.core.aether.AetherRegister]).
+     * [targets] is [ensure]'s list: a primary and, for the nested modes, its `-secondary`.
+     */
+    private fun provisionOverEch(context: Context, targets: List<Pair<String, Boolean>>): Boolean {
+        val wanted = LinkedHashMap<File, com.mlmvpn.core.aether.AetherRegister.Role>()
+        for ((path, masque) in targets) {
+            val file = File(path)
+            if (file.exists() && file.length() > 0) continue
+            val inner = path.substringAfterLast('/').contains("-secondary")
+            wanted[file] = when {
+                masque && inner -> com.mlmvpn.core.aether.AetherRegister.Role.MASQUE_INNER
+                masque -> com.mlmvpn.core.aether.AetherRegister.Role.MASQUE
+                inner -> com.mlmvpn.core.aether.AetherRegister.Role.WG_INNER
+                else -> com.mlmvpn.core.aether.AetherRegister.Role.WG
+            }
+        }
+        if (wanted.isEmpty()) return true
+        ConnectionLog.record("Identity: the WARP API is filtered by name here; registering over ECH")
+        val made = com.mlmvpn.core.aether.AetherRegister.register(context, wanted.values.toSet()) { ConnectionLog.record(it) }
+        if (made == null) {
+            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("identity_cancelled")
+            ConnectionLog.record("Identity: ECH did not get through either")
+            return false
+        }
+        for ((file, role) in wanted) {
+            file.parentFile?.mkdirs()
+            com.mlmvpn.scanner.data.CfIdentityFiles.save(context, file, made.getValue(role), materialize = true)
+            markSource(context, file.name, VIA_ECH)
+        }
+        return true
     }
 
     /**
@@ -267,6 +347,8 @@ object WarpIdRelay {
     const val VIA_WORKER = "worker"
     const val VIA_DIRECT = "direct"
     const val VIA_FRONT = "front"
+    /** Registered by Aether with the API's name encrypted (ECH). */
+    const val VIA_ECH = "ech"
 
     /** A failure message this class raised; [readable] is the part for the user. */
     fun isBlocked(message: String?): Boolean = message?.startsWith(BLOCKED) == true
@@ -285,6 +367,7 @@ object WarpIdRelay {
                 val f = File(dir, name)
                 if (f.exists() && prefs(ctx).getString("src_$name", null) == null) markSource(ctx, name, VIA_DIRECT)
             }
+            com.mlmvpn.scanner.data.CfIdentityFiles.sealDirectory(ctx, dir, removePlain = false)
         }
     }
 
@@ -294,11 +377,16 @@ object WarpIdRelay {
     fun identityState(context: Context, protocol: String): IdentityState {
         val name = if (protocol.contains("masque")) "tunnel-masque.toml" else "tunnel.toml"
         val f = File(context.filesDir, name)
+        // Between connects the identity is kept only as its sealed copy (`<name>.sealed`; the plain
+        // file is removed when the core stops). Looking at the plain file alone showed "not made yet"
+        // after every disconnect, though the same identity is restored and reused on the next connect.
+        val sealed = File(context.filesDir, "$name.sealed")
+        val kept = (f.exists() && f.length() > 0) || (sealed.exists() && sealed.length() > 0)
         val p = prefs(context)
         return IdentityState(
-            made = f.exists() && f.length() > 0,
-            via = if (f.exists()) p.getString("src_$name", null) else null,
-            at = p.getLong("at_$name", 0L).takeIf { it > 0 } ?: if (f.exists()) f.lastModified() else 0L,
+            made = kept,
+            via = if (kept) p.getString("src_$name", null) else null,
+            at = p.getLong("at_$name", 0L).takeIf { it > 0 } ?: if (kept) maxOf(f.lastModified(), sealed.lastModified()) else 0L,
         )
     }
 
@@ -331,8 +419,20 @@ object WarpIdRelay {
      * own client PATCHes it on right after registering, and so does this.
      */
     fun registerStandalone(context: Context): Standalone {
+        val direct = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context).saved(com.mlmvpn.scanner.engines.cfnet.CfStage.IDENTITY) != null || directReachable(context)
+        // Filtered by its name (Iran, 2026-10-07): Aether registers with the name encrypted (ECH) in
+        // seconds, where the worker needs setting up and the camouflaged route costs ~50 s of timeouts.
+        if (!direct) {
+            com.mlmvpn.core.aether.AetherRegister.register(context, setOf(com.mlmvpn.core.aether.AetherRegister.Role.WG)) { ConnectionLog.record(it) }
+                ?.get(com.mlmvpn.core.aether.AetherRegister.Role.WG)
+                ?.let { toml ->
+                    val id = Regex("""(?m)^device_id = "([^"]+)"""").find(toml)?.groupValues?.get(1).orEmpty()
+                    if (id.isNotBlank()) return Standalone(toml, id, VIA_ECH)
+                }
+            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("identity_cancelled")
+        }
         val routes = buildList {
-            if (directReachable(context)) add(DIRECT_BASE to VIA_DIRECT)
+            if (direct) add(DIRECT_BASE to VIA_DIRECT)
             // The user's own Worker before the camouflaged route, when there is one. Measured on
             // the phone 2026-09-27 (Iran, Wi-Fi): api.cloudflareclient.com as the SNI gets no
             // reply on any Cloudflare address, whole or cut into 1-29 byte segments -- the
@@ -350,15 +450,20 @@ object WarpIdRelay {
         // screen showed the front's «Read timed out» instead.
         var answered: String? = null
         for ((b, via) in routes) {
+            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("identity_cancelled")
             try {
+                val manager = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context)
+                val selected = manager.saved(com.mlmvpn.scanner.engines.cfnet.CfStage.IDENTITY)
                 val p = provisionFull(context, b, masque = false, enableWarp = true)
                 if (!p.warpEnabled) throw IllegalStateException(
                     fa("کلادفلر وارپ را برای این حساب فعال نکرد.", "Cloudflare did not enable WARP for this account."))
-                return Standalone(p.toml, p.deviceId, via)
+                manager.report(com.mlmvpn.scanner.engines.cfnet.CfStage.IDENTITY, selected, manager.profile(), com.mlmvpn.scanner.engines.cfnet.ValidationResult.pass(0, "identity=authenticated_warp_enabled"))
+                return Standalone(p.toml, p.deviceId, selected?.route?.carrier?.key ?: via)
             } catch (e: Exception) {
                 last = e
                 if (answered == null && e.message?.startsWith("HTTP ") == true) answered = e.message
-                Log.w(TAG, "standalone registration via $via failed", e)
+                if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("identity_cancelled")
+                Log.w(TAG, "standalone registration via $via failed: ${e.javaClass.simpleName}")
             }
         }
         // The 429 is short-lived (the phone, 2026-09-27: refused at 10:58 and 10:59, made at
@@ -385,11 +490,30 @@ object WarpIdRelay {
         throw IllegalStateException(BLOCKED + reason)
     }
 
+    /**
+     * A WARP identity registered THROUGH [proxy]: a local SOCKS port whose traffic leaves from inside
+     * Cloudflare (a WARP session that already carries data, as the Amnezia carrier borrows one).
+     * From there the API is never filtered, so this works on lines where every route
+     * [registerStandalone] knows is closed. Switched on, as that one does.
+     */
+    fun registerThrough(context: Context, proxy: java.net.Proxy): Standalone {
+        val p = provisionFull(context, DIRECT_BASE, masque = false, enableWarp = true, proxy = proxy)
+        if (!p.warpEnabled) throw IllegalStateException(
+            fa("کلادفلر وارپ را برای این حساب فعال نکرد.", "Cloudflare did not enable WARP for this account."))
+        return Standalone(p.toml, p.deviceId, VIA_PROXY)
+    }
+
+    const val VIA_PROXY = "proxy"
+
     private const val DIRECT_BASE = "https://api.cloudflareclient.com"
     /** Not a URL: [call] sends these over [WarpApiFront] instead of OkHttp. */
     private const val FRONT_BASE = "front:"
 
-    private fun provisionFull(context: Context, base: String, masque: Boolean, enableWarp: Boolean): Provisioned {
+    private fun provisionFull(context: Context, base: String, masque: Boolean, enableWarp: Boolean, proxy: java.net.Proxy? = null): Provisioned {
+        // Shadows the member for the body below: through [proxy] when one is given.
+        fun call(context: Context, base: String, method: String, path: String, body: JSONObject, bearer: String?): JSONObject =
+            if (proxy != null) callThrough(proxy, base, method, path, body, bearer)
+            else this@WarpIdRelay.call(context, base, method, path, body, bearer)
         val wg = WarpCrypto.generateKeyPair()
         val reg = JSONObject().apply {
             put("key", wg.publicKeyBase64)
@@ -474,7 +598,44 @@ object WarpIdRelay {
         append('"')
     }
 
+    /** [call] over [proxy] alone: no learned strategy, no front -- the proxy is the way in. */
+    private fun callThrough(proxy: java.net.Proxy, base: String, method: String, path: String, body: JSONObject, bearer: String?): JSONObject {
+        if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("identity_cancelled")
+        val client = OkHttpClient.Builder().proxy(proxy)
+            .connectTimeout(15, TimeUnit.SECONDS).readTimeout(25, TimeUnit.SECONDS).callTimeout(40, TimeUnit.SECONDS).build()
+        val builder = Request.Builder().url(base + path)
+            .header("User-Agent", UA)
+            .header("CF-Client-Version", CLIENT_VERSION)
+            .header("Accept", "application/json")
+            .method(method, body.toString().toRequestBody(JSON_TYPE))
+        if (bearer != null) builder.header("Authorization", "Bearer $bearer")
+        val call = client.newCall(builder.build())
+        val owner = Thread.currentThread()
+        val cancel = cancelWatch.scheduleAtFixedRate({ if (owner.isInterrupted) call.cancel() }, 100, 100, TimeUnit.MILLISECONDS)
+        try {
+            call.execute().use { r ->
+                val text = r.body?.string().orEmpty()
+                if (!r.isSuccessful) throw IllegalStateException("HTTP ${r.code}")
+                return JSONObject(text)
+            }
+        } finally {
+            cancel.cancel(false)
+            client.dispatcher.executorService.shutdown(); client.connectionPool.evictAll()
+        }
+    }
+
     private fun call(context: Context, base: String, method: String, path: String, body: JSONObject, bearer: String?): JSONObject {
+        if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("identity_cancelled")
+        val manager = com.mlmvpn.scanner.engines.cfnet.CfNetManager.get(context)
+        val learned = manager.identityExchange(method, path, buildMap {
+            put("Content-Type", "application/json; charset=UTF-8"); put("User-Agent", UA)
+            put("CF-Client-Version", CLIENT_VERSION); put("Accept", "application/json")
+            if (bearer != null) put("Authorization", "Bearer $bearer")
+        }, body.toString().toByteArray(Charsets.UTF_8))
+        if (learned != null) {
+            if (learned.http !in 200..299) throw IllegalStateException("HTTP ${learned.http}")
+            return JSONObject(learned.body)
+        }
         if (base == FRONT_BASE) {
             val headers = buildList {
                 add("Content-Type" to "application/json; charset=UTF-8")
@@ -485,10 +646,7 @@ object WarpIdRelay {
             }
             val a = WarpApiFront.exchange(method, path, headers, body.toString().toByteArray(Charsets.UTF_8))
             if (a.status !in 200..299) {
-                val detail = runCatching {
-                    JSONObject(a.body).optJSONArray("errors")?.optJSONObject(0)?.optString("message")
-                }.getOrNull()?.ifBlank { null } ?: a.body.take(160)
-                throw IllegalStateException("HTTP ${a.status}: $detail")
+                throw IllegalStateException("HTTP ${a.status}")
             }
             return JSONObject(a.body)
         }
@@ -498,16 +656,16 @@ object WarpIdRelay {
             .header("Accept", "application/json")
             .method(method, body.toString().toRequestBody(JSON_TYPE))
         if (bearer != null) builder.header("Authorization", "Bearer $bearer")
-        UpdateNet.client(context, 12, 25).newCall(builder.build()).execute().use { r ->
+        val call = UpdateNet.client(context, 12, 25).newCall(builder.build())
+        val owner = Thread.currentThread()
+        val cancel = cancelWatch.scheduleAtFixedRate({ if (owner.isInterrupted) call.cancel() }, 100, 100, TimeUnit.MILLISECONDS)
+        try { call.execute().use { r ->
             val text = r.body?.string().orEmpty()
             if (!r.isSuccessful) {
-                val detail = runCatching {
-                    JSONObject(text).optJSONArray("errors")?.optJSONObject(0)?.optString("message")
-                }.getOrNull()?.ifBlank { null } ?: text.take(160)
-                throw IllegalStateException("HTTP ${r.code}: $detail")
+                throw IllegalStateException("HTTP ${r.code}")
             }
             return JSONObject(text)
-        }
+        } } finally { cancel.cancel(false) }
     }
 
     // ── the MASQUE certificate: the same self-signed one the core makes ──────────────────────

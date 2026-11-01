@@ -89,6 +89,8 @@ fun StudioUserDetailScreen(
      *  a different question: not "what do they have" but "why can they not connect". */
     onCombine: (username: String) -> Unit,
     onBack: () -> Unit,
+    /** This person was moved to a central Worker: their new page there. */
+    onMoved: (installationId: String, userId: String) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -115,6 +117,7 @@ fun StudioUserDetailScreen(
     var confirmResetUsage by remember { mutableStateOf(false) }
     var confirmRotate by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var confirmMove by remember { mutableStateOf(false) }
     var showQr by remember { mutableStateOf(false) }
     var devices by remember { mutableStateOf<DeviceReport?>(null) }
     var history by remember { mutableStateOf<List<SessionEntry>>(emptyList()) }
@@ -686,6 +689,17 @@ fun StudioUserDetailScreen(
                     busy = false
                 }
             }
+            // To the account's central Worker (data/studio/central): only for someone whose term has
+            // not ended — a move never gives time away — and only when a central Worker has room.
+            if (u.stoppedReason() == null && store.centralTargetFor(account) != null) {
+                Separator()
+                SettingsActionRow(
+                    label = com.mlmvpn.scanner.store.tr("انتقال به ورکر مرکزی", "Move to the central Worker"),
+                    icon = StudioIcons.Combine,
+                    tint = Ios.Indigo,
+                    enabled = !busy,
+                ) { confirmMove = true }
+            }
         }
 
         // ---- what they actually did ----------------------------------------------------
@@ -838,6 +852,36 @@ fun StudioUserDetailScreen(
                 IosAlertAction(S(R.string.studio_device_forget), { act("forget") }, destructive = true),
             ),
             onDismiss = { deviceMenu = null },
+        )
+    }
+
+    if (confirmMove) {
+        val acc = account
+        val target = acc?.let { store.centralTargetFor(it) }
+        IosAlert(
+            title = com.mlmvpn.scanner.store.tr("انتقال به ورکر مرکزی؟", "Move to the central Worker?"),
+            message = com.mlmvpn.scanner.store.tr(
+                "همین کاربر با همین نام و تاریخ پایان روی ورکر مرکزی ساخته می‌شود و کانفیگ تازه می‌گیرد. سقف حجم و دستگاه منتقل نمی‌شود. لینک فعلی‌اش تا پایان زمانش کار می‌کند؛ اگر نمی‌خواهید، بعد از فرستادن کانفیگ تازه آن را اینجا خاموش کنید.",
+                "The same person, with the same name and end date, is made on the central Worker with new configs. Volume and device limits do not move. Their current link keeps working until its end; switch it off here after sending the new configs if you do not want that.",
+            ),
+            actions = listOf(
+                IosAlertAction(S(R.string.studio_cancel), { confirmMove = false }),
+                IosAlertAction(com.mlmvpn.scanner.store.tr("انتقال", "Move"), {
+                    confirmMove = false
+                    val from = acc ?: return@IosAlertAction
+                    val to = target ?: return@IosAlertAction
+                    val who = user ?: return@IosAlertAction
+                    busy = true; error = null
+                    scope.launch {
+                        when (val res = store.moveToCentral(from, who, to)) {
+                            is StudioResult.Ok -> onMoved(to.id, res.value.id)
+                            is StudioResult.Err -> error = com.mlmvpn.scanner.ui.configstudio.parts.CentralKit.errorText(context, res.error)
+                        }
+                        busy = false
+                    }
+                }),
+            ),
+            onDismiss = { confirmMove = false },
         )
     }
 

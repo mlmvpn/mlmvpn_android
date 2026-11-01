@@ -117,15 +117,18 @@ internal class SoftEtherVpnService : VpnService() {
     }
 
     private fun beForegrounded() {
-        arrayOf(
-            NOTIFICATION_ERROR_CHANNEL,
-            NOTIFICATION_RECONNECT_CHANNEL,
-            NOTIFICATION_DISCONNECT_CHANNEL,
-            NOTIFICATION_CERTIFICATE_CHANNEL,
-        ).map {
-            NotificationChannel(it, it, NotificationManager.IMPORTANCE_DEFAULT)
-        }.also {
-            notificationManager.createNotificationChannels(it)
+        // Channels exist from Android 8; below it NotificationChannel is missing (crash on 7.1.1).
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            arrayOf(
+                NOTIFICATION_ERROR_CHANNEL,
+                NOTIFICATION_RECONNECT_CHANNEL,
+                NOTIFICATION_DISCONNECT_CHANNEL,
+                NOTIFICATION_CERTIFICATE_CHANNEL,
+            ).map {
+                NotificationChannel(it, it, NotificationManager.IMPORTANCE_DEFAULT)
+            }.also {
+                notificationManager.createNotificationChannels(it)
+            }
         }
 
         val pendingIntent = PendingIntent.getService(

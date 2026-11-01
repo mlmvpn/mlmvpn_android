@@ -52,6 +52,8 @@ object MtuProbe {
         NetworkSettings.Method.PSIPHON,
         NetworkSettings.Method.TOR,
         NetworkSettings.Method.CFWARP,
+        NetworkSettings.Method.LANTERN,
+        NetworkSettings.Method.NPV,
         NetworkSettings.Method.V2RAY,
         NetworkSettings.Method.SNI,
         NetworkSettings.Method.QUICK_CONNECT,
@@ -95,6 +97,8 @@ object MtuProbe {
         val inner: Int?,
         val localTermination: Boolean,
         val probes: Int,
+        /** A size the method's own software fixes, not the line: answered without probing. */
+        val fixed: Boolean = false,
     )
 
     /**
@@ -109,6 +113,11 @@ object MtuProbe {
     ): Result = withContext(Dispatchers.IO) {
         if (method in LOCAL_TERMINATION) {
             return@withContext Result(method, null, NetworkSettings.MAX_MTU, true, 0)
+        }
+        // «URnetwork» carries the TUN's packets inside its own transfer frames, which its SDK sizes
+        // to the path by itself: what the TUN takes is URnetwork's own interface size, not the line's.
+        if (method == NetworkSettings.Method.URNETWORK) {
+            return@withContext Result(method, null, method.default, false, 0, fixed = true)
         }
 
         val host = targetFor(method)
@@ -165,7 +174,7 @@ object MtuProbe {
         val p = ProcessBuilder(
             "/system/bin/ping", "-n", "-c", "1", "-W", "2", "-M", "do", "-s", payload.toString(), host
         ).redirectErrorStream(true).start()
-        val done = p.waitFor(4, TimeUnit.SECONDS)
+        val done = p.waitUpTo(4, TimeUnit.SECONDS)
         if (!done) {
             p.destroy()
             false

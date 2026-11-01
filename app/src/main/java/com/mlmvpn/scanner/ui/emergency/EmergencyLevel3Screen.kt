@@ -53,6 +53,7 @@ import com.mlmvpn.scanner.data.CombineEngine
 import com.mlmvpn.scanner.data.ScanGuard
 import com.mlmvpn.scanner.engines.rstaspoof.RstaSpoofManager
 import com.mlmvpn.scanner.engines.rstaspoof.SniSession
+import com.mlmvpn.scanner.engines.rstaspoof.SniEch
 import com.mlmvpn.scanner.models.VpnNode
 import com.mlmvpn.scanner.ui.home.HomeDestinations
 import com.mlmvpn.scanner.ui.settings.Ios
@@ -432,6 +433,13 @@ fun EmergencyLevel3Screen(onBack: () -> Unit) {
                      * written after it. Neither can recur here: the counter is born inside the pass,
                      * and `isMeasuring` is cleared in the `finally`, where no return can miss it.
                      */
+                    // ECH, the method that does not use the front at all (SniEch): the configs are
+                    // measured as the same servers dialled straight to an edge, name encrypted.
+                    var viaEch = false
+                    val echEdge = SniEch.edgeFor(context, selectedRoute.connectIp)
+                    fun uriFor(node: VpnNode): String =
+                        if (viaEch) SniEch.directUri(node.uri, echEdge) ?: node.uri else node.uri
+
                     suspend fun pass(
                         nodes: List<VpnNode>,
                         timeoutMs: Long = 25_000L,
@@ -452,9 +460,9 @@ fun EmergencyLevel3Screen(onBack: () -> Unit) {
                                     // tester settled on. One attempt over a line where the
                                     // handshake is marginal reports a working config as dead, and
                                     // "no ping" is the one answer a user cannot argue with.
-                                    CombineEngine.measureUri(context, node.uri, timeoutMs)
+                                    CombineEngine.measureUri(context, uriFor(node), timeoutMs)
                                         .takeIf { it > 0 }
-                                        ?: if (retry) CombineEngine.measureUri(context, node.uri, timeoutMs) else 0L
+                                        ?: if (retry) CombineEngine.measureUri(context, uriFor(node), timeoutMs) else 0L
                                 } finally {
                                     gate.release()
                                     measured = done.incrementAndGet() to nodes.size
@@ -505,7 +513,24 @@ fun EmergencyLevel3Screen(onBack: () -> Unit) {
                     // faster than the default. The slowness is the line, not the setting.
                     val probeBudget = 20_000L
                     android.util.Log.d("SniMeasure", "probing ${probeSet.size} configs on ${firstProfile.describe()}")
-                    var found = pass(probeSet, probeBudget, retry = false) > 0
+                    // Where ECH is what worked last time, it is asked first: the front's fourteen
+                    // methods are minutes of nothing on a line that reassembles every cut.
+                    var found = false
+                    if (SniEch.enabled(context)) {
+                        viaEch = true
+                        found = pass(probeSet, probeBudget, retry = false) > 0
+                        if (!found) viaEch = false
+                    }
+                    if (!found) found = pass(probeSet, probeBudget, retry = false) > 0
+                    // ECH second, before the rest of the front's methods: where the filter reassembles
+                    // every cut (the home Wi-Fi, 2026-10-05) those thirteen are six minutes of nothing,
+                    // and where it does not, the stored method above has usually answered already.
+                    if (!found && !SniEch.enabled(context)) {
+                        viaEch = true
+                        found = pass(probeSet, probeBudget, retry = false) > 0
+                        android.util.Log.d("SniMeasure", "rung ECH via $echEdge -> ${if (found) "alive" else "dead"}")
+                        if (!found) viaEch = false
+                    }
                     if (!found) {
                         for ((i, p) in RstaSpoofManager.PROFILES.withIndex()) {
                             if (p.id == firstProfile.id) continue
@@ -535,7 +560,9 @@ fun EmergencyLevel3Screen(onBack: () -> Unit) {
 
                     // The real measurement, through whichever method answered. Skipped when the
                     // probe already covered every config there is.
-                    android.util.Log.d("SniMeasure", "found=$found; full pass=${found && probeSet.size < sniConfigs.size}")
+                    // Remembered either way: ECH when it is what carried, the front's method otherwise.
+                    if (found) withContext(Dispatchers.IO) { SniEch.set(context, viaEch) }
+                    android.util.Log.d("SniMeasure", "found=$found ech=$viaEch; full pass=${found && probeSet.size < sniConfigs.size}")
                     if (found && probeSet.size < sniConfigs.size) pass(sniConfigs)
 
                     // Adopt the fastest that answered, and only then -- same rule as the route scan.

@@ -121,6 +121,14 @@ fun routeName(context: Context, routeId: String?, family: FamilyPolicy? = null, 
         routeId == UsExitRoute.ID -> context.getString(R.string.mae_route_usexit)
         routeId.startsWith(UserConfigRoute.CLOUD_PREFIX) -> context.getString(R.string.mae_route_cloud)
         com.mlmvpn.scanner.engines.flux.FluxRoute.isFluxRoute(routeId) -> context.getString(R.string.flux_title_short)
+        routeId == com.mlmvpn.scanner.engines.fenix.FenixRoute.ID -> context.getString(R.string.fenix_title)
+        routeId == com.mlmvpn.scanner.engines.fenix.FenixRoute.US_ID ->
+            context.getString(R.string.fenix_title) + com.mlmvpn.scanner.store.tr(" · آمریکا", " · US")
+        routeId == com.mlmvpn.core.lantern.LanternRoute.ID -> context.getString(R.string.home_lantern)
+        routeId == com.mlmvpn.core.urnetwork.UrnetworkRoute.ID -> context.getString(R.string.home_urnetwork)
+        com.mlmvpn.scanner.engines.outline.OutlineRoute.isOutlineRoute(routeId) -> context.getString(R.string.outline_title)
+        com.mlmvpn.scanner.engines.amnezia.WgExitRoute.isProton(routeId) -> com.mlmvpn.scanner.store.tr("پروتون", "Proton")
+        com.mlmvpn.scanner.engines.amnezia.WgExitRoute.isWindscribe(routeId) -> com.mlmvpn.scanner.store.tr("ویندسکرایب", "Windscribe")
         routeId.startsWith(UserConfigRoute.PREFIX) -> context.getString(R.string.mae_route_config)
         else -> routeId
     }
@@ -147,7 +155,7 @@ private enum class Page { MAIN, MANAGE, PICKER, DIAGNOSTICS }
  * press on the status line.
  */
 @Composable
-fun MaeScreen(onBack: () -> Unit) {
+fun MaeScreen(onBack: () -> Unit, onOpenTile: (String) -> Unit = {}) {
     val context = LocalContext.current
     val ready by MaeEngine.ready.collectAsState()
     // The registry and the state are read off the main thread: the file grows with every network.
@@ -164,11 +172,11 @@ fun MaeScreen(onBack: () -> Unit) {
         }
         return
     }
-    MaeContent(onBack)
+    MaeContent(onBack, onOpenTile)
 }
 
 @Composable
-private fun MaeContent(onBack: () -> Unit) {
+private fun MaeContent(onBack: () -> Unit, onOpenTile: (String) -> Unit) {
     val context = LocalContext.current
     // Only whether onboarding is done: the whole state changes many times a second during checks.
     val onboarded by remember { MaeEngine.store.state.map { it.onboarded }.distinctUntilChanged() }
@@ -221,8 +229,8 @@ private fun MaeContent(onBack: () -> Unit) {
     // System Back closes a MAE sub-page before it leaves MAE.
     androidx.activity.compose.BackHandler(enabled = page != Page.MAIN) { page = Page.MAIN }
     when (page) {
-        Page.MANAGE -> { MaeManageScreen(onBack = { page = Page.MAIN }); return }
-        Page.PICKER -> { MaeManageScreen(onBack = { page = Page.MAIN }, openPicker = true); return }
+        Page.MANAGE -> { MaeManageScreen(onBack = { page = Page.MAIN }, onOpenTile = onOpenTile); return }
+        Page.PICKER -> { MaeManageScreen(onBack = { page = Page.MAIN }, openPicker = true, onOpenTile = onOpenTile); return }
         Page.DIAGNOSTICS -> { MaeDiagnosticsScreen(onBack = { page = Page.MAIN }); return }
         Page.MAIN -> Unit
     }
@@ -233,6 +241,12 @@ private fun MaeContent(onBack: () -> Unit) {
     val views by MaeEngine.viewsFlow.collectWhileVisible()
     val connected = ours && phase == MyVpnService.Phase.CONNECTED
     val connecting = ours && phase == MyVpnService.Phase.CONNECTING
+    // FENIX, Proton and Windscribe not set up yet: named under an app that found no exit abroad, a
+    // tap from their own tile -- one opens at once, several are offered to choose from.
+    val unset by produceState(emptyList<SetupExit>(), connected) {
+        value = withContext(Dispatchers.IO) { setupExits(context).filter { !it.ready } }
+    }
+    var setUpFor by remember { mutableStateOf<String?>(null) }
     // Set on the tap, cleared when the tunnel's state moves: building the config takes a moment,
     // and a button that shows nothing invites a second tap.
     var busy by remember { mutableStateOf(false) }
@@ -254,6 +268,19 @@ private fun MaeContent(onBack: () -> Unit) {
     removing?.let { def ->
         MaeConfirmRemove(serviceName(context, def), stringResource(R.string.mae_remove_confirm_body),
             onConfirm = { MaeEngine.remove(def.id) }, onDismiss = { removing = null })
+    }
+    setUpFor?.let { app ->
+        com.mlmvpn.scanner.ui.settings.IosAlert(
+            title = com.mlmvpn.scanner.store.tr("کدام را راه‌اندازی کنیم؟", "Which one to set up?"),
+            message = com.mlmvpn.scanner.store.tr(
+                "برای $app هنوز مسیر خارجی سالمی پیدا نشده. هر کدام از این‌ها را راه‌اندازی کنید، MAE خودش می‌سنجد کدام برای هر برنامه بهتر کار می‌کند؛ هرچه بیشتر، احتمال پیدا شدن راه بیشتر.",
+                "No working route abroad has been found for $app yet. Set up any of these and MAE measures by itself which works best for each app; the more of them, the likelier a way is found.",
+            ),
+            actions = unset.map { e ->
+                com.mlmvpn.scanner.ui.settings.IosAlertAction(e.title, onClick = { setUpFor = null; onOpenTile(e.tile) })
+            } + com.mlmvpn.scanner.ui.settings.IosAlertAction(stringResource(R.string.mae_cancel), onClick = { setUpFor = null }, preferred = true),
+            onDismiss = { setUpFor = null },
+        )
     }
 
     IosScreen(
@@ -284,6 +311,7 @@ private fun MaeContent(onBack: () -> Unit) {
             modifier = Modifier.fillMaxWidth()
                 .pointerInput(Unit) { detectTapGestures(onLongPress = { page = Page.DIAGNOSTICS }) },
         )
+        com.mlmvpn.scanner.ui.RouteChips()
 
         // The section's own action on its trailing edge, where iOS puts "Edit" or "See All".
         Row(
@@ -318,7 +346,9 @@ private fun MaeContent(onBack: () -> Unit) {
                             onOk = {
                                 MaeEngine.feedbackOk(v.def.id)
                                 if (connected) Toast.makeText(context, context.getString(R.string.mae_thanks), Toast.LENGTH_SHORT).show()
-                            }, onFail = { MaeEngine.feedbackFailed(v.def.id) })
+                            }, onFail = { MaeEngine.feedbackFailed(v.def.id) },
+                            setUp = unset,
+                            onSetUp = { if (unset.size == 1) onOpenTile(unset[0].tile) else setUpFor = serviceName(context, v.def) })
                     }
                 }
             }
@@ -506,6 +536,8 @@ private fun ServiceRow(
     onRecheck: () -> Unit,
     onOk: () -> Unit,
     onFail: () -> Unit,
+    setUp: List<SetupExit> = emptyList(),
+    onSetUp: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val name = serviceName(context, v.def)
@@ -549,6 +581,18 @@ private fun ServiceRow(
             Column(Modifier.weight(1f)) {
                 Text(name, color = Ios.Label, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(status, color = Ios.SecondaryLabel, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                // No exit abroad worked for this app: right under it, what is not set up yet -- the
+                // user's ask (2026-10-18), shown only while one of FENIX / Proton / Windscribe is missing.
+                val noExit = v.phase == MaeEngine.Phase.NO_FOREIGN_ROUTE || note?.kind == MaeEngine.NoteKind.NO_FOREIGN_EXIT
+                if (noExit && setUp.isNotEmpty()) {
+                    val names = sayList(setUp.map { it.title })
+                    Text(
+                        com.mlmvpn.scanner.store.tr("$names را راه‌اندازی کنید", "Set up $names"),
+                        color = Ios.Orange, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.combinedClickableCompat(onSetUp),
+                    )
+                }
             }
             if (!v.paused) {
                 // Check again: a spinner while this app is being checked.
