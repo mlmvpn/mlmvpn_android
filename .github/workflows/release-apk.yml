@@ -161,3 +161,8 @@ jobs:
           else
             gh release create "$TAG" dist/apk/*.apk --title "$TAG" --notes-file "$NOTES_FILE"
           fi
+          # A failed earlier attempt may have left the release as a draft named
+          # "(build failed)" -- publish it properly now that the build succeeded.
+          REL_ID=$(gh release view "$TAG" --json id --jq '.id')
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$REL_ID" \
+            --field draft=false --field name="$TAG" >/dev/null
