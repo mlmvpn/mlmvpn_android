@@ -641,6 +641,8 @@
     <string name="settings_theme_desc">حالت خودکار از تنظیم روشن/تاریک خود گوشی پیروی می‌کند.</string>
     <string name="settings_wallpaper_everywhere">تصویر زمینه در همه صفحات</string>
     <string name="settings_wallpaper_everywhere_desc">خاموش کنید تا همه صفحه‌ها به‌جز صفحه اصلی پس‌زمینه ساده داشته باشند.</string>
+    <string name="settings_perf_mode">حالت کارایی</string>
+    <string name="settings_perf_mode_desc">انیمیشن کمتر و افکت سبک‌تر — برای گوشی‌هایی که کند شده‌اند. روی دستگاه‌های کم‌حافظه به‌صورت خودکار روشن می‌شود؛ برای افکت کامل آن را خاموش کنید.</string>
 
     <string name="settings_dock_labels">نمایش عنوان آیکون‌های داک</string>
     <string name="settings_dock_labels_desc">نام چهار آیکون پایین صفحه اصلی را زیرشان نشان می‌دهد.</string>

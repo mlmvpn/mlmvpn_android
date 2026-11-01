@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -210,13 +211,33 @@ internal fun TileFace(
             .shadow(elevation = elevation, shape = Squircle, clip = false)
             .clip(Squircle)
             .background(
+                // Three stops rather than two: a lit crown, the body colour, then a shaded base.
+                // The two-stop version read as a flat tile with a stripe; the middle stop is what
+                // gives the face a curve.
                 Brush.verticalGradient(
                     listOf(
-                        lerp(app.tint, Color.White, 0.18f),
-                        lerp(app.tint, Color.Black, 0.14f),
+                        lerp(app.tint, Color.White, 0.24f),
+                        app.tint,
+                        lerp(app.tint, Color.Black, 0.22f),
                     )
                 )
-            ),
+            )
+            // The iOS gloss: a soft light across the top of the tile, drawn OVER the glyph as
+            // well — the real thing has the sheen across the whole icon, not just the background.
+            // It sits after `clip` in the chain, so the squircle still shapes it.
+            .drawWithContent {
+                drawContent()
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        listOf(
+                            Color.White.copy(alpha = 0.14f),
+                            Color.White.copy(alpha = 0f),
+                        ),
+                        startY = 0f,
+                        endY = size.height * 0.55f,
+                    ),
+                )
+            },
         contentAlignment = Alignment.Center,
     ) {
         Icon(

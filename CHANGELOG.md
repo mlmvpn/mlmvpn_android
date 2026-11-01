@@ -4,6 +4,16 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 
 فارسی این فایل در ادامه (پایین همین صفحه) آمده است.
 
+## [Unreleased]
+
+### Added
+- **Performance mode** (Settings › Display › Performance mode), aimed at the reports of the app hanging on older phones. On a low-memory device — detected automatically via the low-RAM flag, a memory class of 128 MB or below, or the system "remove animations" setting — the app now draws one static frame of the drifting lights instead of animating them, renders the wallpaper at half resolution, skips the per-frame platform blur, stops the icon jiggle in edit mode, and skips the launch intro. The toggle can force the mode on or off on any phone.
+
+### Changed
+- **The tunnel connection log no longer writes to disk on the caller's thread.** Psiphon emits several hundred log lines in under two seconds while connecting, and each append was a synchronous file write inside a lock — on older phones' flash storage that blocked the logging thread (main included) for the whole burst. The ring buffer in memory is unchanged; only the file mirror moved to a single background writer.
+- **The subscription auto-sync starts two seconds after launch, off the main thread**, instead of building its managers on the launch path before the first frame.
+- Home screen: icon tiles got a three-stop gradient and an iOS-style gloss sheen; the status strip is now a frosted-glass pill showing the connected/disconnected verdict; page dots stretch into a pill on the current page; wallpapers get a faint vignette so the icon board sits in the scene.
+
 ## [1.2.39] — 2026-10-01
 
 ### Added

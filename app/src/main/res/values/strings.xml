@@ -645,6 +645,8 @@
     <string name="settings_theme_desc">Automatic follows your phone\'s light/dark setting.</string>
     <string name="settings_wallpaper_everywhere">Wallpaper on every screen</string>
     <string name="settings_wallpaper_everywhere_desc">Off gives every screen except the home screen a plain background.</string>
+    <string name="settings_perf_mode">Performance mode</string>
+    <string name="settings_perf_mode_desc">Fewer animations and lighter effects — for phones that feel slow. Turned on automatically on low-memory devices; switch off to force full effects.</string>
 
     <string name="settings_dock_labels">Dock labels</string>
     <string name="settings_dock_labels_desc">Shows the names under the four dock icons.</string>

@@ -24,6 +24,9 @@ class MlmApp : Application() {
         // or Loc would pin the device's language instead of the one the user chose.
         com.mlmvpn.scanner.utils.AppLocaleManager.init(this)
         com.mlmvpn.scanner.utils.Loc.bind(this)
+        // Read once, here, so every screen can ask whether this device should run in
+        // performance mode (lighter animation and rendering) without re-detecting.
+        com.mlmvpn.scanner.utils.Perf.init(this)
         // Listen for the transport stack's status broadcasts from process start, not from the
         // first time a transport screen opens. The tunnel can be started by the Quick Settings
         // tile and restored by the boot receiver, and a screen opened afterwards would

@@ -257,6 +257,19 @@ fun DrawScope.drawWallpaper(preset: WallpaperPreset, softness: Float = 0f) {
             )
         )
     }
+    // A faint vignette: the centre keeps the light, the corners fall away. One radial gradient
+    // over what is already drawn, and it makes the icon board sit "in" the scene rather than on
+    // a flat colour — the difference between a wallpaper and a background fill.
+    drawRect(
+        brush = Brush.radialGradient(
+            colorStops = arrayOf(
+                0.52f to Color.Transparent,
+                1f to Color.Black.copy(alpha = 0.30f),
+            ),
+            center = Offset(size.width / 2f, size.height * 0.42f),
+            radius = span * 0.78f,
+        )
+    )
 }
 
 /**
@@ -438,11 +451,15 @@ fun HomeWallpaper(
     val context = LocalContext.current
     val density = LocalDensity.current
     val blur = blurPercent.coerceIn(0, 100)
+    // Performance mode renders the backdrop at half resolution even without the blur slider:
+    // a preset goes to an offscreen bitmap at full window size otherwise, and several
+    // full-screen radial gradients per frame are more fill-rate than an old GPU has to spare.
+    val lowEnd = com.mlmvpn.scanner.utils.Perf.isLowEnd(context)
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val wPx = with(density) { maxWidth.toPx() }.toInt().coerceAtLeast(1)
         val hPx = with(density) { maxHeight.toPx() }.toInt().coerceAtLeast(1)
-        val scale = blurScale(blur)
+        val scale = if (lowEnd) minOf(blurScale(blur), 0.5f) else blurScale(blur)
 
         if (wallpaperId == Wallpapers.CUSTOM_ID) {
             // A real blur where the platform has one. `Modifier.blur` arrived in API 31, and
@@ -451,7 +468,10 @@ fun HomeWallpaper(
             // blurring by throwing pixels away, and past a gentle setting that stops looking like
             // defocus and starts looking like a low-resolution image, which is exactly what it
             // was. Below API 31 there is no choice, so the old path stays as the fallback.
-            val realBlur = android.os.Build.VERSION.SDK_INT >= 31
+            // In performance mode the per-frame platform blur is skipped even on API 31+: a
+            // full-screen blur every frame is exactly what an old GPU cannot afford, and the
+            // render-small path looks the same at these blur strengths.
+            val realBlur = android.os.Build.VERSION.SDK_INT >= 31 && !lowEnd
             val decodeScale = if (realBlur) 1f else scale
             val image = remember(Wallpapers.customRevision, decodeScale, wPx, hPx) {
                 CustomWallpaper.load(
@@ -494,11 +514,17 @@ fun HomeWallpaper(
         }
 
         val preset = Wallpapers.byId(wallpaperId)
-        if (blur == 0) {
+        // Performance mode takes the offscreen-bitmap path even at blur 0: drawing four
+        // full-screen radial gradients straight to the screen costs more fill-rate on an old
+        // GPU than rendering them once into a half-size bitmap and upscaling.
+        if (blur == 0 && !lowEnd) {
             Canvas(modifier = Modifier.fillMaxSize()) { drawWallpaper(preset) }
         } else {
             val softness = blur / 100f
-            val small = remember(preset.id, blur, wPx, hPx) {
+            // `scale` is in the key on purpose: it carries the performance-mode cap, so toggling
+            // the mode re-renders the offscreen bitmap at the new resolution instead of showing
+            // the old one.
+            val small = remember(preset.id, blur, scale, wPx, hPx) {
                 renderPreset(
                     preset,
                     (wPx * scale).toInt().coerceAtLeast(8),

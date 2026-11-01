@@ -76,6 +76,12 @@ fun SplashScreen(onFinished: () -> Unit) {
     val exitAlpha = remember { Animatable(1f) }
 
     LaunchedEffect(Unit) {
+        // Performance mode skips the intro: ~4s of full-screen animation is the heaviest single
+        // thing the app does at launch, and on an old GPU it reads as a hang, not a flourish.
+        if (com.mlmvpn.scanner.utils.Perf.isLowEnd(androidx.compose.ui.platform.LocalContext.current)) {
+            onFinished()
+            return@LaunchedEffect
+        }
         arcSweep.animateTo(1f, tween(620, easing = FastOutSlowInEasing))
         markAlpha.animateTo(1f, tween(280))
         dotScale.animateTo(1f, tween(240, easing = FastOutSlowInEasing))

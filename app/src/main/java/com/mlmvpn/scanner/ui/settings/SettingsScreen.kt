@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Contrast
@@ -971,6 +972,18 @@ private fun DisplayPage(
                 onCheckedChange = { Appearance.setWallpaperEverywhere(context, it) },
                 icon = Icons.Default.Layers,
                 tint = Ios.Teal,
+            )
+            Separator()
+            // On when the device was detected as low-end (the switch shows that detection), and
+            // either way it can be forced: on for a phone that still feels slow, off to get the
+            // full effects back on a device that was misdetected.
+            SettingsToggle(
+                title = stringResource(R.string.settings_perf_mode),
+                subtitle = stringResource(R.string.settings_perf_mode_desc),
+                checked = com.mlmvpn.scanner.utils.Perf.isLowEnd(context),
+                onCheckedChange = { com.mlmvpn.scanner.utils.Perf.setEnabled(context, it) },
+                icon = Icons.Default.Bolt,
+                tint = Ios.Orange,
             )
         }
 
