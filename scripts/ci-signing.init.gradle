@@ -25,6 +25,11 @@ allprojects { p ->
                 sc.storePassword = System.getenv('KEYSTORE_PASS')
                 sc.keyAlias = System.getenv('KEY_ALIAS')
                 sc.keyPassword = System.getenv('KEY_PASS')
+                // targetSdk is 34: Android 11+ refuses APKs without scheme v2+,
+                // so make all schemes explicit instead of relying on defaults.
+                sc.v1SigningEnabled = true
+                sc.v2SigningEnabled = true
+                sc.v3SigningEnabled = true
                 // Sign every non-debug buildType (release and the ci variant); debug
                 // keeps its own debug key.
                 ['release', 'ci'].each { name ->

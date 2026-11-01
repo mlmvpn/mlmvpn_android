@@ -133,6 +133,38 @@ jobs:
           cp app/build/outputs/apk/ci/*.apk dist/apk/
           ls -la dist/apk/
 
+      - name: Verify APK identity (package name + signing schemes)
+        # The installer only offers "Install" (instead of "Update") next to the
+        # official app if the APK's package really is com.mlmvpn.scanner.ci.
+        # Print the real package name (aapt2 dump badging) and signing schemes
+        # (apksigner verify) of every APK into /tmp/verify.txt -- the release
+        # notes include it, so anyone can confirm the package before download.
+        # Fails the build if any APK is NOT com.mlmvpn.scanner.ci.
+        run: |
+          : > /tmp/verify.txt
+          AAPT2="$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)"
+          APKSIGNER="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          echo "tools: AAPT2=$AAPT2 APKSIGNER=$APKSIGNER" | tee -a /tmp/verify.txt
+          BAD=0
+          for apk in dist/apk/*.apk; do
+            echo "== $(basename "$apk")" >> /tmp/verify.txt
+            PKG="$("$AAPT2" dump badging "$apk" | head -1)"
+            echo "$PKG" >> /tmp/verify.txt
+            case "$PKG" in
+              "package: name='com.mlmvpn.scanner.ci'"*) : ;;
+              *) BAD=1; echo "::error ::$(basename "$apk") has unexpected package: $PKG" ;;
+            esac
+            "$APKSIGNER" verify --verbose --print-certs "$apk" 2>&1 \
+              | grep -E "^(Verifies|Verified using|Number of signers|Signer .* certificate DN)" >> /tmp/verify.txt \
+              || echo "apksigner verify FAILED for $(basename "$apk")" >> /tmp/verify.txt
+          done
+          cat /tmp/verify.txt
+          if [ "$BAD" -ne 0 ]; then
+            echo "::error ::at least one built APK is not com.mlmvpn.scanner.ci -- it would NOT install next to the official app"
+            exit 1
+          fi
+          echo "OK: every built APK is package com.mlmvpn.scanner.ci"
+
       - name: Upload APKs as workflow artifacts
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
@@ -158,6 +190,13 @@ jobs:
             echo "---"
             echo
             sed -n '/^## \[Unreleased\]/,/^## \[1\.2\.39\]/p' CHANGELOG.md | sed '$d'
+            if [ -f /tmp/verify.txt ]; then
+              echo
+              echo "### APK identity check (aapt2 dump badging / apksigner verify)"
+              echo '```'
+              cat /tmp/verify.txt
+              echo '```'
+            fi
           } > "$NOTES_FILE"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --notes-file "$NOTES_FILE"
