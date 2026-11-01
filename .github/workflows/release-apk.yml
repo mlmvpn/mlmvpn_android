@@ -82,7 +82,10 @@ jobs:
         run: |
           java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain --version
 
-      - name: Build signed release APKs (all ABIs + universal)
+      - name: Build signed CI APKs (all ABIs + universal)
+        # The `ci` buildType == release + applicationIdSuffix '.ci', so the APK
+        # installs NEXT TO the official app (different package, CI key) instead of
+        # being rejected as a signature-mismatched update of it.
         # Invoke the wrapper JAR directly rather than through gradlew: it is exactly
         # what the sanity check above already proved works on this runner.
         run: |
@@ -90,7 +93,7 @@ jobs:
           java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain \
             --no-daemon --stacktrace \
             -I scripts/ci-signing.init.gradle \
-            assembleRelease -x lintVitalRelease 2>&1 | tee /tmp/build.log
+            assembleCi -x lintVitalCi 2>&1 | tee /tmp/build.log
 
       - name: Surface the build log as annotations (on failure)
         # Runner log downloads are not reachable from everywhere, so on failure the
@@ -127,7 +130,7 @@ jobs:
       - name: Collect APKs
         run: |
           mkdir -p dist/apk
-          cp app/build/outputs/apk/release/*.apk dist/apk/
+          cp app/build/outputs/apk/ci/*.apk dist/apk/
           ls -la dist/apk/
 
       - name: Upload APKs as workflow artifacts
@@ -147,7 +150,8 @@ jobs:
           {
             echo "### ${TAG}"
             echo
-            echo "Built from commit \`${GITHUB_SHA}\`. Signed with an ephemeral CI key — do not mix installs with official releases."
+            echo "Built from commit \`${GITHUB_SHA}\` (ci variant, applicationId \`com.mlmvpn.scanner.ci\`)."
+            echo "Installs NEXT TO the official MLM VPN app — the official key is not in this repo, so a same-package build could never update over it. Signed with an ephemeral CI key."
             echo
             echo "APKs: arm64-v8a, armeabi-v7a and universal."
             echo

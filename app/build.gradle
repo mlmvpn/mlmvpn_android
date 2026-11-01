@@ -10,6 +10,9 @@ android {
 
     defaultConfig {
         applicationId "com.mlmvpn.scanner"
+        // The launcher label reads this placeholder; the default is the string resource,
+        // the ci buildType overrides it with a literal so CI builds are recognisable.
+        manifestPlaceholders = [appLabel: '@string/app_name']
         minSdk 24
         targetSdk 34
         versionCode 74
@@ -74,6 +77,20 @@ android {
             // shrinkResources left off — res is tiny and dynamic lookups exist.
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        // CI-only variant: identical to release, but with its own applicationId so the
+        // CI-signed APK installs NEXT TO the official app instead of being rejected as
+        // a signature-mismatched update of it. The official release key is not in the
+        // repo, so a same-package CI build can never update over an official install.
+        // FileProvider authorities already use ${applicationId}, and all code reads
+        // context.packageName dynamically, so the suffix is safe. The launcher label is
+        // overridden via the appLabel manifest placeholder so the two apps are
+        // distinguishable. Note: Google Sign-In (Cloudflare auto-deploy) is registered
+        // per package name + signing key, so it will not work in this variant.
+        ci {
+            initWith release
+            applicationIdSuffix '.ci'
+            manifestPlaceholders = [appLabel: 'Mlm Vpn CI']
         }
     }
 

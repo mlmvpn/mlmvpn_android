@@ -25,7 +25,12 @@ allprojects { p ->
                 sc.storePassword = System.getenv('KEYSTORE_PASS')
                 sc.keyAlias = System.getenv('KEY_ALIAS')
                 sc.keyPassword = System.getenv('KEY_PASS')
-                androidExt.buildTypes.getByName('release').signingConfig = sc
+                // Sign every non-debug buildType (release and the ci variant); debug
+                // keeps its own debug key.
+                ['release', 'ci'].each { name ->
+                    def bt = androidExt.buildTypes.findByName(name)
+                    if (bt != null) bt.signingConfig = sc
+                }
             }
         }
     }
