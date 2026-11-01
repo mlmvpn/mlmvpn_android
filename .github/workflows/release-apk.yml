@@ -1,0 +1,115 @@
+name: Release APK
+
+# Push a tag like `v1.2.39-perf.1` and this builds the signed release APKs
+# (arm64-v8a, armeabi-v7a and universal) and attaches them to a GitHub Release
+# of the same name. It can also be started by hand from the Actions tab
+# (workflow_dispatch); then the APKs are only uploaded as workflow artifacts
+# and no release is created.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build release APKs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with Git LFS objects)
+        uses: actions/checkout@v4
+        with:
+          # jniLibs/*.so and assets/*.dat are Git LFS objects -- without this the
+          # checkout holds 130-byte pointer files and the APK has no native cores.
+          lfs: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        run: |
+          export ANDROID_HOME="$HOME/android-sdk"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-34" "build-tools;35.0.0" "platform-tools"
+
+      - name: Drop machine-specific lines from gradle.properties
+        # The committed gradle.properties carries one developer's Windows paths
+        # (org.gradle.java.home=C:/...) and a local SOCKS proxy (127.0.0.1:10808).
+        # Both would break a Linux CI build, so they are removed HERE ONLY --
+        # the file in the repo is left untouched for local development.
+        run: |
+          sed -i -E '/^(org\.gradle\.jvmargs|org\.gradle\.java\.home|org\.gradle\.java\.installations\.paths|systemProp\.socksProxyHost|systemProp\.socksProxyPort|systemProp\.socksNonProxyHosts)=/d' gradle.properties
+          echo 'org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8' >> gradle.properties
+          cat gradle.properties
+
+      - name: Cache Gradle
+        uses: gradle/gradle-build-action@v3
+
+      - name: Generate an ephemeral signing keystore
+        # The release buildType has no signingConfig in the repo (release keys are
+        # never committed), so CI signs with a throwaway key. The resulting APKs
+        # install fine on their own; they just cannot update over an official,
+        # differently-signed release.
+        run: |
+          keytool -genkeypair -keystore "$PWD/ci-release.keystore" -storetype PKCS12 \
+            -alias mlmvpn-ci -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass mlmvpn-ci -keypass mlmvpn-ci \
+            -dname "CN=MLMVPN CI, OU=CI, O=MLMVPN, C=NL"
+          echo "KEYSTORE_PATH=$PWD/ci-release.keystore" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASS=mlmvpn-ci" >> "$GITHUB_ENV"
+          echo "KEY_ALIAS=mlmvpn-ci" >> "$GITHUB_ENV"
+          echo "KEY_PASS=mlmvpn-ci" >> "$GITHUB_ENV"
+
+      - name: Build signed release APKs (all ABIs + universal)
+        run: ./gradlew --no-daemon --stacktrace -I scripts/ci-signing.init.gradle assembleRelease -x lintVitalRelease
+
+      - name: Collect APKs
+        run: |
+          mkdir -p dist/apk
+          cp app/build/outputs/apk/release/*.apk dist/apk/
+          ls -la dist/apk/
+
+      - name: Upload APKs as workflow artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlmvpn-release-apks
+          path: dist/apk/*.apk
+
+      - name: Create or update the GitHub Release
+        if: github.event_name == 'push' && startsWith(github.ref_name, 'v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES_FILE=/tmp/notes.md
+          {
+            echo "### ${TAG}"
+            echo
+            echo "Built from commit \`${GITHUB_SHA}\`. Signed with an ephemeral CI key — do not mix installs with official releases."
+            echo
+            echo "APKs: arm64-v8a, armeabi-v7a and universal."
+            echo
+            echo "---"
+            echo
+            sed -n '/^## \[Unreleased\]/,/^## \[1\.2\.39\]/p' CHANGELOG.md | sed '$d'
+          } > "$NOTES_FILE"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file "$NOTES_FILE"
+            gh release upload "$TAG" dist/apk/*.apk --clobber
+          else
+            gh release create "$TAG" dist/apk/*.apk --title "$TAG" --notes-file "$NOTES_FILE"
+          fi

@@ -7,6 +7,7 @@ All notable changes to the MLM VPN Android app are documented here. Dates are in
 ## [Unreleased]
 
 ### Added
+- **CI release pipeline** (`.github/workflows/release-apk.yml`): pushing a tag `v*` builds the signed release APKs (arm64-v8a, armeabi-v7a, universal) on a fresh runner — with Git LFS objects pulled and an ephemeral signing key injected via `scripts/ci-signing.init.gradle` — and attaches them to a GitHub Release of the same name. Also runnable by hand from the Actions tab (APKs as workflow artifacts only).
 - **Performance mode** (Settings › Display › Performance mode), aimed at the reports of the app hanging on older phones. On a low-memory device — detected automatically via the low-RAM flag, a memory class of 128 MB or below, or the system "remove animations" setting — the app now draws one static frame of the drifting lights instead of animating them, renders the wallpaper at half resolution, skips the per-frame platform blur, stops the icon jiggle in edit mode, and skips the launch intro. The toggle can force the mode on or off on any phone.
 
 ### Changed

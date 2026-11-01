@@ -1,0 +1,24 @@
+// CI-only signing injection. The release buildType deliberately has NO
+// signingConfig in the repo (release keys are never committed), so an unsigned
+// APK is what `assembleRelease` produces locally. This init script signs it with
+// an ephemeral keystore passed through environment variables:
+//
+//   ./gradlew -I scripts/ci-signing.init.gradle assembleRelease
+//
+// with KEYSTORE_PATH / KEYSTORE_PASS / KEY_ALIAS / KEY_PASS set (see
+// .github/workflows/release-apk.yml). Without KEYSTORE_PATH the script does
+// nothing, so local builds behave exactly as before.
+allprojects { p ->
+    afterEvaluate {
+        if (p.plugins.hasPlugin('com.android.application')) {
+            def ks = System.getenv('KEYSTORE_PATH')
+            if (ks != null && new File(ks).isFile()) {
+                p.android.signingConfigs.release.storeFile = p.file(ks)
+                p.android.signingConfigs.release.storePassword = System.getenv('KEYSTORE_PASS')
+                p.android.signingConfigs.release.keyAlias = System.getenv('KEY_ALIAS')
+                p.android.signingConfigs.release.keyPassword = System.getenv('KEY_PASS')
+                p.android.buildTypes.release.signingConfig = p.android.signingConfigs.release
+            }
+        }
+    }
+}
