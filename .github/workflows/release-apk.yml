@@ -80,18 +80,16 @@ jobs:
           set -o pipefail
           sh gradlew --no-daemon --stacktrace -I scripts/ci-signing.init.gradle assembleRelease -x lintVitalRelease 2>&1 | tee /tmp/build.log
 
-      - name: Surface the build error as annotations (on failure)
-        # The runner log download is not always reachable from everywhere, so on
-        # failure the interesting lines are echoed as workflow annotations --
-        # which ARE available through the plain REST API -- and the tail goes to
-        # the job summary.
+      - name: Surface the build log as annotations (on failure)
+        # Runner log downloads are not reachable from everywhere, so on failure the
+        # log tail is echoed as workflow annotations -- which ARE available through
+        # the plain REST API (check-runs/.../annotations) -- plus the job summary.
         if: failure()
         run: |
-          grep -E "e: file:|error:|FAILURE:|What went wrong|Execution failed|Caused by|> Task .* FAILED|Exception" /tmp/build.log | head -40 | while IFS= read -r l; do echo "::error ::$l"; done
-          echo '### Last 40 lines of the build log' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -40 /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "::error ::build.log has $(wc -l < /tmp/build.log) lines"
+          grep -iE "error|exception|fail|caused by|what went wrong" /tmp/build.log | head -20 | while IFS= read -r l; do echo "::error ::$l"; done
+          tail -n 45 /tmp/build.log | while IFS= read -r l; do echo "::error ::$l"; done
+          { echo '### Build log tail (failure)'; echo '```'; tail -60 /tmp/build.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Collect APKs
         run: |
