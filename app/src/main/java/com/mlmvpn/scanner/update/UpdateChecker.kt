@@ -28,7 +28,7 @@ import com.mlmvpn.scanner.R
 import com.mlmvpn.scanner.utils.S
 
 /**
- * Checks the GitHub "latest release" of mlmvpn/mlmvpn_android against the installed
+ * Checks the GitHub "latest release" of arshia8058/mlmvpn_android (this fork) against the installed
  * versionName and, if newer, downloads + installs the APK. Every network call here is
  * best-effort: GitHub is blocked for many users in Iran, so a failure (no internet,
  * DNS/TLS block, rate limit, malformed response) must never interrupt anything else -- but it is

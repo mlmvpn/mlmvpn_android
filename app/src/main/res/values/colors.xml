@@ -3,19 +3,19 @@
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
 
-    <!-- Google Dark Theme - Material Design 3 -->
-    <color name="gs_bg">#0F0F0F</color>
-    <color name="gs_surface">#1C1B1F</color>
-    <color name="gs_surface2">#232327</color>
-    <color name="gs_panel">#1C1B1F</color>
-    <color name="gs_card">#2A2930</color>
-    <color name="gs_outline">#49454F</color>
-    <color name="gs_outline_variant">#302D38</color>
+    <!-- Nebula dark theme (violet) - Material Design 3 -->
+    <color name="gs_bg">#0A0614</color>
+    <color name="gs_surface">#1B1330</color>
+    <color name="gs_surface2">#241B40</color>
+    <color name="gs_panel">#1B1330</color>
+    <color name="gs_card">#2C2350</color>
+    <color name="gs_outline">#453A6E</color>
+    <color name="gs_outline_variant">#322A52</color>
 
-    <!-- Google Blue (Primary) -->
-    <color name="gs_primary">#8AB4F8</color>
-    <color name="gs_primary_dim">#4A90D9</color>
-    <color name="gs_primary_container">#1A3050</color>
+    <!-- Violet (Primary) -->
+    <color name="gs_primary">#B9A3FF</color>
+    <color name="gs_primary_dim">#7C5CFC</color>
+    <color name="gs_primary_container">#2A1E55</color>
 
     <!-- Google Green (Secondary/Active) -->
     <color name="gs_secondary">#81C995</color>

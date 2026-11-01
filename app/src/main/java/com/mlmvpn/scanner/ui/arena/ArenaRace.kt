@@ -100,7 +100,7 @@ object RaceColors {
     val LightOn = Color(0xFFFF3B30)
     val Go = Color(0xFF30D158)
     val Out = Color(0xFFFF453A)
-    val Progress = Color(0xFF0A84FF)
+    val Progress = Color(0xFF8B5CF6)
     val Gold = Color(0xFFFFD60A)
     val Silver = Color(0xFFC7C7CC)
     val Bronze = Color(0xFFC08B5C)

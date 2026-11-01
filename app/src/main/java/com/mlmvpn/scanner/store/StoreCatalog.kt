@@ -31,7 +31,7 @@ import com.mlmvpn.scanner.R
  */
 object StoreCatalog {
 
-    private val Blue = Color(0xFF0A84FF)
+    private val Blue = Color(0xFF8B5CF6)
     private val Indigo = Color(0xFF5E5CE6)
     private val Green = Color(0xFF32D74B)
     private val Orange = Color(0xFFFF9F0A)

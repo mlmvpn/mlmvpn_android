@@ -4,6 +4,10 @@
 *.apk filter=lfs diff=lfs merge=lfs -text
 *.aab filter=lfs diff=lfs merge=lfs -text
 
+# The CI signing keystore is binary: byte-exact, or every build would sign with
+# a different key and in-app updates between CI builds would be rejected.
+ci/*.keystore -text
+
 # Signed test fixtures: byte-exact, or their signatures stop verifying.
 app/src/test/resources/geph/* -text
 

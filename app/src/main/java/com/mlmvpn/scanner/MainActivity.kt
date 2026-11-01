@@ -66,10 +66,10 @@ class MainActivity : AppCompatActivity() {
             val darkTheme = com.mlmvpn.scanner.ui.home.Appearance.isDark()
             val colorScheme = if (darkTheme) {
                 androidx.compose.material3.darkColorScheme(
-                    primary = androidx.compose.ui.graphics.Color(0xFF8AB4F8),
+                    primary = androidx.compose.ui.graphics.Color(0xFFC4B0FF),
                     onPrimary = androidx.compose.ui.graphics.Color(0xFF202124),
-                    primaryContainer = androidx.compose.ui.graphics.Color(0xFF8AB4F8).copy(alpha = 0.2f),
-                    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF8AB4F8),
+                    primaryContainer = androidx.compose.ui.graphics.Color(0xFFC4B0FF).copy(alpha = 0.2f),
+                    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFFC4B0FF),
                     surface = androidx.compose.ui.graphics.Color(0xFF202124),
                     onSurface = androidx.compose.ui.graphics.Color(0xFFE8EAED),
                     background = androidx.compose.ui.graphics.Color(0xFF121212),
@@ -80,9 +80,9 @@ class MainActivity : AppCompatActivity() {
                 // both appearances, so a light scheme here would hand Material components black
                 // type on surfaces the rest of the app draws white type on.
                 androidx.compose.material3.darkColorScheme(
-                    primary = androidx.compose.ui.graphics.Color(0xFF0A84FF),
+                    primary = androidx.compose.ui.graphics.Color(0xFF8B5CF6),
                     onPrimary = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
-                    primaryContainer = androidx.compose.ui.graphics.Color(0xFF0A84FF).copy(alpha = 0.25f),
+                    primaryContainer = androidx.compose.ui.graphics.Color(0xFF8B5CF6).copy(alpha = 0.25f),
                     onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
                     surface = androidx.compose.ui.graphics.Color(0xFF2C2C2E),
                     onSurface = androidx.compose.ui.graphics.Color(0xFFFFFFFF),

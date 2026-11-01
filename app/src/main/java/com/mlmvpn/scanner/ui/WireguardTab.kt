@@ -876,7 +876,7 @@ object AppColors {
     val SurfaceDark = Color(0xFF222222)
     val SurfaceVariant = Color(0xFF2A2A2A)
     val Primary = Color(0xFF81C995)
-    val PrimaryBlue = Color(0xFF8AB4F8)
+    val PrimaryBlue = Color(0xFFC4B0FF)
     val TextPrimary = Color(0xFFE8EAED)
     val TextMuted = Color(0xFF9AA0A6)
     val BorderDark = Color(0xFF333333)

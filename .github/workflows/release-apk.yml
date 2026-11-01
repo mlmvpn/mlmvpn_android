@@ -183,7 +183,7 @@ jobs:
             echo "### ${TAG}"
             echo
             echo "Built from commit \`${GITHUB_SHA}\` (ci variant, applicationId \`com.mlmvpn.scanner.ci\`)."
-            echo "Installs NEXT TO the official MLM VPN app — the official key is not in this repo, so a same-package build could never update over it. Signed with an ephemeral CI key."
+            echo "Installs NEXT TO the official MLM VPN app — the official key is not in this repo, so a same-package build could never update over it. Signed with the stable CI key (ci/ci-release.keystore), so the in-app updater can update one CI build over the previous one."
             echo
             echo "APKs: arm64-v8a, armeabi-v7a and universal."
             echo

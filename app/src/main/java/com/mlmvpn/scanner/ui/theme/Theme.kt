@@ -87,10 +87,10 @@ val ConnectedRed: Color
 // a menu opened as a grey #202124 card with a Google-blue highlight in the middle of a black
 // glass app -- the "ugly, unprofessional" region picker. These are the same values the composable
 // tokens resolve to in dark mode, so a Material surface now matches a hand-styled one.
-private val SchemeBg = Color(0xFF000000)
-private val SchemeSurface = Color(0xFF1C1C1E)
-private val SchemeBorder = Color(0xFF3A3A3C)
-private val SchemePrimary = Color(0xFF0A84FF)
+private val SchemeBg = Color(0xFF0A0614)
+private val SchemeSurface = Color(0xFF1B1330)
+private val SchemeBorder = Color(0xFF3D2F5C)
+private val SchemePrimary = Color(0xFF9D7BFF)
 private val SchemeOnSurface = Color(0xFFFFFFFF)
 
 private val DarkColorScheme = darkColorScheme(

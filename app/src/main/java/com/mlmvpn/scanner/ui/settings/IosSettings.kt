@@ -124,9 +124,9 @@ object Ios {
      */
     val CardOverWallpaper: Color
         @Composable get() = if (Appearance.isDark()) {
-            Color(0xFF1C1C1E).copy(alpha = 0.82f)
+            Color(0xFF1B1330).copy(alpha = 0.82f)
         } else {
-            Color(0xFF48484A).copy(alpha = 0.62f)
+            Color(0xFF3A2D5C).copy(alpha = 0.62f)
         }
 
     /**
@@ -173,7 +173,7 @@ object Ios {
         @Composable get() = if (Appearance.isDark()) Color(0xFFFF453A) else Color(0xFFFF3B30)
 
     val Blue: Color
-        @Composable get() = if (Appearance.isDark()) Color(0xFF0A84FF) else Color(0xFF007AFF)
+        @Composable get() = if (Appearance.isDark()) Color(0xFF9D7BFF) else Color(0xFF6D4AFF)
     val Green: Color
         @Composable get() = if (Appearance.isDark()) Color(0xFF32D74B) else Color(0xFF34C759)
     val Indigo: Color

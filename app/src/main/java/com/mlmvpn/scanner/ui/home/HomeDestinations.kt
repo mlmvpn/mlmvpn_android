@@ -75,7 +75,7 @@ object HomeDestinations {
 
     // Apple's system colours. Using the real values rather than approximations is most of what
     // makes a grid of squircles read as "an iPhone home screen" instead of "coloured squares".
-    val Blue   = Color(0xFF007AFF)
+    val Blue   = Color(0xFF6D4AFF)
     val Green  = Color(0xFF34C759)
     val Indigo = Color(0xFF5856D6)
     val Orange = Color(0xFFFF9500)

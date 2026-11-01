@@ -153,7 +153,7 @@ fun CreatedConfigsCard(made: List<LocationConfigs.Made>) {
 
 /** One colour per protocol, used wherever a protocol is drawn. */
 fun protocolTint(shape: ConfigShape) = when (shape) {
-    ConfigShape.VLESS_WS -> androidx.compose.ui.graphics.Color(0xFF0A84FF)
+    ConfigShape.VLESS_WS -> androidx.compose.ui.graphics.Color(0xFF8B5CF6)
     ConfigShape.TROJAN_WS -> androidx.compose.ui.graphics.Color(0xFFBF5AF2)
     ConfigShape.VLESS_XHTTP -> androidx.compose.ui.graphics.Color(0xFFFF9F0A)
 }

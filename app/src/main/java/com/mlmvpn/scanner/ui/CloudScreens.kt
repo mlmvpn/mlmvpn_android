@@ -555,7 +555,7 @@ fun panelTint(engine: String): Color = when (engine) {
     "NTR" -> Color(0xFF9B59F6)
     "GZG" -> Color(0xFF40C8E0)
     "NVA" -> Color(0xFF5E5CE6)
-    else -> Color(0xFF0A84FF)
+    else -> Color(0xFF8B5CF6)
 }
 
 fun panelName(engine: String): String = when (engine) {

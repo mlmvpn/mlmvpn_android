@@ -62,7 +62,7 @@ fun MaeAppIcon(def: ServiceDef, label: String, size: Dp = 36.dp) {
 private val cache = HashMap<String, ImageBitmap>()
 
 private val PALETTE = listOf(
-    Color(0xFF0A84FF), Color(0xFF30D158), Color(0xFFFF9F0A), Color(0xFFFF375F),
+    Color(0xFF8B5CF6), Color(0xFF30D158), Color(0xFFFF9F0A), Color(0xFFFF375F),
     Color(0xFFBF5AF2), Color(0xFF64D2FF), Color(0xFFFF6482), Color(0xFF5E5CE6),
 )
 
