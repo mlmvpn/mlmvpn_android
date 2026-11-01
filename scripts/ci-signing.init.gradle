@@ -9,30 +9,23 @@
 // .github/workflows/release-apk.yml). Without KEYSTORE_PATH the script does
 // nothing, so local builds behave exactly as before.
 //
-// The configuration goes through extensions.configure('android') rather than
-// property access: that is the form which creates the signingConfigs.release
-// element if AGP has not made it yet, so it cannot throw UnknownDomainObject
-// during project configuration.
+// Written with explicit container APIs (maybeCreate / getByName) rather than the
+// DSL closure form: inside an init script the closure delegate resolves against
+// the project first, and `signingConfigs { ... }` then fails with
+// "Could not find method signingConfigs() ... on project ':app'" during
+// configuration -- which is exactly how the first CI attempt died.
 allprojects { p ->
     p.afterEvaluate {
         if (p.plugins.hasPlugin('com.android.application')) {
             def ks = System.getenv('KEYSTORE_PATH')
             if (ks != null && new File(ks).isFile()) {
-                p.extensions.configure('android') {
-                    signingConfigs {
-                        release {
-                            storeFile = p.file(ks)
-                            storePassword = System.getenv('KEYSTORE_PASS')
-                            keyAlias = System.getenv('KEY_ALIAS')
-                            keyPassword = System.getenv('KEY_PASS')
-                        }
-                    }
-                    buildTypes {
-                        release {
-                            signingConfig = signingConfigs.release
-                        }
-                    }
-                }
+                def androidExt = p.extensions.getByName('android')
+                def sc = androidExt.signingConfigs.maybeCreate('release')
+                sc.storeFile = p.file(ks)
+                sc.storePassword = System.getenv('KEYSTORE_PASS')
+                sc.keyAlias = System.getenv('KEY_ALIAS')
+                sc.keyPassword = System.getenv('KEY_PASS')
+                androidExt.buildTypes.getByName('release').signingConfig = sc
             }
         }
     }
