@@ -56,7 +56,7 @@ class GatewayStudioTest {
             { DohAnswer(listOf("104.21.8.12"), emptyList()) }, now = { ++acct.clock }, pulledAt = mutableMapOf(), studioIds = { studio })
     }
 
-    @Before fun fresh() { GatewayEngine.resetForTest(); GatewayEngine.language = { true } }
+    @Before fun fresh() { GatewayEngine.resetForTest(); GatewayEngine.language = { "fa" } }
 
     private fun ids(n: Int) = (1..n).map { UUID.randomUUID().toString() }
 

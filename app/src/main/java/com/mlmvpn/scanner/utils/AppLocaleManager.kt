@@ -47,6 +47,9 @@ object AppLocaleManager {
      */
     fun isFarsi(): Boolean = getResolvedLocale().language == "fa"
 
+    /** Whether the app is currently showing Simplified Chinese. */
+    fun isChinese(): Boolean = getResolvedLocale().language == "zh"
+
     fun getResolvedLocale(): Locale {
         val selected = _currentLanguage.value
         if (selected == "auto") {

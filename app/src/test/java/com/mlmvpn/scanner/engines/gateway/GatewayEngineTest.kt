@@ -89,7 +89,7 @@ class GatewayEngineTest {
 
     @Before fun fresh() {
         GatewayEngine.resetForTest()
-        GatewayEngine.language = { true }
+        GatewayEngine.language = { "fa" }
     }
 
     private fun failure(block: () -> Unit): Exception {
