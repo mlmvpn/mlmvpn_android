@@ -394,6 +394,9 @@ object StoreNet {
 /** An error whose message is already a sentence for the user. */
 class StoreError(message: String) : Exception(message)
 
-/** Persian or English, following the language the user picked. */
+/** Persian, Chinese or English, following the language the user picked. */
 fun tr(fa: String, en: String): String =
-    if (com.mlmvpn.scanner.utils.AppLocaleManager.isFarsi()) fa else en
+    if (com.mlmvpn.scanner.utils.AppLocaleManager.isFarsi()) fa
+    else if (com.mlmvpn.scanner.utils.AppLocaleManager.isChinese())
+        com.mlmvpn.scanner.utils.ZhTr.translate(en) ?: en
+    else en
