@@ -22,7 +22,7 @@ internal fun GatewayStatus.toView() = GatewayView(installed, script, host, studi
 
 /** The engine for one account of the fleet, over its real record and its file on this phone. */
 internal fun centralEngine(context: Context, account: CloudAccount): CentralEngine {
-    CentralEngine.language = { AppLocaleManager.isFarsi() }
+    CentralEngine.language = { AppLocaleManager.getResolvedLocale().language }
     val localId = Central.accountIdOf(account.id)
     return CentralEngine(localId, account.accountId, CentralAndroidCloud(context, account), CentralFiles.local(context, localId))
 }
