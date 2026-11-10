@@ -90,7 +90,7 @@ class CentralEngineTest {
         fun idOf(user: String) = engine.current().people.first { it.name == user }.id
     }
 
-    @Before fun lang() { CentralEngine.language = { true } }
+    @Before fun lang() { CentralEngine.language = { "fa" } }
 
     private fun expectRule(code: String, block: () -> Unit) {
         try { block() } catch (e: CentralRules.RuleError) { assertEquals(code, e.code); return }
