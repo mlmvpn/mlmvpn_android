@@ -98,7 +98,7 @@ object EdgeGateway {
     }
 
     private fun engine(context: Context, account: CloudAccount): GatewayEngine {
-        GatewayEngine.language = { AppLocaleManager.isFarsi() }
+        GatewayEngine.language = { AppLocaleManager.getResolvedLocale().language }
         return GatewayEngine(account.accountId, AccountCloud(account), PrefsStore(context, account.accountId), { modules(context) }, ::resolve,
             // «کانفیگ استدیو»'s people ride every upload, whichever screen made it (data/studio/central).
             studioIds = { script -> com.mlmvpn.scanner.data.studio.central.CentralUploadIds.forUpload(context, account, script, status(context, account).studioMark) })

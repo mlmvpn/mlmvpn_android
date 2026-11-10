@@ -506,9 +506,13 @@ class GatewayEngine(
         /** Test hook: forget what a previous test left behind. */
         fun resetForTest() { BUSY.clear(); PULLED_AT.clear() }
 
-        /** Two-language text without Android: the screens pass the user's language in through [language]. */
-        @Volatile var language: () -> Boolean = { java.util.Locale.getDefault().language == "fa" }
+        /** Multi-language text without Android: the screens pass the user's language in through [language]. */
+        @Volatile var language: () -> String = { java.util.Locale.getDefault().language }
     }
 
-    private fun tr(fa: String, en: String): String = if (language()) fa else en
+    private fun tr(fa: String, en: String): String = when (language()) {
+        "fa" -> fa
+        "zh" -> com.mlmvpn.scanner.utils.ZhTr.translate(en) ?: en
+        else -> en
+    }
 }
